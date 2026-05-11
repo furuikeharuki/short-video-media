@@ -1,3 +1,4 @@
+import Link from "next/link";
 import { getFeed } from "@/lib/api/feed";
 
 export default async function HomePage() {
@@ -17,7 +18,9 @@ export default async function HomePage() {
               padding: "16px",
             }}
           >
-            <h2 style={{ marginTop: 0 }}>{item.title}</h2>
+            <h2 style={{ marginTop: 0 }}>
+              <Link href={`/movies/${item.slug}`}>{item.title}</Link>
+            </h2>
             <p>slug: {item.slug}</p>
             <p>actresses: {item.actresses.join(", ")}</p>
             <p>genres: {item.genres.join(", ")}</p>

@@ -1,6 +1,8 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
 
+import AffiliateLink from "@/components/analytics/affiliate-link";
+import DetailViewTracker from "@/components/analytics/detail-view-tracker";
 import { getMovieBySlug } from "@/lib/api/movies";
 
 type PageProps = {
@@ -17,6 +19,8 @@ export default async function MovieDetailPage({ params }: PageProps) {
 
     return (
       <main style={{ padding: "24px" }}>
+        <DetailViewTracker slug={movie.slug} title={movie.title} />
+
         <p>
           <Link href="/">← Feed に戻る</Link>
         </p>
@@ -28,13 +32,11 @@ export default async function MovieDetailPage({ params }: PageProps) {
         <p>genres: {movie.genres.join(", ")}</p>
 
         <p>
-          <a
+          <AffiliateLink
             href={movie.affiliate_url}
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            購入ページへ
-          </a>
+            slug={movie.slug}
+            title={movie.title}
+          />
         </p>
       </main>
     );

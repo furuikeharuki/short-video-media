@@ -1,9 +1,11 @@
-from app.mock_data.movies import MOVIES
+from app.mock_data.movies import load_movies
 from app.schemas.feed import FeedResponse
 from app.schemas.movie import MovieCard
 
 
 def get_feed() -> FeedResponse:
+    movies = load_movies()
+
     items = [
         MovieCard(
             id=movie.id,
@@ -14,7 +16,7 @@ def get_feed() -> FeedResponse:
             actresses=movie.actresses,
             genres=movie.genres,
         )
-        for movie in MOVIES
+        for movie in movies
     ]
 
     return FeedResponse(items=items, next_cursor=None)

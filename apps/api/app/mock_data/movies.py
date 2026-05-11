@@ -1,26 +1,13 @@
+import json
+from pathlib import Path
+
 from app.schemas.movie import MovieDetail
 
-MOVIES = [
-    MovieDetail(
-        id="movie-001",
-        title="サンプル作品 001",
-        slug="sample-movie-001",
-        description="これはサンプル作品 001 の説明です。",
-        thumbnail_url="https://placehold.co/720x1280/png",
-        sample_embed_url="https://example.com/embed/movie-001",
-        actresses=["女優A"],
-        genres=["ジャンルA", "ジャンルB"],
-        affiliate_url="https://example.com/affiliate/movie-001",
-    ),
-    MovieDetail(
-        id="movie-002",
-        title="サンプル作品 002",
-        slug="sample-movie-002",
-        description="これはサンプル作品 002 の説明です。",
-        thumbnail_url="https://placehold.co/720x1280/png",
-        sample_embed_url="https://example.com/embed/movie-002",
-        actresses=["女優B"],
-        genres=["ジャンルC"],
-        affiliate_url="https://example.com/affiliate/movie-002",
-    ),
-]
+_MOCK_DATA_PATH = Path(__file__).with_name("movies.json")
+
+
+def load_movies() -> list[MovieDetail]:
+    with _MOCK_DATA_PATH.open("r", encoding="utf-8") as f:
+        raw_movies = json.load(f)
+
+    return [MovieDetail(**movie) for movie in raw_movies]

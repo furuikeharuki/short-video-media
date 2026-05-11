@@ -5,10 +5,22 @@ export default async function HomePage() {
   const feed = await getFeed();
 
   return (
-    <main style={{ padding: "24px" }}>
-      <h1>Feed</h1>
+    <main style={{ padding: "24px", maxWidth: "960px", margin: "0 auto" }}>
+      <header style={{ marginBottom: "24px" }}>
+        <h1>Feed</h1>
+        <p>
+          <Link href="/age-gate">年齢確認ページへ</Link>
+        </p>
+      </header>
 
-      <ul style={{ display: "grid", gap: "16px", padding: 0, listStyle: "none" }}>
+      <ul
+        style={{
+          display: "grid",
+          gap: "16px",
+          padding: 0,
+          listStyle: "none",
+        }}
+      >
         {feed.items.map((item) => (
           <li
             key={item.id}
@@ -16,14 +28,34 @@ export default async function HomePage() {
               border: "1px solid #ddd",
               borderRadius: "12px",
               padding: "16px",
+              display: "grid",
+              gap: "12px",
             }}
           >
-            <h2 style={{ marginTop: 0 }}>
-              <Link href={`/movies/${item.slug}`}>{item.title}</Link>
-            </h2>
-            <p>slug: {item.slug}</p>
-            <p>actresses: {item.actresses.join(", ")}</p>
-            <p>genres: {item.genres.join(", ")}</p>
+            <img
+              src={item.thumbnail_url}
+              alt={item.title}
+              width={360}
+              height={640}
+              style={{
+                width: "100%",
+                maxWidth: "280px",
+                height: "auto",
+                borderRadius: "8px",
+                objectFit: "cover",
+              }}
+            />
+
+            <div>
+              <h2 style={{ marginTop: 0, marginBottom: "8px" }}>{item.title}</h2>
+              <p>slug: {item.slug}</p>
+              <p>actresses: {item.actresses.join(", ")}</p>
+              <p>genres: {item.genres.join(", ")}</p>
+
+              <p style={{ marginTop: "12px" }}>
+                <Link href={`/movies/${item.slug}`}>詳細を見る</Link>
+              </p>
+            </div>
           </li>
         ))}
       </ul>

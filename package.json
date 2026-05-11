@@ -1,0 +1,7 @@
+{
+  "name": "short-video-media",
+  "private": true,
+  "workspaces": [
+    "apps/*"
+  ]
+}

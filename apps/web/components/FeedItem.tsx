@@ -128,22 +128,18 @@ export default function FeedItem({ item, isFirst }: Props) {
     history.replaceState(null, "", `#${item.slug}`);
   };
 
-  // ダブルタップ / ダブルクリック共通処理
   const fireTap = useCallback((clientX: number, clientY: number) => {
     const video = videoRef.current;
     const section = sectionRef.current;
     if (!video || !section) return;
-
     const rect = section.getBoundingClientRect();
     const isLeft = clientX - rect.left < rect.width / 2;
     const dir = isLeft ? "left" : "right";
-
     if (isLeft) {
       video.currentTime = Math.max(0, video.currentTime - SKIP_SEC);
     } else {
       video.currentTime = Math.min(video.duration || Infinity, video.currentTime + SKIP_SEC);
     }
-
     const id = Date.now();
     const x = clientX - rect.left;
     const y = clientY - rect.top;
@@ -151,17 +147,13 @@ export default function FeedItem({ item, isFirst }: Props) {
     setTimeout(() => setRipples((prev) => prev.filter((r) => r.id !== id)), 700);
   }, []);
 
-  // タッチ: touchend でカウントしてダブル判定
   const handleTouchEnd = useCallback((e: React.TouchEvent) => {
     if (!videoRef.current) return;
     const touch = e.changedTouches[0];
     const { clientX, clientY } = touch;
-
     tapCountRef.current += 1;
     if (tapCountRef.current === 1) {
-      tapTimerRef.current = setTimeout(() => {
-        tapCountRef.current = 0;
-      }, DBL_TAP_MS);
+      tapTimerRef.current = setTimeout(() => { tapCountRef.current = 0; }, DBL_TAP_MS);
     } else if (tapCountRef.current >= 2) {
       if (tapTimerRef.current) clearTimeout(tapTimerRef.current);
       tapCountRef.current = 0;
@@ -169,7 +161,6 @@ export default function FeedItem({ item, isFirst }: Props) {
     }
   }, [fireTap]);
 
-  // マウス: ブラウザネイティブの dblclick をそのまま利用
   const handleDoubleClick = useCallback((e: React.MouseEvent) => {
     fireTap(e.clientX, e.clientY);
   }, [fireTap]);
@@ -178,10 +169,9 @@ export default function FeedItem({ item, isFirst }: Props) {
     <section ref={sectionRef} className="feed-item">
       {item.sample_video_url ? (
         <div
-          className="video-bg"
+          className="video-bg video-bg--interactive"
           onTouchEnd={handleTouchEnd}
           onDoubleClick={handleDoubleClick}
-          style={{ cursor: "pointer" }}
         >
           {!videoReady && (
             <div className="shimmer" aria-hidden="true">
@@ -284,6 +274,17 @@ const itemStyle = `
   @keyframes shimmer-slide {
     0%   { background-position: 200% 0; }
     100% { background-position: -200% 0; }
+  }
+
+  /* ダブルタップ操作用ラップー: レイアウトに影響させないよう CSS クラスで管理 */
+  .video-bg--interactive {
+    cursor: pointer;
+    /* タッチ時の青ハイライトを消去 */
+    -webkit-tap-highlight-color: transparent;
+    tap-highlight-color: transparent;
+    /* 長押し時のコンテキストメニューを無効化 */
+    -webkit-touch-callout: none;
+    user-select: none;
   }
 
   .skip-ripple {

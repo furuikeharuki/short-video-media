@@ -1,16 +1,22 @@
+import logging
 from contextlib import asynccontextmanager
 
-from alembic import command
-from alembic.config import Config
 from fastapi import FastAPI
 
 from app.api.v1.api import api_router
 
+logger = logging.getLogger(__name__)
+
 
 def run_migrations() -> None:
-    """起動時にマイグレーションを自動実行する"""
-    alembic_cfg = Config("alembic.ini")
-    command.upgrade(alembic_cfg, "head")
+    try:
+        from alembic import command
+        from alembic.config import Config
+        alembic_cfg = Config("alembic.ini")
+        command.upgrade(alembic_cfg, "head")
+        logger.info("Migration completed successfully")
+    except Exception as e:
+        logger.error(f"Migration failed (server will still start): {e}")
 
 
 @asynccontextmanager

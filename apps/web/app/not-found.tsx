@@ -2,12 +2,64 @@ import Link from "next/link";
 
 export default function NotFoundPage() {
   return (
-    <main style={{ padding: "24px" }}>
-      <h1>404 - Page Not Found</h1>
-      <p>お探しのページは見つかりませんでした。</p>
-      <p>
-        <Link href="/">トップに戻る</Link>
-      </p>
+    <main style={styles.main}>
+      <div style={styles.inner}>
+        <p style={styles.code}>404</p>
+        <h1 style={styles.title}>ページが見つかりません</h1>
+        <p style={styles.desc}>お探しのページは存在しないか、削除された可能性があります。</p>
+        <Link href="/" style={styles.btn}>トップに戻る</Link>
+      </div>
     </main>
   );
 }
+
+const styles: Record<string, React.CSSProperties> = {
+  main: {
+    position: "fixed" as const,
+    top: "52px",
+    left: 0,
+    right: 0,
+    bottom: 0,
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    background: "#0a0a0a",
+    color: "#fff",
+    fontFamily: "-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif",
+  },
+  inner: {
+    textAlign: "center" as const,
+    padding: "24px",
+  },
+  code: {
+    fontSize: "72px",
+    fontWeight: 800,
+    lineHeight: 1,
+    color: "rgba(255,255,255,0.12)",
+    marginBottom: "16px",
+    letterSpacing: "-0.04em",
+  },
+  title: {
+    fontSize: "22px",
+    fontWeight: 700,
+    marginBottom: "12px",
+    color: "#fff",
+  },
+  desc: {
+    fontSize: "14px",
+    color: "rgba(255,255,255,0.45)",
+    marginBottom: "32px",
+    lineHeight: 1.6,
+  },
+  btn: {
+    display: "inline-block",
+    padding: "12px 28px",
+    background: "#e91e63",
+    color: "#fff",
+    borderRadius: "10px",
+    fontSize: "15px",
+    fontWeight: 700,
+    textDecoration: "none",
+    transition: "opacity 0.15s ease",
+  },
+};

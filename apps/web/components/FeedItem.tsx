@@ -15,6 +15,7 @@ const V_PADDING_BOTTOM = 16;
 const SKIP_SEC = 5;
 const DBL_TAP_MS = 300;
 const LONG_PRESS_MS = 500;
+const TAP_MOVE_THRESHOLD = 10; // px — これ以上動いたらタップ無効
 
 const isLandscapeScreen = () => window.innerWidth > window.innerHeight;
 
@@ -29,10 +30,14 @@ export default function FeedItem({ item, isFirst }: Props) {
 
   const tapTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const tapCountRef = useRef(0);
-  const tapPosRef = useRef<{ x: number; y: number }>({ x: 0, y: 0 });
+  const tapStartPosRef = useRef<{ x: number; y: number }>({ x: 0, y: 0 });
 
   const longPressTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const isLongPressRef = useRef(false);
+
+  // タッチデバイスかどうかのフラグ（synthetic click 抑制用）
+  const isTouchDeviceRef = useRef(false);
+  const lastTouchEndRef = useRef(0);
 
   const [videoReady, setVideoReady] = useState(false);
   const [isPlaying, setIsPlaying] = useState(false);
@@ -146,8 +151,7 @@ export default function FeedItem({ item, isFirst }: Props) {
     return () => observer.disconnect();
   }, []);
 
-  // ─── コンテキストメニュー抑制（native addEventListener で登録）────
-  // React の onContextMenu は passive:false にならないブラウザがあるため
+  // コンテキストメニュー抑制
   useEffect(() => {
     const el = containerRef.current;
     if (!el) return;
@@ -177,7 +181,6 @@ export default function FeedItem({ item, isFirst }: Props) {
     setTimeout(() => setRipples((prev) => prev.filter((r) => r.id !== id)), 700);
   }, []);
 
-  // async play() + muted フォールバックでモバイル再生を保証
   const fireTogglePlay = useCallback(async () => {
     const video = videoRef.current;
     if (!video) return;
@@ -209,7 +212,6 @@ export default function FeedItem({ item, isFirst }: Props) {
     }, LONG_PRESS_MS);
   }, [showOverlay]);
 
-  // 戻り値 true = 長押し確定だった
   const endLongPress = useCallback((): boolean => {
     if (longPressTimerRef.current) clearTimeout(longPressTimerRef.current);
     const video = videoRef.current;
@@ -223,22 +225,32 @@ export default function FeedItem({ item, isFirst }: Props) {
   }, []);
 
   // ─── タッチイベント ──────────────────────────────────────────────
-  // NOTE: e.preventDefault() を呼ばない（user gesture を壊さないため）
-  //       コンテキストメニューは useEffect で native addEventListener で抑制
   const handleTouchStart = useCallback((e: React.TouchEvent) => {
     if (!videoRef.current) return;
+    isTouchDeviceRef.current = true;
     const touch = e.touches[0];
-    tapPosRef.current = { x: touch.clientX, y: touch.clientY };
+    tapStartPosRef.current = { x: touch.clientX, y: touch.clientY };
     startLongPress();
   }, [startLongPress]);
 
   const handleTouchEnd = useCallback((e: React.TouchEvent) => {
     if (!videoRef.current) return;
     const wasLong = endLongPress();
-    if (wasLong) return; // 長押し確定 → タップ処理しない
+    if (wasLong) return;
 
     const touch = e.changedTouches[0];
     const { clientX, clientY } = touch;
+
+    // スワイプ判定: 指の移動量が閾値を超えたらタップ扱いしない
+    const dx = Math.abs(clientX - tapStartPosRef.current.x);
+    const dy = Math.abs(clientY - tapStartPosRef.current.y);
+    if (dx > TAP_MOVE_THRESHOLD || dy > TAP_MOVE_THRESHOLD) {
+      tapCountRef.current = 0;
+      if (tapTimerRef.current) clearTimeout(tapTimerRef.current);
+      return;
+    }
+
+    lastTouchEndRef.current = Date.now();
 
     tapCountRef.current += 1;
     if (tapCountRef.current === 1) {
@@ -259,15 +271,32 @@ export default function FeedItem({ item, isFirst }: Props) {
     if (tapTimerRef.current) clearTimeout(tapTimerRef.current);
   }, [endLongPress]);
 
-  // ─── マウスイベント（PC）────────────────────────────────────────
-  const handleMouseDown = useCallback(() => { startLongPress(); }, [startLongPress]);
-  const handleMouseUp = useCallback(() => { endLongPress(); }, [endLongPress]);
-  const handleMouseLeave = useCallback(() => { endLongPress(); }, [endLongPress]);
+  // ─── マウスイベント（PC専用）────────────────────────────────────
+  const handleMouseDown = useCallback((e: React.MouseEvent) => {
+    // タッチデバイスでは mouse イベントを無視
+    if (isTouchDeviceRef.current) return;
+    startLongPress();
+  }, [startLongPress]);
+
+  const handleMouseUp = useCallback(() => {
+    if (isTouchDeviceRef.current) return;
+    endLongPress();
+  }, [endLongPress]);
+
+  const handleMouseLeave = useCallback(() => {
+    if (isTouchDeviceRef.current) return;
+    endLongPress();
+  }, [endLongPress]);
 
   const pcClickCountRef = useRef(0);
   const pcClickTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
   const handlePcClick = useCallback((e: React.MouseEvent) => {
+    // touch → synthetic click を抑制（300ms 以内に touchend があった場合）
+    if (isTouchDeviceRef.current) return;
+    if (Date.now() - lastTouchEndRef.current < 500) return;
     if (isLongPressRef.current) return;
+
     pcClickCountRef.current += 1;
     if (pcClickCountRef.current === 1) {
       pcClickTimerRef.current = setTimeout(() => {
@@ -423,6 +452,7 @@ const itemStyle = `
     tap-highlight-color: transparent;
     -webkit-touch-callout: none;
     user-select: none;
+    touch-action: pan-y;
   }
 
   .action-overlay {
@@ -459,7 +489,6 @@ const itemStyle = `
     filter: drop-shadow(0 2px 6px rgba(0,0,0,0.6));
   }
 
-  /* 2倍速バッジ — PC版に統一（白半透明） */
   .fast-badge {
     position: absolute;
     top: 12px;

@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { fetchPopularTags, FALLBACK_TAGS } from "@/lib/api/tags";
+import { FALLBACK_TAGS } from "@/lib/api/tags";
 
 export default function Header() {
   const router      = useRouter();
@@ -11,18 +11,8 @@ export default function Header() {
   const dropdownRef = useRef<HTMLDivElement>(null);
   const btnRef      = useRef<HTMLButtonElement>(null);
 
-  const [open, setOpen]         = useState(false);
-  const [query, setQuery]       = useState("");
-  const [tags, setTags]         = useState<string[]>(FALLBACK_TAGS);
-  const [tagsFetched, setFetched] = useState(false);
-
-  // 検索プルダウンを初回開いたタイミングでタグを取得（不必要なリクエストを削減）
-  const loadTags = useCallback(async () => {
-    if (tagsFetched) return;
-    setFetched(true);
-    const result = await fetchPopularTags(20);
-    setTags(result);
-  }, [tagsFetched]);
+  const [open, setOpen]   = useState(false);
+  const [query, setQuery] = useState("");
 
   // プルダウン外クリック / タッチで閉じる
   useEffect(() => {
@@ -44,14 +34,10 @@ export default function Header() {
 
   const toggleOpen = useCallback(() => {
     setOpen((prev) => {
-      const next = !prev;
-      if (next) {
-        setTimeout(() => inputRef.current?.focus(), 80);
-        loadTags(); // 初回開いたときにタグを取得
-      }
-      return next;
+      if (!prev) setTimeout(() => inputRef.current?.focus(), 80);
+      return !prev;
     });
-  }, [loadTags]);
+  }, []);
 
   const submit = useCallback(
     (q: string) => {
@@ -148,7 +134,7 @@ export default function Header() {
         <div className="search-tags-section">
           <p className="search-tags-label">人気タグ</p>
           <div className="search-tags">
-            {tags.map((tag) => (
+            {FALLBACK_TAGS.map((tag) => (
               <button
                 key={tag}
                 type="button"

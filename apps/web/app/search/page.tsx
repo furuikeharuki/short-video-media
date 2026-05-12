@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { searchMovies } from "@/lib/api/search";
+import type { MovieCard } from "@/lib/api/feed";
 
 type Props = { searchParams: Promise<{ q?: string }> };
 
@@ -16,13 +17,16 @@ export default async function SearchPage({ searchParams }: Props) {
     );
   }
 
-  let items: Awaited<ReturnType<typeof searchMovies>>["items"] = [];
+  let items: MovieCard[] = [];
   try {
     const result = await searchMovies(query);
     items = result.items;
   } catch {
     // エラー時は空配列のまま続行
   }
+
+  // items を JSON で URL encode して渡す
+  const encoded = encodeURIComponent(JSON.stringify(items));
 
   return (
     <main style={styles.main}>
@@ -37,7 +41,7 @@ export default async function SearchPage({ searchParams }: Props) {
           {items.map((item, index) => (
             <Link
               key={item.id}
-              href={`/search/feed?q=${encodeURIComponent(query)}&start=${index}`}
+              href={`/search/feed?start=${index}&items=${encoded}`}
               style={styles.card}
             >
               <div style={styles.thumbWrap}>
@@ -131,7 +135,6 @@ const styles: Record<string, React.CSSProperties> = {
 const pageCSS = `
   *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
   html, body { background: #0a0a0a !important; overflow: hidden !important; }
-
   .search-grid {
     display: grid;
     grid-template-columns: repeat(3, 1fr);
@@ -148,6 +151,5 @@ const pageCSS = `
       margin: 0 auto;
     }
   }
-  .search-grid a img { transition: transform 0.2s ease; }
   .search-grid a:hover img { transform: scale(1.04); }
 `;

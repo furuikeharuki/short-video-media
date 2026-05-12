@@ -1,64 +1,37 @@
 "use client";
 
-import { useEffect, useRef, useState, useCallback } from "react";
+import { useMemo } from "react";
 import { useSearchParams } from "next/navigation";
 import FeedItem from "@/components/FeedItem";
 import type { MovieCard } from "@/lib/api/feed";
 
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL || "http://127.0.0.1:8000";
-
 export default function SearchFeedPage() {
   const searchParams = useSearchParams();
-  const query  = searchParams.get("q") ?? "";
-  const start  = Number(searchParams.get("start") ?? "0");
+  const start = Number(searchParams.get("start") ?? "0");
+  const itemsParam = searchParams.get("items") ?? "";
 
-  const [items, setItems]     = useState<MovieCard[]>([]);
-  const [loading, setLoading] = useState(true);
-  const containerRef = useRef<HTMLDivElement>(null);
-
-  const fetchItems = useCallback(async () => {
-    if (!query) return;
+  const items = useMemo<MovieCard[]>(() => {
+    if (!itemsParam) return [];
     try {
-      const res = await fetch(
-        `${API_BASE_URL}/api/v1/search?q=${encodeURIComponent(query)}`,
-        { cache: "no-store" }
-      );
-      if (!res.ok) throw new Error();
-      const data = await res.json();
-      const arr: MovieCard[] = data.items ?? [];
-      const reordered = [...arr.slice(start), ...arr.slice(0, start)];
-      setItems(reordered);
+      const arr: MovieCard[] = JSON.parse(decodeURIComponent(itemsParam));
+      // startのインデックスから始まるよう並び替え
+      return [...arr.slice(start), ...arr.slice(0, start)];
     } catch {
-      setItems([]);
-    } finally {
-      setLoading(false);
+      return [];
     }
-  }, [query, start]);
+  }, [itemsParam, start]);
 
-  useEffect(() => { fetchItems(); }, [fetchItems]);
-
-  useEffect(() => {
-    if (items.length > 0 && containerRef.current) {
-      containerRef.current.scrollTop = 0;
-    }
-  }, [items]);
-
-  if (loading) {
+  if (items.length === 0) {
     return (
-      <div style={styles.center}>
-        <span style={styles.spinner} />
-        <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
+      <div style={styles.empty}>
+        該当する作品が見つかりませんでした
       </div>
     );
   }
 
-  if (items.length === 0) {
-    return <div style={styles.center}>該当する作品が見つかりませんでした</div>;
-  }
-
   return (
     <>
-      <div ref={containerRef} className="feed-container">
+      <div className="feed-container">
         {items.map((item, index) => (
           <FeedItem
             key={item.id}
@@ -74,7 +47,7 @@ export default function SearchFeedPage() {
 }
 
 const styles: Record<string, React.CSSProperties> = {
-  center: {
+  empty: {
     position: "fixed" as const,
     inset: 0,
     display: "flex",
@@ -83,15 +56,6 @@ const styles: Record<string, React.CSSProperties> = {
     background: "#000",
     color: "rgba(255,255,255,0.4)",
     fontSize: "14px",
-  },
-  spinner: {
-    width: "36px",
-    height: "36px",
-    border: "3px solid rgba(255,255,255,0.15)",
-    borderTop: "3px solid #fff",
-    borderRadius: "50%",
-    display: "inline-block",
-    animation: "spin 0.8s linear infinite",
   },
 };
 
@@ -117,5 +81,4 @@ const feedCSS = `
     overflow: hidden;
     background: #000;
   }
-  @keyframes spin { to { transform: rotate(360deg); } }
 `;

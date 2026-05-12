@@ -16,7 +16,7 @@ const isLandscapeScreen = () => window.innerWidth > window.innerHeight;
 
 export default function FeedItem({ item, isFirst }: Props) {
   const videoRef = useRef<HTMLVideoElement>(null);
-  const overlayRef = useRef<HTMLDivElement>(null);
+  const ctaRef = useRef<HTMLDivElement>(null);
   const sectionRef = useRef<HTMLElement>(null);
 
   const [videoReady, setVideoReady] = useState(false);
@@ -34,15 +34,16 @@ export default function FeedItem({ item, isFirst }: Props) {
   });
 
   const calcVideoArea = useCallback((fit: "cover" | "contain" = objectFit) => {
-    const overlay = overlayRef.current;
+    const cta = ctaRef.current;
     const section = sectionRef.current;
-    if (!overlay || !section) return;
+    if (!cta || !section) return;
 
-    const overlayH = overlay.offsetHeight;
+    const ctaH = cta.offsetHeight;
     const sectionH = section.offsetHeight;
     const sectionW = section.offsetWidth;
 
-    const safeH = sectionH - V_PADDING - overlayH - V_PADDING;
+    // ボタン分だけ下隔を確保、バッジ・タイトル・女優名は重なってOK
+    const safeH = sectionH - V_PADDING - (ctaH + V_PADDING * 2);
     const safeW = sectionW - H_PADDING * 2;
 
     setVideoStyle({
@@ -69,10 +70,10 @@ export default function FeedItem({ item, isFirst }: Props) {
   }, [objectFit, calcVideoArea]);
 
   useEffect(() => {
-    const overlay = overlayRef.current;
-    if (!overlay) return;
+    const cta = ctaRef.current;
+    if (!cta) return;
     const ro = new ResizeObserver(() => calcVideoArea());
-    ro.observe(overlay);
+    ro.observe(cta);
     calcVideoArea();
     return () => ro.disconnect();
   }, [calcVideoArea]);
@@ -137,7 +138,6 @@ export default function FeedItem({ item, isFirst }: Props) {
             onCanPlay={() => setVideoReady(true)}
             style={videoStyle}
           />
-          <div className="thumbnail-overlay" />
         </div>
       ) : (
         <div className="thumbnail-bg">
@@ -149,11 +149,11 @@ export default function FeedItem({ item, isFirst }: Props) {
             width={720}
             height={1280}
           />
-          <div className="thumbnail-overlay" />
         </div>
       )}
 
-      <div ref={overlayRef} className="info-overlay">
+      {/* バッジ・タイトル・女優名は動画に重なってOK、ボタンは動画の下に出る */}
+      <div className="info-overlay">
         <div className="genre-list">
           {item.genres.map((g) => (
             <span key={g} className="genre-badge">{g}</span>
@@ -163,7 +163,7 @@ export default function FeedItem({ item, isFirst }: Props) {
         {item.actresses.length > 0 && (
           <p className="item-actress">👤 {item.actresses.join(" / ")}</p>
         )}
-        <div className="cta-buttons">
+        <div ref={ctaRef} className="cta-buttons">
           <Link href={`/movies/${item.slug}`} className="btn-detail">
             詳細を見る
           </Link>

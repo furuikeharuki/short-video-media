@@ -73,17 +73,18 @@ export default async function MovieDetailPage({ params }: PageProps) {
 
 const styles: Record<string, React.CSSProperties> = {
   main: {
-    minHeight: '100dvh',
+    // dvh はスクロール中にブラウザUIの出入りで再計算されガタつくため svh に変更
+    minHeight: '100svh' as unknown as string,
     background: '#0a0a0a',
     color: '#fff',
     fontFamily: "-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif",
-    overflowY: 'auto',
-    paddingTop: '52px', // fixed Header (→ --header-h) の分
+    paddingTop: '52px', // fixed Header (--header-h) の分
   },
   heroWrap: {
     position: 'relative',
     width: '100%',
-    height: '85dvh',
+    // svh: ブラウザUIが最大表示された状態の安定した高さ
+    height: 'calc(100svh - 52px)' as unknown as string,
     overflow: 'hidden',
     background: '#111',
     display: 'flex',
@@ -105,7 +106,7 @@ const styles: Record<string, React.CSSProperties> = {
     zIndex: 1,
     width: 'calc(100% - 60px)' as unknown as string,
     height: 'auto',
-    maxHeight: 'calc(85dvh - 60px)' as unknown as string,
+    maxHeight: 'calc(100svh - 112px)' as unknown as string,
     objectFit: 'contain',
     display: 'block',
     borderRadius: '8px',
@@ -150,7 +151,6 @@ const pageCSS = `
   *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
   html, body {
     background: #0a0a0a !important;
-    overflow: auto !important;
   }
 
   .affiliate-btn {

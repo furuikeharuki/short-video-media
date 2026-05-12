@@ -22,7 +22,6 @@ const isLandscapeScreen = () => window.innerWidth > window.innerHeight;
 type Ripple = { id: number; x: number; y: number; dir: "left" | "right" };
 type Overlay = "pause" | "play" | null;
 
-// ページ全体で「ユーザージェスチャーが一度でも発生したか」を管理
 let globalUserGestured = false;
 
 export default function FeedItem({ item, isFirst }: Props) {
@@ -44,7 +43,7 @@ export default function FeedItem({ item, isFirst }: Props) {
 
   const [videoReady, setVideoReady] = useState(false);
   const [isPlaying, setIsPlaying] = useState(false);
-  const [isMuted, setIsMuted] = useState(true); // 初期はmuted（自動再生ポリシー対応）
+  const [isMuted, setIsMuted] = useState(true);
   const [isFast, setIsFast] = useState(false);
   const [objectFit, setObjectFit] = useState<"cover" | "contain">("cover");
   const [ripples, setRipples] = useState<Ripple[]>([]);
@@ -135,18 +134,10 @@ export default function FeedItem({ item, isFirst }: Props) {
     setObjectFit(fit); calcVideoArea(fit);
   };
 
-  /**
-   * 音あり再生を試みる。ブラウザの自動再生ポリシーで弾かれた場合のみ
-   * muted にフォールバックする。
-   * ユーザージェスチャー後は unmute して再生する。
-   */
   const playVideo = useCallback(async (video: HTMLVideoElement, withGesture = false) => {
-    if (withGesture) {
-      globalUserGestured = true;
-    }
+    if (withGesture) globalUserGestured = true;
 
     if (globalUserGestured) {
-      // ジェスチャーあり → 音あり再生
       video.muted = false;
       setIsMuted(false);
       try {
@@ -154,19 +145,16 @@ export default function FeedItem({ item, isFirst }: Props) {
         setIsPlaying(true);
         return;
       } catch {
-        // 音あり失敗 → muted でリトライ
+        // fall through to muted retry
       }
     }
 
-    // 自動再生（ジェスチャーなし）→ muted で試みる
     video.muted = true;
     setIsMuted(true);
     try {
       await video.play();
       setIsPlaying(true);
-    } catch {
-      // 再生自体が失敗（無視）
-    }
+    } catch { /* ignore */ }
   }, []);
 
   useEffect(() => {
@@ -226,7 +214,6 @@ export default function FeedItem({ item, isFirst }: Props) {
     const video = videoRef.current;
     if (!video) return;
     if (video.paused) {
-      // ユーザーの明示的な操作 → 音あり再生
       await playVideo(video, true);
       showOverlay("play");
     } else {
@@ -235,6 +222,21 @@ export default function FeedItem({ item, isFirst }: Props) {
       showOverlay("pause");
     }
   }, [playVideo, showOverlay]);
+
+  /** ミュートバッジ押下：伝播を止めてunmuteのみ行う */
+  const handleUnmute = useCallback((e: React.MouseEvent | React.TouchEvent) => {
+    e.stopPropagation();
+    const video = videoRef.current;
+    if (!video) return;
+    globalUserGestured = true;
+    video.muted = false;
+    setIsMuted(false);
+    // 停止中なら再生も開始
+    if (video.paused) {
+      video.play().catch(() => {});
+      setIsPlaying(true);
+    }
+  }, []);
 
   const startLongPress = useCallback(() => {
     isLongPressRef.current = false;
@@ -259,7 +261,7 @@ export default function FeedItem({ item, isFirst }: Props) {
     return wasLong;
   }, []);
 
-  // ─── タッチイベント ───────────────────────────────────────────
+  // ─── タッチイベント ──────────────────────────────────────────────
   const handleTouchStart = useCallback((e: React.TouchEvent) => {
     if (!videoRef.current) return;
     isTouchDeviceRef.current = true;
@@ -285,7 +287,6 @@ export default function FeedItem({ item, isFirst }: Props) {
     }
 
     lastTouchEndRef.current = Date.now();
-
     tapCountRef.current += 1;
     if (tapCountRef.current === 1) {
       tapTimerRef.current = setTimeout(() => {
@@ -305,7 +306,7 @@ export default function FeedItem({ item, isFirst }: Props) {
     if (tapTimerRef.current) clearTimeout(tapTimerRef.current);
   }, [endLongPress]);
 
-  // ─── マウスイベント（PC専用）──────────────────────────────────
+  // ─── マウスイベント（PC専用）────────────────────────────────────
   const handleMouseDown = useCallback(() => {
     if (isTouchDeviceRef.current) return;
     startLongPress();
@@ -333,7 +334,6 @@ export default function FeedItem({ item, isFirst }: Props) {
       wasLongPressJustEndedRef.current = false;
       return;
     }
-
     pcClickCountRef.current += 1;
     if (pcClickCountRef.current === 1) {
       pcClickTimerRef.current = setTimeout(() => {
@@ -382,13 +382,13 @@ export default function FeedItem({ item, isFirst }: Props) {
             <div className="action-overlay" aria-hidden="true">
               <span className="action-icon">
                 {overlay === "pause" && (
-                  <svg width="48" height="48" viewBox="0 0 48 48" fill="none" xmlns="http://www.w3.org/2000/svg">
+                  <svg width="48" height="48" viewBox="0 0 48 48" fill="none">
                     <rect x="12" y="8" width="10" height="32" rx="2" fill="white"/>
                     <rect x="26" y="8" width="10" height="32" rx="2" fill="white"/>
                   </svg>
                 )}
                 {overlay === "play" && (
-                  <svg width="48" height="48" viewBox="0 0 48 48" fill="none" xmlns="http://www.w3.org/2000/svg">
+                  <svg width="48" height="48" viewBox="0 0 48 48" fill="none">
                     <path d="M14 8L40 24L14 40V8Z" fill="white"/>
                   </svg>
                 )}
@@ -398,7 +398,7 @@ export default function FeedItem({ item, isFirst }: Props) {
 
           {videoReady && !isPlaying && (
             <div className="pause-badge" aria-hidden="true">
-              <svg width="40" height="40" viewBox="0 0 48 48" fill="none" xmlns="http://www.w3.org/2000/svg">
+              <svg width="40" height="40" viewBox="0 0 48 48" fill="none">
                 <rect x="12" y="8" width="10" height="32" rx="2" fill="white"/>
                 <rect x="26" y="8" width="10" height="32" rx="2" fill="white"/>
               </svg>
@@ -409,14 +409,21 @@ export default function FeedItem({ item, isFirst }: Props) {
             <div className="fast-badge" aria-hidden="true">2×</div>
           )}
 
-          {/* ミュート中バッジ：タップで音あり再生を促す */}
+          {/* ミュートバッジ：stopPropagation で親への伝播を遮断 */}
           {isMuted && isPlaying && (
-            <div className="mute-badge" aria-label="タップしてミュート解除" role="button">
-              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <div
+              className="mute-badge"
+              aria-label="タップしてミュート解除"
+              role="button"
+              onClick={handleUnmute}
+              onTouchEnd={handleUnmute}
+            >
+              <svg width="26" height="26" viewBox="0 0 24 24" fill="none">
                 <path d="M11 5L6 9H2v6h4l5 4V5z" fill="white"/>
-                <line x1="23" y1="9" x2="17" y2="15" stroke="white" strokeWidth="2" strokeLinecap="round"/>
-                <line x1="17" y1="9" x2="23" y2="15" stroke="white" strokeWidth="2" strokeLinecap="round"/>
+                <line x1="23" y1="9" x2="17" y2="15" stroke="white" strokeWidth="2.2" strokeLinecap="round"/>
+                <line x1="17" y1="9" x2="23" y2="15" stroke="white" strokeWidth="2.2" strokeLinecap="round"/>
               </svg>
+              <span className="mute-label">タップで音声ON</span>
             </div>
           )}
 
@@ -496,7 +503,7 @@ const itemStyle = `
     background: linear-gradient(
       105deg,
       transparent 40%,
-      rgba(255, 255, 255, 0.06) 50%,
+      rgba(255,255,255,0.06) 50%,
       transparent 60%
     );
     background-size: 200% 100%;
@@ -573,18 +580,29 @@ const itemStyle = `
 
   .mute-badge {
     position: absolute;
-    bottom: 72px;
-    right: 12px;
-    background: rgba(0,0,0,0.5);
+    bottom: 80px;
+    right: 14px;
+    background: rgba(0,0,0,0.62);
     border-radius: 999px;
-    padding: 6px;
+    padding: 8px 14px 8px 10px;
     z-index: 20;
     cursor: pointer;
     display: flex;
     align-items: center;
-    justify-content: center;
-    backdrop-filter: blur(6px);
-    -webkit-backdrop-filter: blur(6px);
+    gap: 6px;
+    backdrop-filter: blur(8px);
+    -webkit-backdrop-filter: blur(8px);
+    border: 1px solid rgba(255,255,255,0.15);
+    transition: opacity 0.15s ease;
+  }
+  .mute-badge:active { opacity: 0.7; }
+  .mute-label {
+    color: #fff;
+    font-size: 12px;
+    font-weight: 600;
+    white-space: nowrap;
+    letter-spacing: 0.02em;
+    text-shadow: 0 1px 3px rgba(0,0,0,0.6);
   }
 
   .skip-ripple {

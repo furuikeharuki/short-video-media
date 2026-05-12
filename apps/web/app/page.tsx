@@ -20,20 +20,36 @@ export default async function HomePage() {
   return (
     <>
       <main className="feed-container">
-        {feed.items.map((item) => (
+        {feed.items.map((item, index) => (
           <section key={item.id} className="feed-item">
-            {/* サムネイル背景 */}
-            <div className="thumbnail-bg">
-              <img
-                src={item.thumbnail_url}
-                alt={item.title}
-                className="thumbnail-img"
-                loading="lazy"
-                width={720}
-                height={1280}
-              />
-              <div className="thumbnail-overlay" />
-            </div>
+            {/* 動画（あり）かサムネイル（なし）かで分岐 */}
+            {item.sample_video_url ? (
+              <div className="video-bg">
+                <video
+                  className="video-player"
+                  src={item.sample_video_url}
+                  poster={item.thumbnail_url}
+                  autoPlay={index === 0}
+                  muted
+                  loop
+                  playsInline
+                  preload={index === 0 ? "auto" : "none"}
+                />
+                <div className="thumbnail-overlay" />
+              </div>
+            ) : (
+              <div className="thumbnail-bg">
+                <img
+                  src={item.thumbnail_url}
+                  alt={item.title}
+                  className="thumbnail-img"
+                  loading={index === 0 ? "eager" : "lazy"}
+                  width={720}
+                  height={1280}
+                />
+                <div className="thumbnail-overlay" />
+              </div>
+            )}
 
             {/* 下部オーバーレイ情報 */}
             <div className="info-overlay">
@@ -67,7 +83,7 @@ export default async function HomePage() {
             </div>
 
             {/* スクロールヒント（最初の1枚のみ） */}
-            {item.id === feed.items[0].id && (
+            {index === 0 && (
               <div className="scroll-hint">
                 <span>スワイプ</span>
                 <span className="scroll-arrow">↓</span>
@@ -97,7 +113,7 @@ const feedStyle = `
     overflow: hidden;
   }
 
-  /* ─── フィードコンテナ ─────────────────────── */
+  /* ─── フィードコンテナ ───────────────────── */
   .feed-container {
     height: 100dvh;
     overflow-y: scroll;
@@ -109,7 +125,7 @@ const feedStyle = `
     display: none;
   }
 
-  /* ─── 各アイテム ──────────────────────────── */
+  /* ─── 各アイテム ────────────────────── */
   .feed-item {
     position: relative;
     width: 100%;
@@ -120,7 +136,19 @@ const feedStyle = `
     background: #111;
   }
 
-  /* ─── サムネイル ──────────────────────────── */
+  /* ─── 動画プレイヤー ───────────────── */
+  .video-bg {
+    position: absolute;
+    inset: 0;
+  }
+  .video-player {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    display: block;
+  }
+
+  /* ─── サムネイル（動画なしのフォールバック） ── */
   .thumbnail-bg {
     position: absolute;
     inset: 0;
@@ -131,6 +159,8 @@ const feedStyle = `
     object-fit: cover;
     display: block;
   }
+
+  /* ─── オーバーレイ共通 ──────────────── */
   .thumbnail-overlay {
     position: absolute;
     inset: 0;
@@ -143,7 +173,7 @@ const feedStyle = `
     );
   }
 
-  /* ─── 下部オーバーレイ ────────────────────── */
+  /* ─── 下部オーバーレイ ──────────────── */
   .info-overlay {
     position: absolute;
     bottom: 0;

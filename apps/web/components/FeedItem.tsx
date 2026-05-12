@@ -25,12 +25,12 @@ export default function FeedItem({ item, isFirst }: Props) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const ctaRef = useRef<HTMLDivElement>(null);
   const sectionRef = useRef<HTMLElement>(null);
+  const containerRef = useRef<HTMLDivElement>(null);
 
-  // タップ判定
   const tapTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const tapCountRef = useRef(0);
+  const tapPosRef = useRef<{ x: number; y: number }>({ x: 0, y: 0 });
 
-  // 長押し判定
   const longPressTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const isLongPressRef = useRef(false);
 
@@ -52,13 +52,11 @@ export default function FeedItem({ item, isFirst }: Props) {
     transition: "opacity 0.3s ease",
   });
 
-  // ─── オーバーレイ表示 ───────────────────────────
   const showOverlay = useCallback((type: Overlay) => {
     setOverlay(type);
     setTimeout(() => setOverlay(null), 700);
   }, []);
 
-  // ─── 動画エリア計算 ─────────────────────────────
   const calcVideoArea = useCallback((fit: "cover" | "contain" = objectFit) => {
     const cta = ctaRef.current;
     const section = sectionRef.current;
@@ -103,7 +101,6 @@ export default function FeedItem({ item, isFirst }: Props) {
     return () => ro.disconnect();
   }, [calcVideoArea]);
 
-  // ハッシュ復元
   useEffect(() => {
     const hash = window.location.hash.slice(1);
     if (hash !== item.slug) return;
@@ -116,7 +113,6 @@ export default function FeedItem({ item, isFirst }: Props) {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // ─── メタデータ処理 ─────────────────────────────
   const handleMetadata = () => {
     const video = videoRef.current;
     const section = sectionRef.current;
@@ -130,7 +126,6 @@ export default function FeedItem({ item, isFirst }: Props) {
     setObjectFit(fit); calcVideoArea(fit);
   };
 
-  // ─── IntersectionObserver ───────────────────────
   useEffect(() => {
     const video = videoRef.current;
     if (!video) return;
@@ -151,11 +146,20 @@ export default function FeedItem({ item, isFirst }: Props) {
     return () => observer.disconnect();
   }, []);
 
+  // ─── コンテキストメニュー抑制（native addEventListener で登録）────
+  // React の onContextMenu は passive:false にならないブラウザがあるため
+  useEffect(() => {
+    const el = containerRef.current;
+    if (!el) return;
+    const prevent = (e: Event) => e.preventDefault();
+    el.addEventListener("contextmenu", prevent);
+    return () => el.removeEventListener("contextmenu", prevent);
+  }, []);
+
   const handleDetailClick = () => {
     history.replaceState(null, "", `#${item.slug}`);
   };
 
-  // ─── スキップ ───────────────────────────────────
   const fireSkip = useCallback((clientX: number, clientY: number) => {
     const video = videoRef.current;
     const section = sectionRef.current;
@@ -173,8 +177,7 @@ export default function FeedItem({ item, isFirst }: Props) {
     setTimeout(() => setRipples((prev) => prev.filter((r) => r.id !== id)), 700);
   }, []);
 
-  // ─── 再生/停止トグル ────────────────────────────
-  // Fix1: muted フォールバック付き async play() でモバイル停止後の再生を保証
+  // async play() + muted フォールバックでモバイル再生を保証
   const fireTogglePlay = useCallback(async () => {
     const video = videoRef.current;
     if (!video) return;
@@ -194,7 +197,6 @@ export default function FeedItem({ item, isFirst }: Props) {
     }
   }, [showOverlay]);
 
-  // ─── 長押し開始 ─────────────────────────────────
   const startLongPress = useCallback(() => {
     isLongPressRef.current = false;
     longPressTimerRef.current = setTimeout(() => {
@@ -207,8 +209,7 @@ export default function FeedItem({ item, isFirst }: Props) {
     }, LONG_PRESS_MS);
   }, [showOverlay]);
 
-  // ─── 長押し終了 ─────────────────────────────────
-  // Fix3: 長押し確定フラグを返す（呼び出し元で判断できるように）
+  // 戻り値 true = 長押し確定だった
   const endLongPress = useCallback((): boolean => {
     if (longPressTimerRef.current) clearTimeout(longPressTimerRef.current);
     const video = videoRef.current;
@@ -221,22 +222,20 @@ export default function FeedItem({ item, isFirst }: Props) {
     return wasLong;
   }, []);
 
-  // ─── タッチイベント ─────────────────────────────
-  // Fix2: e.preventDefault() で長押し時のコンテキストメニュー（ダウンロードUI）を抑制
+  // ─── タッチイベント ──────────────────────────────────────────────
+  // NOTE: e.preventDefault() を呼ばない（user gesture を壊さないため）
+  //       コンテキストメニューは useEffect で native addEventListener で抑制
   const handleTouchStart = useCallback((e: React.TouchEvent) => {
     if (!videoRef.current) return;
-    e.preventDefault();
     const touch = e.touches[0];
-    tapCountRef.current; // アクセスのみ（型エラー回避）
-    void touch;
+    tapPosRef.current = { x: touch.clientX, y: touch.clientY };
     startLongPress();
   }, [startLongPress]);
 
   const handleTouchEnd = useCallback((e: React.TouchEvent) => {
     if (!videoRef.current) return;
-    // Fix3: endLongPress の戻り値で長押し確定を判断（endLongPress がフラグをリセットする前に取得）
     const wasLong = endLongPress();
-    if (wasLong) return; // 長押し確定 → 一時停止しない
+    if (wasLong) return; // 長押し確定 → タップ処理しない
 
     const touch = e.changedTouches[0];
     const { clientX, clientY } = touch;
@@ -256,14 +255,11 @@ export default function FeedItem({ item, isFirst }: Props) {
 
   const handleTouchCancel = useCallback(() => {
     endLongPress();
+    tapCountRef.current = 0;
+    if (tapTimerRef.current) clearTimeout(tapTimerRef.current);
   }, [endLongPress]);
 
-  // Fix2: コンテキストメニュー（長押しダウンロードUI）を完全に抑制
-  const handleContextMenu = useCallback((e: React.MouseEvent | React.TouchEvent) => {
-    e.preventDefault();
-  }, []);
-
-  // ─── マウスイベント（PC）───────────────────────
+  // ─── マウスイベント（PC）────────────────────────────────────────
   const handleMouseDown = useCallback(() => { startLongPress(); }, [startLongPress]);
   const handleMouseUp = useCallback(() => { endLongPress(); }, [endLongPress]);
   const handleMouseLeave = useCallback(() => { endLongPress(); }, [endLongPress]);
@@ -289,11 +285,11 @@ export default function FeedItem({ item, isFirst }: Props) {
     <section ref={sectionRef} className="feed-item">
       {item.sample_video_url ? (
         <div
+          ref={containerRef}
           className="video-bg video-bg--interactive"
           onTouchStart={handleTouchStart}
           onTouchEnd={handleTouchEnd}
           onTouchCancel={handleTouchCancel}
-          onContextMenu={handleContextMenu}
           onMouseDown={handleMouseDown}
           onMouseUp={handleMouseUp}
           onMouseLeave={handleMouseLeave}
@@ -463,20 +459,23 @@ const itemStyle = `
     filter: drop-shadow(0 2px 6px rgba(0,0,0,0.6));
   }
 
+  /* 2倍速バッジ — PC版に統一（白半透明） */
   .fast-badge {
     position: absolute;
     top: 12px;
     right: 12px;
-    background: rgba(255,200,0,0.85);
-    color: #000;
+    background: rgba(255,255,255,0.18);
+    color: #fff;
     font-size: 13px;
     font-weight: 800;
-    letter-spacing: 0.04em;
+    letter-spacing: 0.05em;
     padding: 3px 10px;
     border-radius: 999px;
     pointer-events: none;
     z-index: 20;
-    backdrop-filter: blur(4px);
+    backdrop-filter: blur(6px);
+    -webkit-backdrop-filter: blur(6px);
+    text-shadow: 0 1px 4px rgba(0,0,0,0.5);
   }
 
   .skip-ripple {

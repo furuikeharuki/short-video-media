@@ -15,12 +15,12 @@ const V_PADDING_BOTTOM = 16;
 const SKIP_SEC = 5;
 const DBL_TAP_MS = 300;
 const LONG_PRESS_MS = 500;
-const TAP_MOVE_THRESHOLD = 10; // px — これ以上動いたらタップ無効
+const TAP_MOVE_THRESHOLD = 10;
 
 const isLandscapeScreen = () => window.innerWidth > window.innerHeight;
 
 type Ripple = { id: number; x: number; y: number; dir: "left" | "right" };
-type Overlay = "pause" | "play" | "fast" | null;
+type Overlay = "pause" | "play" | null; // "fast" を削除
 
 export default function FeedItem({ item, isFirst }: Props) {
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -35,7 +35,6 @@ export default function FeedItem({ item, isFirst }: Props) {
   const longPressTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const isLongPressRef = useRef(false);
 
-  // タッチデバイスかどうかのフラグ（synthetic click 抑制用）
   const isTouchDeviceRef = useRef(false);
   const lastTouchEndRef = useRef(0);
 
@@ -151,7 +150,6 @@ export default function FeedItem({ item, isFirst }: Props) {
     return () => observer.disconnect();
   }, []);
 
-  // コンテキストメニュー抑制
   useEffect(() => {
     const el = containerRef.current;
     if (!el) return;
@@ -208,9 +206,9 @@ export default function FeedItem({ item, isFirst }: Props) {
       isLongPressRef.current = true;
       video.playbackRate = 2;
       setIsFast(true);
-      showOverlay("fast");
+      // 2倍速開始時はオーバーレイ表示なし（右上バッジのみ）
     }, LONG_PRESS_MS);
-  }, [showOverlay]);
+  }, []);
 
   const endLongPress = useCallback((): boolean => {
     if (longPressTimerRef.current) clearTimeout(longPressTimerRef.current);
@@ -241,7 +239,6 @@ export default function FeedItem({ item, isFirst }: Props) {
     const touch = e.changedTouches[0];
     const { clientX, clientY } = touch;
 
-    // スワイプ判定: 指の移動量が閾値を超えたらタップ扱いしない
     const dx = Math.abs(clientX - tapStartPosRef.current.x);
     const dy = Math.abs(clientY - tapStartPosRef.current.y);
     if (dx > TAP_MOVE_THRESHOLD || dy > TAP_MOVE_THRESHOLD) {
@@ -272,8 +269,7 @@ export default function FeedItem({ item, isFirst }: Props) {
   }, [endLongPress]);
 
   // ─── マウスイベント（PC専用）────────────────────────────────────
-  const handleMouseDown = useCallback((e: React.MouseEvent) => {
-    // タッチデバイスでは mouse イベントを無視
+  const handleMouseDown = useCallback(() => {
     if (isTouchDeviceRef.current) return;
     startLongPress();
   }, [startLongPress]);
@@ -281,6 +277,7 @@ export default function FeedItem({ item, isFirst }: Props) {
   const handleMouseUp = useCallback(() => {
     if (isTouchDeviceRef.current) return;
     endLongPress();
+    // mouseup 後に onClick が発火するので、長押し後のガードは handlePcClick 側で行う
   }, [endLongPress]);
 
   const handleMouseLeave = useCallback(() => {
@@ -292,10 +289,16 @@ export default function FeedItem({ item, isFirst }: Props) {
   const pcClickTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const handlePcClick = useCallback((e: React.MouseEvent) => {
-    // touch → synthetic click を抑制（300ms 以内に touchend があった場合）
     if (isTouchDeviceRef.current) return;
     if (Date.now() - lastTouchEndRef.current < 500) return;
-    if (isLongPressRef.current) return;
+    // 長押し確定だった場合（isLongPressRef は endLongPress でリセット済みだが
+    // mouseup → click の間に isFast が true だった = 長押しだったとみなす）
+    // → isFast state ではなく endLongPress の戻り値を使えないため、
+    //    別フラグ wasLongPressJustEndedRef で管理する
+    if (wasLongPressJustEndedRef.current) {
+      wasLongPressJustEndedRef.current = false;
+      return;
+    }
 
     pcClickCountRef.current += 1;
     if (pcClickCountRef.current === 1) {
@@ -310,6 +313,22 @@ export default function FeedItem({ item, isFirst }: Props) {
     }
   }, [fireTogglePlay, fireSkip]);
 
+  // 長押し終了直後の click を抑制するフラグ
+  const wasLongPressJustEndedRef = useRef(false);
+
+  // endLongPress をラップして wasLongPressJustEndedRef をセット
+  const handleMouseUpWithFlag = useCallback(() => {
+    if (isTouchDeviceRef.current) return;
+    const wasLong = endLongPress();
+    if (wasLong) wasLongPressJustEndedRef.current = true;
+  }, [endLongPress]);
+
+  const handleMouseLeaveWithFlag = useCallback(() => {
+    if (isTouchDeviceRef.current) return;
+    const wasLong = endLongPress();
+    if (wasLong) wasLongPressJustEndedRef.current = true;
+  }, [endLongPress]);
+
   return (
     <section ref={sectionRef} className="feed-item">
       {item.sample_video_url ? (
@@ -320,8 +339,8 @@ export default function FeedItem({ item, isFirst }: Props) {
           onTouchEnd={handleTouchEnd}
           onTouchCancel={handleTouchCancel}
           onMouseDown={handleMouseDown}
-          onMouseUp={handleMouseUp}
-          onMouseLeave={handleMouseLeave}
+          onMouseUp={handleMouseUpWithFlag}
+          onMouseLeave={handleMouseLeaveWithFlag}
           onClick={handlePcClick}
         >
           {!videoReady && (
@@ -341,20 +360,36 @@ export default function FeedItem({ item, isFirst }: Props) {
             style={videoStyle}
           />
 
+          {/* pause/play オーバーレイ（2倍速は除外） */}
           {overlay && (
             <div className="action-overlay" aria-hidden="true">
               <span className="action-icon">
-                {overlay === "pause" && "⏸"}
-                {overlay === "play"  && "▶"}
-                {overlay === "fast"  && "2×"}
+                {overlay === "pause" && (
+                  <svg width="48" height="48" viewBox="0 0 48 48" fill="none" xmlns="http://www.w3.org/2000/svg">
+                    <rect x="12" y="8" width="10" height="32" rx="2" fill="white"/>
+                    <rect x="26" y="8" width="10" height="32" rx="2" fill="white"/>
+                  </svg>
+                )}
+                {overlay === "play" && (
+                  <svg width="48" height="48" viewBox="0 0 48 48" fill="none" xmlns="http://www.w3.org/2000/svg">
+                    <path d="M14 8L40 24L14 40V8Z" fill="white"/>
+                  </svg>
+                )}
               </span>
             </div>
           )}
 
+          {/* 一時停止バッジ（SVG で白固定） */}
           {videoReady && !isPlaying && (
-            <div className="pause-badge" aria-hidden="true">⏸</div>
+            <div className="pause-badge" aria-hidden="true">
+              <svg width="40" height="40" viewBox="0 0 48 48" fill="none" xmlns="http://www.w3.org/2000/svg">
+                <rect x="12" y="8" width="10" height="32" rx="2" fill="white"/>
+                <rect x="26" y="8" width="10" height="32" rx="2" fill="white"/>
+              </svg>
+            </div>
           )}
 
+          {/* 2倍速バッジ（右上のみ） */}
           {isFast && (
             <div className="fast-badge" aria-hidden="true">2×</div>
           )}
@@ -466,8 +501,9 @@ const itemStyle = `
     animation: overlay-pop 0.65s ease-out forwards;
   }
   .action-icon {
-    font-size: 48px;
-    line-height: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
     filter: drop-shadow(0 2px 8px rgba(0,0,0,0.7));
   }
   @keyframes overlay-pop {
@@ -482,11 +518,13 @@ const itemStyle = `
     top: 50%;
     left: 50%;
     transform: translate(-50%, -50%);
-    font-size: 40px;
     opacity: 0.7;
     pointer-events: none;
     z-index: 20;
     filter: drop-shadow(0 2px 6px rgba(0,0,0,0.6));
+    display: flex;
+    align-items: center;
+    justify-content: center;
   }
 
   .fast-badge {

@@ -32,14 +32,7 @@ export default async function MovieDetailPage({ params }: PageProps) {
           <DetailViewTracker slug={movie.slug} title={movie.title} />
 
           <div style={styles.heroWrap}>
-            {/* ボカシblur背景 */}
-            <img
-              src={movie.thumbnail_url}
-              alt=""
-              aria-hidden="true"
-              style={styles.heroBgBlur}
-            />
-            {/* メイン画像: 横幅100%、縦はアスペクト比に従い自動 */}
+            <img src={movie.thumbnail_url} alt="" aria-hidden="true" style={styles.heroBgBlur} />
             <img
               src={movie.thumbnail_url}
               alt={movie.title}
@@ -62,34 +55,23 @@ export default async function MovieDetailPage({ params }: PageProps) {
                 <span key={g} style={styles.badge}>{g}</span>
               ))}
             </div>
-
             <h1 style={styles.title}>{movie.title}</h1>
-
             {movie.actresses.length > 0 && (
               <p style={styles.actress}>👤 {movie.actresses.join(" / ")}</p>
             )}
-
             {movie.description && (
               <p style={styles.description}>{movie.description}</p>
             )}
-
             <div style={styles.ctaArea}>
-              <AffiliateLink
-                href={movie.affiliate_url}
-                slug={movie.slug}
-                title={movie.title}
-              />
+              <AffiliateLink href={movie.affiliate_url} slug={movie.slug} title={movie.title} />
             </div>
           </div>
         </main>
-
         <style>{pageCSS}</style>
       </>
     );
   } catch (error) {
-    if (error instanceof Error && error.message === "NOT_FOUND") {
-      notFound();
-    }
+    if (error instanceof Error && error.message === "NOT_FOUND") notFound();
     throw error;
   }
 }
@@ -104,8 +86,7 @@ const styles: Record<string, React.CSSProperties> = {
   heroWrap: {
     position: 'relative',
     width: '100%',
-    // 横幅基準で縦長画像を大きく表示。画面高さの90%を上限に
-    maxHeight: '90dvh',
+    height: '85dvh',
     overflow: 'hidden',
     background: '#111',
     display: 'flex',
@@ -125,11 +106,10 @@ const styles: Record<string, React.CSSProperties> = {
   heroImg: {
     position: 'relative',
     zIndex: 1,
-    // 横幅を画面幅いっみに使い、縦はアスペクト比で自動伸縮
-    // maxHeightで画面からはみ出ずに收まる
-    width: '100%',
+    // PCでは60vw、スマホでは画面幅いっみ。縦はアスペクト比で自動、画面からはみ出ない
+    width: 'min(60vw, 100%)',
     height: 'auto',
-    maxHeight: '90dvh',
+    maxHeight: '85dvh',
     objectFit: 'contain',
     display: 'block',
     borderRadius: '4px',
@@ -156,12 +136,7 @@ const styles: Record<string, React.CSSProperties> = {
     maxWidth: '640px',
     margin: '0 auto',
   },
-  genreList: {
-    display: 'flex',
-    flexWrap: 'wrap',
-    gap: '6px',
-    marginBottom: '14px',
-  },
+  genreList: { display: 'flex', flexWrap: 'wrap', gap: '6px', marginBottom: '14px' },
   badge: {
     display: 'inline-block',
     background: 'rgba(255,255,255,0.1)',
@@ -180,11 +155,7 @@ const styles: Record<string, React.CSSProperties> = {
     marginBottom: '10px',
     color: '#fff',
   },
-  actress: {
-    fontSize: '14px',
-    color: 'rgba(255,255,255,0.55)',
-    marginBottom: '16px',
-  },
+  actress: { fontSize: '14px', color: 'rgba(255,255,255,0.55)', marginBottom: '16px' },
   description: {
     fontSize: '14px',
     lineHeight: 1.8,
@@ -193,11 +164,7 @@ const styles: Record<string, React.CSSProperties> = {
     borderTop: '1px solid rgba(255,255,255,0.08)',
     paddingTop: '20px',
   },
-  ctaArea: {
-    display: 'flex',
-    flexDirection: 'column' as const,
-    gap: '12px',
-  },
+  ctaArea: { display: 'flex', flexDirection: 'column' as const, gap: '12px' },
 };
 
 const pageCSS = `
@@ -217,11 +184,6 @@ const pageCSS = `
     text-decoration: none;
     transition: opacity 0.15s ease, transform 0.15s ease;
   }
-  .affiliate-btn:active {
-    opacity: 0.75;
-    transform: scale(0.98);
-  }
-  @media (hover: hover) {
-    .affiliate-btn:hover { opacity: 0.88; }
-  }
+  .affiliate-btn:active { opacity: 0.75; transform: scale(0.98); }
+  @media (hover: hover) { .affiliate-btn:hover { opacity: 0.88; } }
 `;

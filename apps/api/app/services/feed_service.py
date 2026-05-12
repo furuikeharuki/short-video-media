@@ -1,10 +1,12 @@
-from app.mock_data.movies import load_movies
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.repositories.movie_repository import get_all_movies
 from app.schemas.feed import FeedResponse
 from app.schemas.movie import MovieCard
 
 
-def get_feed() -> FeedResponse:
-    movies = load_movies()
+async def get_feed(db: AsyncSession) -> FeedResponse:
+    movies = await get_all_movies(db)
 
     items = [
         MovieCard(
@@ -13,8 +15,8 @@ def get_feed() -> FeedResponse:
             slug=movie.slug,
             thumbnail_url=movie.thumbnail_url,
             sample_embed_url=movie.sample_embed_url,
-            actresses=movie.actresses,
-            genres=movie.genres,
+            actresses=[p.name for p in movie.performers],
+            genres=[g.name for g in movie.genres],
             affiliate_url=movie.affiliate_url,
         )
         for movie in movies

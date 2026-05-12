@@ -501,8 +501,8 @@ export default function FeedItem({ item, isFirst, isSecond = false }: Props) {
 
       {isFirst && (
         <div className={`scroll-hint${hintVisible ? "" : " scroll-hint--hidden"}`} aria-hidden="true">
-          <span className="scroll-hint-text">スクロール</span>
-          <span className="scroll-hint-arrow">↓</span>
+          <span>スワイプ</span>
+          <span className="scroll-arrow">↓</span>
         </div>
       )}
 
@@ -630,23 +630,18 @@ const itemStyle = `
     text-shadow: 0 1px 3px rgba(0,0,0,0.6);
   }
 
-  /* scroll-hint: 画面中央に表示、スクロール後フェードアウト */
   .scroll-hint {
     position: absolute;
-    top: 50%;
-    left: 50%;
-    transform: translate(-50%, -50%);
+    bottom: 180px;
+    right: 16px;
     display: flex;
     flex-direction: column;
     align-items: center;
-    gap: 6px;
-    color: rgba(255, 255, 255, 0.75);
-    font-size: 13px;
-    font-weight: 600;
-    letter-spacing: 0.06em;
-    text-shadow: 0 1px 6px rgba(0,0,0,0.6);
+    gap: 4px;
+    color: rgba(255, 255, 255, 0.5);
+    font-size: 11px;
+    z-index: 10;
     pointer-events: none;
-    z-index: 30;
     transition: opacity 0.5s ease;
     animation: bounce 2s ease-in-out infinite;
   }
@@ -654,15 +649,12 @@ const itemStyle = `
     opacity: 0;
     animation: none;
   }
-  .scroll-hint-text {
-    font-size: 13px;
-  }
-  .scroll-hint-arrow {
-    font-size: 22px;
+  .scroll-arrow {
+    font-size: 18px;
   }
   @keyframes bounce {
-    0%, 100% { transform: translate(-50%, -50%); }
-    50%       { transform: translate(-50%, calc(-50% + 8px)); }
+    0%, 100% { transform: translateY(0); }
+    50%       { transform: translateY(6px); }
   }
 
   .skip-ripple {

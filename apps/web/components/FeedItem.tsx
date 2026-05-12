@@ -20,7 +20,10 @@ const TAP_MOVE_THRESHOLD = 10;
 const isLandscapeScreen = () => window.innerWidth > window.innerHeight;
 
 type Ripple = { id: number; x: number; y: number; dir: "left" | "right" };
-type Overlay = "pause" | "play" | null; // "fast" を削除
+type Overlay = "pause" | "play" | null;
+
+// ページ全体で「ユーザージェスチャーが一度でも発生したか」を管理
+let globalUserGestured = false;
 
 export default function FeedItem({ item, isFirst }: Props) {
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -34,12 +37,14 @@ export default function FeedItem({ item, isFirst }: Props) {
 
   const longPressTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const isLongPressRef = useRef(false);
+  const wasLongPressJustEndedRef = useRef(false);
 
   const isTouchDeviceRef = useRef(false);
   const lastTouchEndRef = useRef(0);
 
   const [videoReady, setVideoReady] = useState(false);
   const [isPlaying, setIsPlaying] = useState(false);
+  const [isMuted, setIsMuted] = useState(true); // 初期はmuted（自動再生ポリシー対応）
   const [isFast, setIsFast] = useState(false);
   const [objectFit, setObjectFit] = useState<"cover" | "contain">("cover");
   const [ripples, setRipples] = useState<Ripple[]>([]);
@@ -130,25 +135,63 @@ export default function FeedItem({ item, isFirst }: Props) {
     setObjectFit(fit); calcVideoArea(fit);
   };
 
+  /**
+   * 音あり再生を試みる。ブラウザの自動再生ポリシーで弾かれた場合のみ
+   * muted にフォールバックする。
+   * ユーザージェスチャー後は unmute して再生する。
+   */
+  const playVideo = useCallback(async (video: HTMLVideoElement, withGesture = false) => {
+    if (withGesture) {
+      globalUserGestured = true;
+    }
+
+    if (globalUserGestured) {
+      // ジェスチャーあり → 音あり再生
+      video.muted = false;
+      setIsMuted(false);
+      try {
+        await video.play();
+        setIsPlaying(true);
+        return;
+      } catch {
+        // 音あり失敗 → muted でリトライ
+      }
+    }
+
+    // 自動再生（ジェスチャーなし）→ muted で試みる
+    video.muted = true;
+    setIsMuted(true);
+    try {
+      await video.play();
+      setIsPlaying(true);
+    } catch {
+      // 再生自体が失敗（無視）
+    }
+  }, []);
+
   useEffect(() => {
     const video = videoRef.current;
     if (!video) return;
     const observer = new IntersectionObserver(
       ([entry]) => {
         if (entry.isIntersecting) {
-          video.play().catch(() => { video.muted = true; video.play().catch(() => {}); });
-          setIsPlaying(true);
+          playVideo(video, false);
         } else {
-          video.pause(); video.currentTime = 0;
+          video.pause();
+          video.currentTime = 0;
           video.playbackRate = 1;
-          setIsPlaying(false); setIsFast(false); setVideoReady(false);
+          video.muted = true;
+          setIsPlaying(false);
+          setIsFast(false);
+          setIsMuted(true);
+          setVideoReady(false);
         }
       },
       { threshold: 0.7 }
     );
     observer.observe(video);
     return () => observer.disconnect();
-  }, []);
+  }, [playVideo]);
 
   useEffect(() => {
     const el = containerRef.current;
@@ -183,20 +226,15 @@ export default function FeedItem({ item, isFirst }: Props) {
     const video = videoRef.current;
     if (!video) return;
     if (video.paused) {
-      try {
-        await video.play();
-      } catch {
-        video.muted = true;
-        try { await video.play(); } catch { return; }
-      }
-      setIsPlaying(true);
+      // ユーザーの明示的な操作 → 音あり再生
+      await playVideo(video, true);
       showOverlay("play");
     } else {
       video.pause();
       setIsPlaying(false);
       showOverlay("pause");
     }
-  }, [showOverlay]);
+  }, [playVideo, showOverlay]);
 
   const startLongPress = useCallback(() => {
     isLongPressRef.current = false;
@@ -206,7 +244,6 @@ export default function FeedItem({ item, isFirst }: Props) {
       isLongPressRef.current = true;
       video.playbackRate = 2;
       setIsFast(true);
-      // 2倍速開始時はオーバーレイ表示なし（右上バッジのみ）
     }, LONG_PRESS_MS);
   }, []);
 
@@ -222,7 +259,7 @@ export default function FeedItem({ item, isFirst }: Props) {
     return wasLong;
   }, []);
 
-  // ─── タッチイベント ──────────────────────────────────────────────
+  // ─── タッチイベント ───────────────────────────────────────────
   const handleTouchStart = useCallback((e: React.TouchEvent) => {
     if (!videoRef.current) return;
     isTouchDeviceRef.current = true;
@@ -268,21 +305,22 @@ export default function FeedItem({ item, isFirst }: Props) {
     if (tapTimerRef.current) clearTimeout(tapTimerRef.current);
   }, [endLongPress]);
 
-  // ─── マウスイベント（PC専用）────────────────────────────────────
+  // ─── マウスイベント（PC専用）──────────────────────────────────
   const handleMouseDown = useCallback(() => {
     if (isTouchDeviceRef.current) return;
     startLongPress();
   }, [startLongPress]);
 
-  const handleMouseUp = useCallback(() => {
+  const handleMouseUpWithFlag = useCallback(() => {
     if (isTouchDeviceRef.current) return;
-    endLongPress();
-    // mouseup 後に onClick が発火するので、長押し後のガードは handlePcClick 側で行う
+    const wasLong = endLongPress();
+    if (wasLong) wasLongPressJustEndedRef.current = true;
   }, [endLongPress]);
 
-  const handleMouseLeave = useCallback(() => {
+  const handleMouseLeaveWithFlag = useCallback(() => {
     if (isTouchDeviceRef.current) return;
-    endLongPress();
+    const wasLong = endLongPress();
+    if (wasLong) wasLongPressJustEndedRef.current = true;
   }, [endLongPress]);
 
   const pcClickCountRef = useRef(0);
@@ -291,10 +329,6 @@ export default function FeedItem({ item, isFirst }: Props) {
   const handlePcClick = useCallback((e: React.MouseEvent) => {
     if (isTouchDeviceRef.current) return;
     if (Date.now() - lastTouchEndRef.current < 500) return;
-    // 長押し確定だった場合（isLongPressRef は endLongPress でリセット済みだが
-    // mouseup → click の間に isFast が true だった = 長押しだったとみなす）
-    // → isFast state ではなく endLongPress の戻り値を使えないため、
-    //    別フラグ wasLongPressJustEndedRef で管理する
     if (wasLongPressJustEndedRef.current) {
       wasLongPressJustEndedRef.current = false;
       return;
@@ -312,22 +346,6 @@ export default function FeedItem({ item, isFirst }: Props) {
       fireSkip(e.clientX, e.clientY);
     }
   }, [fireTogglePlay, fireSkip]);
-
-  // 長押し終了直後の click を抑制するフラグ
-  const wasLongPressJustEndedRef = useRef(false);
-
-  // endLongPress をラップして wasLongPressJustEndedRef をセット
-  const handleMouseUpWithFlag = useCallback(() => {
-    if (isTouchDeviceRef.current) return;
-    const wasLong = endLongPress();
-    if (wasLong) wasLongPressJustEndedRef.current = true;
-  }, [endLongPress]);
-
-  const handleMouseLeaveWithFlag = useCallback(() => {
-    if (isTouchDeviceRef.current) return;
-    const wasLong = endLongPress();
-    if (wasLong) wasLongPressJustEndedRef.current = true;
-  }, [endLongPress]);
 
   return (
     <section ref={sectionRef} className="feed-item">
@@ -360,7 +378,6 @@ export default function FeedItem({ item, isFirst }: Props) {
             style={videoStyle}
           />
 
-          {/* pause/play オーバーレイ（2倍速は除外） */}
           {overlay && (
             <div className="action-overlay" aria-hidden="true">
               <span className="action-icon">
@@ -379,7 +396,6 @@ export default function FeedItem({ item, isFirst }: Props) {
             </div>
           )}
 
-          {/* 一時停止バッジ（SVG で白固定） */}
           {videoReady && !isPlaying && (
             <div className="pause-badge" aria-hidden="true">
               <svg width="40" height="40" viewBox="0 0 48 48" fill="none" xmlns="http://www.w3.org/2000/svg">
@@ -389,9 +405,19 @@ export default function FeedItem({ item, isFirst }: Props) {
             </div>
           )}
 
-          {/* 2倍速バッジ（右上のみ） */}
           {isFast && (
             <div className="fast-badge" aria-hidden="true">2×</div>
+          )}
+
+          {/* ミュート中バッジ：タップで音あり再生を促す */}
+          {isMuted && isPlaying && (
+            <div className="mute-badge" aria-label="タップしてミュート解除" role="button">
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                <path d="M11 5L6 9H2v6h4l5 4V5z" fill="white"/>
+                <line x1="23" y1="9" x2="17" y2="15" stroke="white" strokeWidth="2" strokeLinecap="round"/>
+                <line x1="17" y1="9" x2="23" y2="15" stroke="white" strokeWidth="2" strokeLinecap="round"/>
+              </svg>
+            </div>
           )}
 
           {ripples.map((r) => (
@@ -543,6 +569,22 @@ const itemStyle = `
     backdrop-filter: blur(6px);
     -webkit-backdrop-filter: blur(6px);
     text-shadow: 0 1px 4px rgba(0,0,0,0.5);
+  }
+
+  .mute-badge {
+    position: absolute;
+    bottom: 72px;
+    right: 12px;
+    background: rgba(0,0,0,0.5);
+    border-radius: 999px;
+    padding: 6px;
+    z-index: 20;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    backdrop-filter: blur(6px);
+    -webkit-backdrop-filter: blur(6px);
   }
 
   .skip-ripple {

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, useCallback } from "react";
 import Link from "next/link";
 import type { MovieCard } from "@/lib/api/feed";
 
@@ -9,78 +9,99 @@ interface Props {
   isFirst: boolean;
 }
 
-// 動画を配置する安全領域の上下パディング
-const VERTICAL_PADDING = 16; // px
+const H_PADDING = 12; // 左右余白 px
+const V_PADDING = 12; // 上下余白 px
 
 export default function FeedItem({ item, isFirst }: Props) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const overlayRef = useRef<HTMLDivElement>(null);
+  const sectionRef = useRef<HTMLElement>(null);
+
   const [videoReady, setVideoReady] = useState(false);
   const [objectFit, setObjectFit] = useState<"cover" | "contain">("cover");
-  // 動画エリアの上下位置（下部オーバーレイ分を除いた中央）
-  const [videoStyle, setVideoStyle] = useState<React.CSSProperties>({});
 
-  // 下部オーバーレイの高さを計測して動画配置領域を計算
-  const calcVideoArea = () => {
+  // 動画のスタイル初期値: 全画面を占める fallback
+  const [videoStyle, setVideoStyle] = useState<React.CSSProperties>({
+    position: "absolute",
+    inset: 0,
+    width: "100%",
+    height: "100%",
+    objectFit: "cover",
+    objectPosition: "center center",
+    opacity: 0,
+    transition: "opacity 0.3s ease",
+  });
+
+  const calcVideoArea = useCallback((fit: "cover" | "contain" = objectFit) => {
     const overlay = overlayRef.current;
-    if (!overlay) return;
+    const section = sectionRef.current;
+    if (!overlay || !section) return;
 
-    const overlayHeight = overlay.offsetHeight;
-    const screenH = window.innerHeight;
-    const screenW = window.innerWidth;
+    const overlayH = overlay.offsetHeight;
+    const sectionH = section.offsetHeight; // = 100dvh 実値
+    const sectionW = section.offsetWidth;
 
-    // 安全領域: 上下 VERTICAL_PADDING + 下部オーバーレイ分を除いた高さ
-    const safeTop = VERTICAL_PADDING;
-    const safeBottom = overlayHeight + VERTICAL_PADDING;
-    const safeHeight = screenH - safeTop - safeBottom;
+    const top = V_PADDING;
+    const bottom = overlayH + V_PADDING;
+    const safeH = sectionH - top - bottom;
+    const safeW = sectionW - H_PADDING * 2;
 
     setVideoStyle({
       position: "absolute",
-      left: `${VERTICAL_PADDING}px`,
-      right: `${VERTICAL_PADDING}px`,
-      top: `${safeTop}px`,
-      height: `${safeHeight}px`,
-      width: `calc(100% - ${VERTICAL_PADDING * 2}px)`,
-      objectFit,
+      top: `${top}px`,
+      left: `${H_PADDING}px`,
+      width: `${safeW}px`,
+      height: `${safeH}px`,
+      objectFit: fit,
       objectPosition: "center center",
       borderRadius: "12px",
       opacity: videoReady ? 1 : 0,
       transition: "opacity 0.3s ease",
     });
-  };
-
-  // メタデータロード時に動画 vs 画面の縦横比を比較
-  const handleMetadata = () => {
-    const video = videoRef.current;
-    if (!video) return;
-
-    const videoAspect = video.videoWidth / video.videoHeight;
-    const screenAspect = window.innerWidth / window.innerHeight;
-    const fit = videoAspect <= screenAspect ? "cover" : "contain";
-    setObjectFit(fit);
-  };
-
-  // objectFit または overlay 高さが変わったら videoStyle を再計算
-  useEffect(() => {
-    calcVideoArea();
+  // videoReady は別途 opacity のみ更新するので依存配列から除外
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [objectFit]);
 
-  // ResizeObserver で overlay 高さ変化を監視
+  // opacity だけ別途更新（calcVideoArea を再実行しない）
+  useEffect(() => {
+    setVideoStyle((prev) => ({
+      ...prev,
+      opacity: videoReady ? 1 : 0,
+    }));
+  }, [videoReady]);
+
+  // objectFit 変化時に再計算
+  useEffect(() => {
+    calcVideoArea(objectFit);
+  }, [objectFit, calcVideoArea]);
+
+  // overlay 高さ変化を監視
   useEffect(() => {
     const overlay = overlayRef.current;
     if (!overlay) return;
     const ro = new ResizeObserver(() => calcVideoArea());
     ro.observe(overlay);
+    // マウント直後に一度計算
+    calcVideoArea();
     return () => ro.disconnect();
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [objectFit]);
+  }, [calcVideoArea]);
 
-  // IntersectionObserver: 画面内に入ったら再生・出たら停止
+  // メタデータ: 動画 vs 画面の縦横比を比較
+  const handleMetadata = () => {
+    const video = videoRef.current;
+    const section = sectionRef.current;
+    if (!video || !section) return;
+    const videoAspect = video.videoWidth / video.videoHeight;
+    const screenAspect = section.offsetWidth / section.offsetHeight;
+    const fit = videoAspect <= screenAspect ? "cover" : "contain";
+    setObjectFit(fit);
+    calcVideoArea(fit);
+  };
+
+  // IntersectionObserver
   useEffect(() => {
     const video = videoRef.current;
     if (!video) return;
-
     const observer = new IntersectionObserver(
       ([entry]) => {
         if (entry.isIntersecting) {
@@ -96,13 +117,12 @@ export default function FeedItem({ item, isFirst }: Props) {
       },
       { threshold: 0.7 }
     );
-
     observer.observe(video);
     return () => observer.disconnect();
   }, []);
 
   return (
-    <section className="feed-item">
+    <section ref={sectionRef} className="feed-item">
       {item.sample_video_url ? (
         <div className="video-bg">
           {!videoReady && (
@@ -118,16 +138,9 @@ export default function FeedItem({ item, isFirst }: Props) {
             playsInline
             preload={isFirst ? "auto" : "none"}
             onLoadedMetadata={handleMetadata}
-            onCanPlay={() => {
-              setVideoReady(true);
-              calcVideoArea();
-            }}
+            onCanPlay={() => setVideoReady(true)}
             style={videoStyle}
           />
-          {/* contain時の黒帯部分にボカシ投影効果 */}
-          {objectFit === "contain" && (
-            <div className="video-blur-bg" aria-hidden="true" />
-          )}
           <div className="thumbnail-overlay" />
         </div>
       ) : (
@@ -144,7 +157,6 @@ export default function FeedItem({ item, isFirst }: Props) {
         </div>
       )}
 
-      {/* 下部オーバーレイ */}
       <div ref={overlayRef} className="info-overlay">
         <div className="genre-list">
           {item.genres.map((g) => (
@@ -185,7 +197,10 @@ export default function FeedItem({ item, isFirst }: Props) {
 const itemStyle = `
   .shimmer {
     position: absolute;
-    inset: 0;
+    top: ${V_PADDING}px;
+    left: ${H_PADDING}px;
+    right: ${H_PADDING}px;
+    bottom: 0;
     background: #1a1a1a;
     z-index: 1;
     overflow: hidden;
@@ -206,13 +221,6 @@ const itemStyle = `
   @keyframes shimmer-slide {
     0%   { background-position: 200% 0; }
     100% { background-position: -200% 0; }
-  }
-  /* contain時の背景: サムネイルをゼロでblur */
-  .video-blur-bg {
-    position: absolute;
-    inset: 0;
-    background: #0d0d0d;
-    z-index: 0;
   }
   @media (prefers-reduced-motion: reduce) {
     .shimmer-inner { animation: none; }

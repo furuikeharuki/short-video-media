@@ -9,8 +9,8 @@ interface Props {
   isFirst: boolean;
 }
 
-const H_PADDING = 12;
-const V_PADDING = 12;
+const H_PADDING = 4;
+const V_PADDING = 4;
 
 const isLandscapeScreen = () => window.innerWidth > window.innerHeight;
 
@@ -38,23 +38,26 @@ export default function FeedItem({ item, isFirst }: Props) {
     const section = sectionRef.current;
     if (!cta || !section) return;
 
-    const ctaH = cta.offsetHeight;
-    const sectionH = section.offsetHeight;
-    const sectionW = section.offsetWidth;
+    const sectionRect = section.getBoundingClientRect();
+    const ctaRect = cta.getBoundingClientRect();
 
-    // ボタン分だけ下隔を確保、バッジ・タイトル・女優名は重なってOK
-    const safeH = sectionH - V_PADDING - (ctaH + V_PADDING * 2);
-    const safeW = sectionW - H_PADDING * 2;
+    // section 内での CTA の top 相対座標
+    const ctaTopInSection = ctaRect.top - sectionRect.top;
+
+    const top = V_PADDING;
+    // 動画の下辺 = CTA の上辺 - gap
+    const height = ctaTopInSection - top - V_PADDING;
+    const width = section.offsetWidth - H_PADDING * 2;
 
     setVideoStyle({
       position: "absolute",
-      top: `${V_PADDING}px`,
+      top: `${top}px`,
       left: `${H_PADDING}px`,
-      width: `${safeW}px`,
-      height: `${safeH}px`,
+      width: `${width}px`,
+      height: `${Math.max(height, 0)}px`,
       objectFit: fit,
       objectPosition: "center center",
-      borderRadius: "12px",
+      borderRadius: "8px",
       opacity: videoReady ? 1 : 0,
       transition: "opacity 0.3s ease",
     });
@@ -152,7 +155,6 @@ export default function FeedItem({ item, isFirst }: Props) {
         </div>
       )}
 
-      {/* バッジ・タイトル・女優名は動画に重なってOK、ボタンは動画の下に出る */}
       <div className="info-overlay">
         <div className="genre-list">
           {item.genres.map((g) => (
@@ -200,7 +202,7 @@ const itemStyle = `
     background: #1a1a1a;
     z-index: 1;
     overflow: hidden;
-    border-radius: 12px;
+    border-radius: 8px;
   }
   .shimmer-inner {
     position: absolute;

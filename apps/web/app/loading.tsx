@@ -1,13 +1,9 @@
 export default function Loading() {
   return (
     <main style={styles.main}>
-      {/* 全画面スケルトン：3枚分のスナップアイテムを幸せる */}
       {Array.from({ length: 3 }).map((_, i) => (
         <div key={i} style={styles.item}>
-          {/* 背景サムネイルスケルトン */}
           <div style={styles.thumb} />
-
-          {/* 下部オーバーレイスケルトン */}
           <div style={styles.overlay}>
             <div style={{ ...styles.bar, width: '60px', height: '20px', marginBottom: '10px', borderRadius: '999px' }} />
             <div style={{ ...styles.bar, width: '75%', height: '22px', marginBottom: '8px' }} />
@@ -19,7 +15,6 @@ export default function Loading() {
           </div>
         </div>
       ))}
-
       <style>{shimmerCSS}</style>
     </main>
   );
@@ -65,6 +60,9 @@ const styles: Record<string, React.CSSProperties> = {
 };
 
 const shimmerCSS = `
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { background: #000 !important; overflow: hidden !important; }
+
   @keyframes shimmer {
     0%   { opacity: 0.4; }
     50%  { opacity: 0.8; }

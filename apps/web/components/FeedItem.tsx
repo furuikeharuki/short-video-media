@@ -7,7 +7,7 @@ import type { MovieCard } from "@/lib/api/feed";
 interface Props {
   item: MovieCard;
   isFirst: boolean;
-  isSecond?: boolean; // 2番目のアイテムかどうか（先読み用）
+  isSecond?: boolean;
 }
 
 const H_PADDING = 4;
@@ -17,10 +17,7 @@ const SKIP_SEC = 5;
 const DBL_TAP_MS = 300;
 const LONG_PRESS_MS = 500;
 const TAP_MOVE_THRESHOLD = 10;
-
-// 再生開始のトリガー閾値：0.5に下げてスマホで早く開始
 const PLAY_THRESHOLD = 0.5;
-// バッファ先読みの閾値：画面に少しでも入ったらload開始
 const PRELOAD_THRESHOLD = 0.1;
 
 const isLandscapeScreen = () => window.innerWidth > window.innerHeight;
@@ -143,44 +140,28 @@ export default function FeedItem({ item, isFirst, isSecond = false }: Props) {
 
   const playVideo = useCallback(async (video: HTMLVideoElement, withGesture = false) => {
     if (withGesture) globalUserGestured = true;
-
     if (globalUserGestured) {
       video.muted = false;
       setIsMuted(false);
-      try {
-        await video.play();
-        setIsPlaying(true);
-        return;
-      } catch { /* fall through */ }
+      try { await video.play(); setIsPlaying(true); return; } catch { /* fall through */ }
     }
-
     video.muted = true;
     setIsMuted(true);
-    try {
-      await video.play();
-      setIsPlaying(true);
-    } catch { /* ignore */ }
+    try { await video.play(); setIsPlaying(true); } catch { /* ignore */ }
   }, []);
 
   useEffect(() => {
     const video = videoRef.current;
     if (!video) return;
-
-    // ① PRELOAD用 Observer：画面に10%入ったら即座に load()でバッファ引こ合い開始
     const preloadObserver = new IntersectionObserver(
       ([entry]) => {
         if (entry.isIntersecting && !preloadStartedRef.current) {
           preloadStartedRef.current = true;
-          if (video.preload === "none") {
-            video.preload = "auto";
-            video.load();
-          }
+          if (video.preload === "none") { video.preload = "auto"; video.load(); }
         }
       },
       { threshold: PRELOAD_THRESHOLD }
     );
-
-    // ② PLAY用 Observer：50%表示で再生開始
     const playObserver = new IntersectionObserver(
       ([entry]) => {
         if (entry.isIntersecting) {
@@ -200,13 +181,9 @@ export default function FeedItem({ item, isFirst, isSecond = false }: Props) {
       },
       { threshold: PLAY_THRESHOLD }
     );
-
     preloadObserver.observe(video);
     playObserver.observe(video);
-    return () => {
-      preloadObserver.disconnect();
-      playObserver.disconnect();
-    };
+    return () => { preloadObserver.disconnect(); playObserver.disconnect(); };
   }, [playVideo, isFirst, isSecond]);
 
   useEffect(() => {
@@ -217,9 +194,7 @@ export default function FeedItem({ item, isFirst, isSecond = false }: Props) {
     return () => el.removeEventListener("contextmenu", prevent);
   }, []);
 
-  const handleDetailClick = () => {
-    history.replaceState(null, "", `#${item.slug}`);
-  };
+  const handleDetailClick = () => { history.replaceState(null, "", `#${item.slug}`); };
 
   const fireSkip = useCallback((clientX: number, clientY: number) => {
     const video = videoRef.current;
@@ -228,11 +203,8 @@ export default function FeedItem({ item, isFirst, isSecond = false }: Props) {
     const rect = section.getBoundingClientRect();
     const isLeft = clientX - rect.left < rect.width / 2;
     const dir = isLeft ? "left" : "right";
-    if (isLeft) {
-      video.currentTime = Math.max(0, video.currentTime - SKIP_SEC);
-    } else {
-      video.currentTime = Math.min(video.duration || Infinity, video.currentTime + SKIP_SEC);
-    }
+    if (isLeft) { video.currentTime = Math.max(0, video.currentTime - SKIP_SEC); }
+    else { video.currentTime = Math.min(video.duration || Infinity, video.currentTime + SKIP_SEC); }
     const id = Date.now();
     setRipples((prev) => [...prev, { id, x: clientX - rect.left, y: clientY - rect.top, dir }]);
     setTimeout(() => setRipples((prev) => prev.filter((r) => r.id !== id)), 700);
@@ -241,27 +213,20 @@ export default function FeedItem({ item, isFirst, isSecond = false }: Props) {
   const fireTogglePlay = useCallback(async () => {
     const video = videoRef.current;
     if (!video) return;
-    if (video.paused) {
-      await playVideo(video, true);
-      showOverlay("play");
-    } else {
-      video.pause();
-      setIsPlaying(false);
-      showOverlay("pause");
-    }
+    if (video.paused) { await playVideo(video, true); showOverlay("play"); }
+    else { video.pause(); setIsPlaying(false); showOverlay("pause"); }
   }, [playVideo, showOverlay]);
 
+  // ミュートバッジのタッチ: stopPropagation + preventDefault でコンテナのtouchEndに伝播しない
   const handleUnmute = useCallback((e: React.MouseEvent | React.TouchEvent) => {
     e.stopPropagation();
+    e.preventDefault();
     const video = videoRef.current;
     if (!video) return;
     globalUserGestured = true;
     video.muted = false;
     setIsMuted(false);
-    if (video.paused) {
-      video.play().catch(() => {});
-      setIsPlaying(true);
-    }
+    if (video.paused) { video.play().catch(() => {}); setIsPlaying(true); }
   }, []);
 
   const startLongPress = useCallback(() => {
@@ -279,15 +244,10 @@ export default function FeedItem({ item, isFirst, isSecond = false }: Props) {
     if (longPressTimerRef.current) clearTimeout(longPressTimerRef.current);
     const video = videoRef.current;
     const wasLong = isLongPressRef.current;
-    if (wasLong && video) {
-      video.playbackRate = 1;
-      setIsFast(false);
-      isLongPressRef.current = false;
-    }
+    if (wasLong && video) { video.playbackRate = 1; setIsFast(false); isLongPressRef.current = false; }
     return wasLong;
   }, []);
 
-  // ─── タッチイベント ───────────────────────────────────────────────
   const handleTouchStart = useCallback((e: React.TouchEvent) => {
     if (!videoRef.current) return;
     isTouchDeviceRef.current = true;
@@ -303,7 +263,6 @@ export default function FeedItem({ item, isFirst, isSecond = false }: Props) {
 
     const touch = e.changedTouches[0];
     const { clientX, clientY } = touch;
-
     const dx = Math.abs(clientX - tapStartPosRef.current.x);
     const dy = Math.abs(clientY - tapStartPosRef.current.y);
     if (dx > TAP_MOVE_THRESHOLD || dy > TAP_MOVE_THRESHOLD) {
@@ -311,7 +270,6 @@ export default function FeedItem({ item, isFirst, isSecond = false }: Props) {
       if (tapTimerRef.current) clearTimeout(tapTimerRef.current);
       return;
     }
-
     lastTouchEndRef.current = Date.now();
     tapCountRef.current += 1;
     if (tapCountRef.current === 1) {
@@ -332,7 +290,6 @@ export default function FeedItem({ item, isFirst, isSecond = false }: Props) {
     if (tapTimerRef.current) clearTimeout(tapTimerRef.current);
   }, [endLongPress]);
 
-  // ─── マウスイベント（PC専用）────────────────────────────────────
   const handleMouseDown = useCallback(() => {
     if (isTouchDeviceRef.current) return;
     startLongPress();
@@ -356,10 +313,7 @@ export default function FeedItem({ item, isFirst, isSecond = false }: Props) {
   const handlePcClick = useCallback((e: React.MouseEvent) => {
     if (isTouchDeviceRef.current) return;
     if (Date.now() - lastTouchEndRef.current < 500) return;
-    if (wasLongPressJustEndedRef.current) {
-      wasLongPressJustEndedRef.current = false;
-      return;
-    }
+    if (wasLongPressJustEndedRef.current) { wasLongPressJustEndedRef.current = false; return; }
     pcClickCountRef.current += 1;
     if (pcClickCountRef.current === 1) {
       pcClickTimerRef.current = setTimeout(() => {
@@ -373,7 +327,6 @@ export default function FeedItem({ item, isFirst, isSecond = false }: Props) {
     }
   }, [fireTogglePlay, fireSkip]);
 
-  // preload 属性: 1番目・2番目は auto、それ以外は none（Observerが自動切り替え）
   const preloadAttr = isFirst || isSecond ? "auto" : "none";
 
   return (
@@ -434,17 +387,16 @@ export default function FeedItem({ item, isFirst, isSecond = false }: Props) {
             </div>
           )}
 
-          {isFast && (
-            <div className="fast-badge" aria-hidden="true">2×</div>
-          )}
+          {isFast && <div className="fast-badge" aria-hidden="true">2×</div>}
 
           {isMuted && isPlaying && (
             <div
               className="mute-badge"
               aria-label="タップしてミュート解除"
               role="button"
-              onClick={handleUnmute}
+              onTouchStart={(e) => e.stopPropagation()}
               onTouchEnd={handleUnmute}
+              onClick={handleUnmute}
             >
               <svg width="26" height="26" viewBox="0 0 24 24" fill="none">
                 <path d="M11 5L6 9H2v6h4l5 4V5z" fill="white"/>
@@ -462,9 +414,7 @@ export default function FeedItem({ item, isFirst, isSecond = false }: Props) {
               style={{ left: r.x, top: r.y }}
               aria-hidden="true"
             >
-              <span className="skip-icon">
-                {r.dir === "left" ? "« -5s" : "+5s »"}
-              </span>
+              <span className="skip-icon">{r.dir === "left" ? "« -5s" : "+5s »"}</span>
             </div>
           ))}
         </div>
@@ -483,9 +433,7 @@ export default function FeedItem({ item, isFirst, isSecond = false }: Props) {
 
       <div className="info-overlay">
         <div className="genre-list">
-          {item.genres.map((g) => (
-            <span key={g} className="genre-badge">{g}</span>
-          ))}
+          {item.genres.map((g) => <span key={g} className="genre-badge">{g}</span>)}
         </div>
         <h2 className="item-title">{item.title}</h2>
         {item.actresses.length > 0 && (
@@ -622,6 +570,7 @@ const itemStyle = `
     -webkit-backdrop-filter: blur(8px);
     border: 1px solid rgba(255,255,255,0.15);
     transition: opacity 0.15s ease;
+    touch-action: none;
   }
   .mute-badge:active { opacity: 0.7; }
   .mute-label {

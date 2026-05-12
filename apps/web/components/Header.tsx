@@ -3,20 +3,26 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
+import { fetchPopularTags, FALLBACK_TAGS } from "@/lib/api/tags";
 
-type Props = {
-  /** サーバーコンポーネントから事前取得したタグ一覧 */
-  popularTags: string[];
-};
-
-export default function Header({ popularTags }: Props) {
-  const router = useRouter();
+export default function Header() {
+  const router      = useRouter();
   const inputRef    = useRef<HTMLInputElement>(null);
   const dropdownRef = useRef<HTMLDivElement>(null);
   const btnRef      = useRef<HTMLButtonElement>(null);
 
-  const [open, setOpen]   = useState(false);
-  const [query, setQuery] = useState("");
+  const [open, setOpen]         = useState(false);
+  const [query, setQuery]       = useState("");
+  const [tags, setTags]         = useState<string[]>(FALLBACK_TAGS);
+  const [tagsFetched, setFetched] = useState(false);
+
+  // 検索プルダウンを初回開いたタイミングでタグを取得（不必要なリクエストを削減）
+  const loadTags = useCallback(async () => {
+    if (tagsFetched) return;
+    setFetched(true);
+    const result = await fetchPopularTags(20);
+    setTags(result);
+  }, [tagsFetched]);
 
   // プルダウン外クリック / タッチで閉じる
   useEffect(() => {
@@ -38,10 +44,14 @@ export default function Header({ popularTags }: Props) {
 
   const toggleOpen = useCallback(() => {
     setOpen((prev) => {
-      if (!prev) setTimeout(() => inputRef.current?.focus(), 80);
-      return !prev;
+      const next = !prev;
+      if (next) {
+        setTimeout(() => inputRef.current?.focus(), 80);
+        loadTags(); // 初回開いたときにタグを取得
+      }
+      return next;
     });
-  }, []);
+  }, [loadTags]);
 
   const submit = useCallback(
     (q: string) => {
@@ -93,7 +103,6 @@ export default function Header({ popularTags }: Props) {
         className={`search-dropdown${open ? " is-open" : ""}`}
         aria-hidden={!open}
       >
-        {/* フリーワード検索 */}
         <form
           onSubmit={(e) => { e.preventDefault(); submit(query); }}
           role="search"
@@ -136,24 +145,21 @@ export default function Header({ popularTags }: Props) {
           </button>
         </form>
 
-        {/* 人気タグ */}
-        {popularTags.length > 0 && (
-          <div className="search-tags-section">
-            <p className="search-tags-label">人気タグ</p>
-            <div className="search-tags">
-              {popularTags.map((tag) => (
-                <button
-                  key={tag}
-                  type="button"
-                  className="search-tag-btn"
-                  onClick={() => submit(tag)}
-                >
-                  #{tag}
-                </button>
-              ))}
-            </div>
+        <div className="search-tags-section">
+          <p className="search-tags-label">人気タグ</p>
+          <div className="search-tags">
+            {tags.map((tag) => (
+              <button
+                key={tag}
+                type="button"
+                className="search-tag-btn"
+                onClick={() => submit(tag)}
+              >
+                #{tag}
+              </button>
+            ))}
           </div>
-        )}
+        </div>
       </div>
     </header>
   );

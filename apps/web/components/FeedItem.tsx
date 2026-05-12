@@ -11,7 +11,6 @@ interface Props {
 }
 
 const H_PADDING = 4;
-const V_PADDING_TOP = 4;
 const V_PADDING_BOTTOM = 16;
 const SKIP_SEC = 5;
 const DBL_TAP_MS = 300;
@@ -19,6 +18,15 @@ const LONG_PRESS_MS = 500;
 const TAP_MOVE_THRESHOLD = 10;
 const PLAY_THRESHOLD = 0.85;
 const PRELOAD_THRESHOLD = 0.01;
+
+// CSS変数 --header-h の実測値を取得（SSR時は52pxにフォールバック）
+const getHeaderH = () => {
+  if (typeof window === "undefined") return 52;
+  const raw = getComputedStyle(document.documentElement)
+    .getPropertyValue("--header-h")
+    .trim();
+  return parseInt(raw, 10) || 52;
+};
 
 const isLandscapeScreen = () => window.innerWidth > window.innerHeight;
 
@@ -51,7 +59,7 @@ export default function FeedItem({ item, isFirst, isSecond = false }: Props) {
   const pcClickCountRef          = useRef(0);
   const pcClickTimerRef          = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  // ── DOM直接操作ヘルパー ──
+  // ── DOM直接操作ヘルパー ────────────────────────────
 
   const setVideoReady = useCallback((ready: boolean) => {
     const video   = videoRef.current;
@@ -86,10 +94,17 @@ export default function FeedItem({ item, isFirst, isSecond = false }: Props) {
     if (el) el.style.display = visible ? "flex" : "none";
   }, []);
 
-  // ── 動画エリア計算（垂直中央対応） ──
+  // ── 動画エリア計算 ────────────────────────────────
   //
-  // 利用可能領域: V_PADDING_TOP 〜 ctaTop - V_PADDING_BOTTOM
-  // 場所: その領域の垃直中央
+  // 【座標系】すべて viewport 座標（getBoundingClientRect）で統一する。
+  //
+  //  areaTop    = ヘッダー下端 = --header-h px
+  //  areaBottom = CTAボタン上端 - V_PADDING_BOTTOM
+  //  availableH = areaBottom - areaTop
+  //
+  //  動画の中心Y(viewport) = (areaTop + areaBottom) / 2
+  //  → section 内相対座標に変換:  centerY_in_section = 中心Y - sectionRect.top
+  //  → video の top_in_section  = centerY_in_section - videoH / 2
 
   const calcVideoArea = useCallback((fit?: "cover" | "contain") => {
     const resolvedFit = fit ?? objectFitRef.current;
@@ -100,53 +115,56 @@ export default function FeedItem({ item, isFirst, isSecond = false }: Props) {
 
     const sectionRect = section.getBoundingClientRect();
     const ctaRect     = cta.getBoundingClientRect();
+
+    // CTAがまだレイアウト前（高さ0）なら次フレームに遅延
     if (ctaRect.top === 0 && ctaRect.height === 0) {
       requestAnimationFrame(() => calcVideoArea(resolvedFit));
       return;
     }
 
-    const ctaTopInSection = ctaRect.top - sectionRect.top;
-    // 利用可能な縦の高さ（上下パディングを除いたエリア）
-    const availableH  = Math.max(ctaTopInSection - V_PADDING_TOP - V_PADDING_BOTTOM, 0);
-    const availableW  = section.offsetWidth - H_PADDING * 2;
+    const headerH   = getHeaderH();
+    const areaTop    = headerH;                              // viewport座標
+    const areaBottom = ctaRect.top - V_PADDING_BOTTOM;      // viewport座標
+    const availableH = Math.max(areaBottom - areaTop, 0);
+    const availableW = section.offsetWidth - H_PADDING * 2;
 
-    // 動画のアスペクト比から実際の表示サイズを計算（利用可能エリアに収まる単位で最大化）
+    // 動画の表示サイズをアスペクト比を保ちつつ利用可能エリアに収める
     let videoW = availableW;
     let videoH = availableH;
     const nativeW = video.videoWidth;
     const nativeH = video.videoHeight;
     if (nativeW > 0 && nativeH > 0 && resolvedFit === "contain") {
       const nativeAspect    = nativeW / nativeH;
-      const availableAspect = availableW / availableH;
+      const availableAspect = availableW / (availableH || 1);
       if (nativeAspect > availableAspect) {
-        // 横長動画: 幅を基準に高さを決める
         videoW = availableW;
         videoH = availableW / nativeAspect;
       } else {
-        // 縦長動画: 高さを基準に幅を決める
         videoH = availableH;
         videoW = availableH * nativeAspect;
       }
     }
 
-    // 垂直中央の top を計算
-    const centeredTop = V_PADDING_TOP + (availableH - videoH) / 2;
-    const centeredLeft = H_PADDING + (availableW - videoW) / 2;
+    // viewport座標での動画中心Y → section内相対座標に変換
+    const centerY_vp         = (areaTop + areaBottom) / 2;
+    const centerY_in_section = centerY_vp - sectionRect.top;
+    const topInSection        = Math.round(centerY_in_section - videoH / 2);
+    const leftInSection       = Math.round(H_PADDING + (availableW - videoW) / 2);
 
     video.style.position       = "absolute";
-    video.style.top            = `${Math.round(centeredTop)}px`;
-    video.style.left           = `${Math.round(centeredLeft)}px`;
+    video.style.top            = `${topInSection}px`;
+    video.style.left           = `${leftInSection}px`;
     video.style.width          = `${Math.round(videoW)}px`;
     video.style.height         = `${Math.round(videoH)}px`;
     video.style.objectFit      = resolvedFit;
     video.style.objectPosition = "center center";
     video.style.borderRadius   = "8px";
 
-    // shimmerも垂直中央に連動
+    // shimmerも同位置・同サイズに連動
     const shimmer = shimmerRef.current;
     if (shimmer) {
-      shimmer.style.top    = `${Math.round(centeredTop)}px`;
-      shimmer.style.left   = `${Math.round(centeredLeft)}px`;
+      shimmer.style.top    = `${topInSection}px`;
+      shimmer.style.left   = `${leftInSection}px`;
       shimmer.style.width  = `${Math.round(videoW)}px`;
       shimmer.style.height = `${Math.round(videoH)}px`;
       shimmer.style.right  = "";
@@ -154,15 +172,13 @@ export default function FeedItem({ item, isFirst, isSecond = false }: Props) {
     }
   }, []);
 
-  // ── 初期スタイル ──
+  // ── 初期化 ─────────────────────────────────────
 
   useEffect(() => {
-    const video = videoRef.current;
-    if (!video) return;
     calcVideoArea();
   }, [calcVideoArea]);
 
-  // ── ResizeObserver ──
+  // ── ResizeObserver ───────────────────────────────
 
   useEffect(() => {
     const cta = ctaRef.current;
@@ -172,7 +188,7 @@ export default function FeedItem({ item, isFirst, isSecond = false }: Props) {
     return () => ro.disconnect();
   }, [calcVideoArea]);
 
-  // ── ハッシュによる初期スクロール ──
+  // ── ハッシュによる初期スクロール ────────────────────
 
   useEffect(() => {
     const hash = window.location.hash.slice(1);
@@ -186,7 +202,7 @@ export default function FeedItem({ item, isFirst, isSecond = false }: Props) {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // ── メタデータ取得後に object-fit 決定 ──
+  // ── メタデータ取得後に object-fit 決定 ─────────────
 
   const handleMetadata = useCallback(() => {
     const video   = videoRef.current;
@@ -204,7 +220,7 @@ export default function FeedItem({ item, isFirst, isSecond = false }: Props) {
     calcVideoArea(fit);
   }, [calcVideoArea]);
 
-  // ── 再生 ──
+  // ── 再生 ─────────────────────────────────────
 
   const playVideo = useCallback(async (video: HTMLVideoElement, withGesture = false) => {
     if (withGesture) globalUserGestured = true;
@@ -229,7 +245,7 @@ export default function FeedItem({ item, isFirst, isSecond = false }: Props) {
     } catch { /* ignore */ }
   }, [setMuteBadge, setPauseBadge]);
 
-  // ── IntersectionObserver ──
+  // ── IntersectionObserver ─────────────────────────
 
   useEffect(() => {
     const video = videoRef.current;
@@ -264,7 +280,7 @@ export default function FeedItem({ item, isFirst, isSecond = false }: Props) {
     return () => { preloadObserver.disconnect(); playObserver.disconnect(); };
   }, [playVideo, setVideoReady, setPauseBadge, setFastBadge, setMuteBadge, isFirst, isSecond]);
 
-  // ── contextmenu 抑制 ──
+  // ── contextmenu 抑制 ────────────────────────────
 
   useEffect(() => {
     const el = containerRef.current;
@@ -274,7 +290,7 @@ export default function FeedItem({ item, isFirst, isSecond = false }: Props) {
     return () => el.removeEventListener("contextmenu", prevent);
   }, []);
 
-  // ── インタラクション ──
+  // ── インタラクション ─────────────────────────────
 
   const handleDetailClick = () => { history.replaceState(null, "", `#${item.slug}`); };
 
@@ -437,7 +453,7 @@ export default function FeedItem({ item, isFirst, isSecond = false }: Props) {
             ref={shimmerRef}
             className="shimmer"
             aria-hidden="true"
-            style={{ position: "absolute", top: `${V_PADDING_TOP}px`, left: `${H_PADDING}px`, width: 0, height: 0 }}
+            style={{ position: "absolute", top: 0, left: 0, width: 0, height: 0 }}
           >
             <div className="shimmer-inner" />
           </div>
@@ -455,8 +471,8 @@ export default function FeedItem({ item, isFirst, isSecond = false }: Props) {
             onCanPlay={() => setVideoReady(true)}
             style={{
               position: "absolute",
-              top: `${V_PADDING_TOP}px`,
-              left: `${H_PADDING}px`,
+              top: 0,
+              left: 0,
               width: 0,
               height: 0,
               objectFit: "cover",

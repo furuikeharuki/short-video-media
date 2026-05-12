@@ -32,6 +32,14 @@ export default async function MovieDetailPage({ params }: PageProps) {
           <DetailViewTracker slug={movie.slug} title={movie.title} />
 
           <div style={styles.heroWrap}>
+            {/* 背景: ぼかしblurで黒帯を埋める */}
+            <img
+              src={movie.thumbnail_url}
+              alt=""
+              aria-hidden="true"
+              style={styles.heroBgBlur}
+            />
+            {/* メイン画像: 枚内に収まる */}
             <img
               src={movie.thumbnail_url}
               alt={movie.title}
@@ -40,7 +48,6 @@ export default async function MovieDetailPage({ params }: PageProps) {
               height={1280}
               loading="eager"
             />
-            <div style={styles.heroOverlay} />
             <Link href="/" style={styles.backBtn} aria-label="フィードに戻る">
               <svg width="20" height="20" viewBox="0 0 24 24" fill="none"
                 stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
@@ -97,26 +104,42 @@ const styles: Record<string, React.CSSProperties> = {
   heroWrap: {
     position: 'relative',
     width: '100%',
-    aspectRatio: '3 / 4',
-    maxHeight: '70dvh',
-    overflow: 'hidden',
+    height: '70dvh',
     background: '#111',
+    overflow: 'hidden',
+    // メイン画像を中央に配置
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
   },
-  heroImg: {
+  // 背景用: 拡大してblur、黒帯を埋める
+  heroBgBlur: {
+    position: 'absolute',
+    inset: 0,
     width: '100%',
     height: '100%',
     objectFit: 'cover',
+    filter: 'blur(24px) brightness(0.3)',
+    transform: 'scale(1.1)', // blurの縁を隐す
     display: 'block',
   },
-  heroOverlay: {
-    position: 'absolute',
-    inset: 0,
-    background: 'linear-gradient(to bottom, rgba(0,0,0,0.35) 0%, transparent 40%, rgba(10,10,10,0.9) 100%)',
+  // メイン画像: 枚内に収まる
+  heroImg: {
+    position: 'relative',
+    zIndex: 1,
+    maxWidth: '100%',
+    maxHeight: '100%',
+    width: 'auto',
+    height: 'auto',
+    objectFit: 'contain',
+    display: 'block',
+    borderRadius: '4px',
   },
   backBtn: {
     position: 'absolute',
     top: '16px',
     left: '16px',
+    zIndex: 2,
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'center',

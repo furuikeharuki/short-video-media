@@ -18,18 +18,8 @@ export default function AgeGateForm({ nextPath }: AgeGateFormProps) {
       }}
     >
       <input type="hidden" name="nextPath" value={nextPath} />
-      <button
-        type="submit"
-        style={{
-          marginTop: "16px",
-          padding: "10px 16px",
-          border: "1px solid #ddd",
-          borderRadius: "8px",
-          background: "#fff",
-          cursor: "pointer",
-        }}
-      >
-        18歳以上です
+      <button type="submit" className="age-gate-form-btn">
+        18歳以上です、入場する
       </button>
     </form>
   );

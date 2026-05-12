@@ -1,65 +1,76 @@
 export default function Loading() {
   return (
-    <main style={{ padding: "24px", maxWidth: "960px", margin: "0 auto" }}>
-      <h1>Loading...</h1>
-      <p>フィードを読み込んでいます。</p>
+    <main style={styles.main}>
+      {/* 全画面スケルトン：3枚分のスナップアイテムを幸せる */}
+      {Array.from({ length: 3 }).map((_, i) => (
+        <div key={i} style={styles.item}>
+          {/* 背景サムネイルスケルトン */}
+          <div style={styles.thumb} />
 
-      <ul
-        style={{
-          display: "grid",
-          gap: "16px",
-          padding: 0,
-          listStyle: "none",
-          marginTop: "24px",
-        }}
-      >
-        {Array.from({ length: 3 }).map((_, index) => (
-          <li
-            key={index}
-            style={{
-              border: "1px solid #ddd",
-              borderRadius: "12px",
-              padding: "16px",
-              display: "grid",
-              gap: "12px",
-            }}
-          >
-            <div
-              style={{
-                width: "100%",
-                maxWidth: "280px",
-                aspectRatio: "9 / 16",
-                background: "#f1f1f1",
-                borderRadius: "8px",
-              }}
-            />
-            <div
-              style={{
-                width: "60%",
-                height: "24px",
-                background: "#f1f1f1",
-                borderRadius: "6px",
-              }}
-            />
-            <div
-              style={{
-                width: "80%",
-                height: "16px",
-                background: "#f5f5f5",
-                borderRadius: "6px",
-              }}
-            />
-            <div
-              style={{
-                width: "50%",
-                height: "16px",
-                background: "#f5f5f5",
-                borderRadius: "6px",
-              }}
-            />
-          </li>
-        ))}
-      </ul>
+          {/* 下部オーバーレイスケルトン */}
+          <div style={styles.overlay}>
+            <div style={{ ...styles.bar, width: '60px', height: '20px', marginBottom: '10px', borderRadius: '999px' }} />
+            <div style={{ ...styles.bar, width: '75%', height: '22px', marginBottom: '8px' }} />
+            <div style={{ ...styles.bar, width: '45%', height: '16px', marginBottom: '20px', opacity: 0.5 }} />
+            <div style={styles.buttons}>
+              <div style={{ ...styles.bar, flex: 1, height: '44px', borderRadius: '10px' }} />
+              <div style={{ ...styles.bar, flex: 1, height: '44px', borderRadius: '10px' }} />
+            </div>
+          </div>
+        </div>
+      ))}
+
+      <style>{shimmerCSS}</style>
     </main>
   );
 }
+
+const styles: Record<string, React.CSSProperties> = {
+  main: {
+    height: '100dvh',
+    overflowY: 'hidden',
+    background: '#000',
+    scrollbarWidth: 'none',
+  },
+  item: {
+    position: 'relative',
+    width: '100%',
+    height: '100dvh',
+    background: '#111',
+    overflow: 'hidden',
+  },
+  thumb: {
+    position: 'absolute',
+    inset: 0,
+    background: '#1a1a1a',
+    animation: 'shimmer 1.5s ease-in-out infinite',
+  },
+  overlay: {
+    position: 'absolute',
+    bottom: 0,
+    left: 0,
+    right: 0,
+    padding: '0 16px 32px',
+    background: 'linear-gradient(to bottom, transparent 0%, rgba(0,0,0,0.9) 60%)',
+  },
+  bar: {
+    background: 'rgba(255,255,255,0.1)',
+    borderRadius: '6px',
+    animation: 'shimmer 1.5s ease-in-out infinite',
+  },
+  buttons: {
+    display: 'flex',
+    gap: '10px',
+  },
+};
+
+const shimmerCSS = `
+  @keyframes shimmer {
+    0%   { opacity: 0.4; }
+    50%  { opacity: 0.8; }
+    100% { opacity: 0.4; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    * { animation: none !important; }
+  }
+`;

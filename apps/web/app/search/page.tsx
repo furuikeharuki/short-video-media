@@ -33,7 +33,7 @@ export default async function SearchPage({ searchParams }: Props) {
       {items.length === 0 ? (
         <p style={styles.empty}>該当する作品が見つかりませんでした</p>
       ) : (
-        <div style={styles.grid}>
+        <div className="search-grid">
           {items.map((item, index) => (
             <Link
               key={item.id}
@@ -80,8 +80,6 @@ const styles: Record<string, React.CSSProperties> = {
     color: "rgba(255,255,255,0.45)",
     padding: "12px 16px 4px",
   },
-  // grid は CSS で制御（メディアクエリのため）
-  grid: {},
   card: {
     display: "block",
     textDecoration: "none",
@@ -134,18 +132,15 @@ const pageCSS = `
   *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
   html, body { background: #0a0a0a !important; overflow: hidden !important; }
 
-  /* スマホ: 3カラム */
   .search-grid {
     display: grid;
     grid-template-columns: repeat(3, 1fr);
     gap: 2px;
     padding: 2px;
   }
-  /* タブレット: 5カラム */
   @media (min-width: 640px) {
     .search-grid { grid-template-columns: repeat(5, 1fr); }
   }
-  /* PC: 7カラム、最大幅で中央寄せ */
   @media (min-width: 1024px) {
     .search-grid {
       grid-template-columns: repeat(7, 1fr);
@@ -153,5 +148,6 @@ const pageCSS = `
       margin: 0 auto;
     }
   }
-  .search-card img:hover { transform: scale(1.04); }
+  .search-grid a img { transition: transform 0.2s ease; }
+  .search-grid a:hover img { transform: scale(1.04); }
 `;

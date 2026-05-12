@@ -32,12 +32,14 @@ export default async function MovieDetailPage({ params }: PageProps) {
           <DetailViewTracker slug={movie.slug} title={movie.title} />
 
           <div style={styles.heroWrap}>
+            {/* ボカシblur背景 */}
             <img
               src={movie.thumbnail_url}
               alt=""
               aria-hidden="true"
               style={styles.heroBgBlur}
             />
+            {/* メイン画像: 横幅100%、縦はアスペクト比に従い自動 */}
             <img
               src={movie.thumbnail_url}
               alt={movie.title}
@@ -102,9 +104,10 @@ const styles: Record<string, React.CSSProperties> = {
   heroWrap: {
     position: 'relative',
     width: '100%',
-    height: '80dvh',
-    background: '#111',
+    // 横幅基準で縦長画像を大きく表示。画面高さの90%を上限に
+    maxHeight: '90dvh',
     overflow: 'hidden',
+    background: '#111',
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'center',
@@ -122,10 +125,11 @@ const styles: Record<string, React.CSSProperties> = {
   heroImg: {
     position: 'relative',
     zIndex: 1,
-    maxWidth: '100%',
-    maxHeight: '100%',
-    width: 'auto',
+    // 横幅を画面幅いっみに使い、縦はアスペクト比で自動伸縮
+    // maxHeightで画面からはみ出ずに收まる
+    width: '100%',
     height: 'auto',
+    maxHeight: '90dvh',
     objectFit: 'contain',
     display: 'block',
     borderRadius: '4px',

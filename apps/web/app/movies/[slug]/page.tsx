@@ -82,8 +82,7 @@ const styles: Record<string, React.CSSProperties> = {
   heroWrap: {
     position: 'relative',
     width: '100%',
-    aspectRatio: '3 / 4',
-    maxHeight: '80dvh',
+    height: '85dvh',
     overflow: 'hidden',
     background: '#111',
     display: 'flex',
@@ -103,11 +102,12 @@ const styles: Record<string, React.CSSProperties> = {
   heroImg: {
     position: 'relative',
     zIndex: 1,
-    width: '100%',
-    height: '100%',
-    objectFit: 'cover',
-    objectPosition: 'center top',
+    width: 'calc(100% - 60px)' as unknown as string,
+    height: 'auto',
+    maxHeight: 'calc(85dvh - 60px)' as unknown as string,
+    objectFit: 'contain',
     display: 'block',
+    borderRadius: '8px',
   },
   content: {
     padding: '20px 16px 48px',
@@ -146,7 +146,9 @@ const styles: Record<string, React.CSSProperties> = {
 };
 
 const pageCSS = `
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
   html, body {
+    background: #0a0a0a !important;
     overflow: auto !important;
   }
 

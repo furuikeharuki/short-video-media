@@ -10,7 +10,8 @@ interface Props {
 }
 
 const H_PADDING = 4;
-const V_PADDING = 4;
+const V_PADDING_TOP = 4;
+const V_PADDING_BOTTOM = 16; // ボタン上の余白だけ広め
 
 const isLandscapeScreen = () => window.innerWidth > window.innerHeight;
 
@@ -41,12 +42,9 @@ export default function FeedItem({ item, isFirst }: Props) {
     const sectionRect = section.getBoundingClientRect();
     const ctaRect = cta.getBoundingClientRect();
 
-    // section 内での CTA の top 相対座標
     const ctaTopInSection = ctaRect.top - sectionRect.top;
-
-    const top = V_PADDING;
-    // 動画の下辺 = CTA の上辺 - gap
-    const height = ctaTopInSection - top - V_PADDING;
+    const top = V_PADDING_TOP;
+    const height = ctaTopInSection - top - V_PADDING_BOTTOM;
     const width = section.offsetWidth - H_PADDING * 2;
 
     setVideoStyle({
@@ -195,7 +193,7 @@ export default function FeedItem({ item, isFirst }: Props) {
 const itemStyle = `
   .shimmer {
     position: absolute;
-    top: ${V_PADDING}px;
+    top: ${V_PADDING_TOP}px;
     left: ${H_PADDING}px;
     right: ${H_PADDING}px;
     bottom: 0;

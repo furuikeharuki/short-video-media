@@ -18,6 +18,7 @@ export default function AffiliateLink({
       href={href}
       target="_blank"
       rel="noopener noreferrer"
+      className="affiliate-btn"
       onClick={() => {
         void trackEvent("affiliate_click", {
           slug,
@@ -26,7 +27,7 @@ export default function AffiliateLink({
         });
       }}
     >
-      購入ページへ
+      購入ページで詳細を見る →
     </a>
   );
 }

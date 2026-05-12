@@ -11,6 +11,7 @@ export default async function SearchPage({ searchParams }: Props) {
     return (
       <main style={styles.main}>
         <p style={styles.empty}>検索ワードを入力してください</p>
+        <style>{pageCSS}</style>
       </main>
     );
   }
@@ -79,12 +80,8 @@ const styles: Record<string, React.CSSProperties> = {
     color: "rgba(255,255,255,0.45)",
     padding: "12px 16px 4px",
   },
-  grid: {
-    display: "grid",
-    gridTemplateColumns: "repeat(3, 1fr)",
-    gap: "2px",
-    padding: "2px",
-  },
+  // grid は CSS で制御（メディアクエリのため）
+  grid: {},
   card: {
     display: "block",
     textDecoration: "none",
@@ -94,7 +91,7 @@ const styles: Record<string, React.CSSProperties> = {
   thumbWrap: {
     position: "relative" as const,
     width: "100%",
-    paddingBottom: "177.77%", // 9:16
+    paddingBottom: "177.77%",
     background: "#111",
     overflow: "hidden",
   },
@@ -105,6 +102,7 @@ const styles: Record<string, React.CSSProperties> = {
     height: "100%",
     objectFit: "cover" as const,
     display: "block",
+    transition: "transform 0.2s ease",
   },
   playBadge: {
     position: "absolute" as const,
@@ -135,4 +133,25 @@ const styles: Record<string, React.CSSProperties> = {
 const pageCSS = `
   *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
   html, body { background: #0a0a0a !important; overflow: hidden !important; }
+
+  /* スマホ: 3カラム */
+  .search-grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 2px;
+    padding: 2px;
+  }
+  /* タブレット: 5カラム */
+  @media (min-width: 640px) {
+    .search-grid { grid-template-columns: repeat(5, 1fr); }
+  }
+  /* PC: 7カラム、最大幅で中央寄せ */
+  @media (min-width: 1024px) {
+    .search-grid {
+      grid-template-columns: repeat(7, 1fr);
+      max-width: 1200px;
+      margin: 0 auto;
+    }
+  }
+  .search-card img:hover { transform: scale(1.04); }
 `;

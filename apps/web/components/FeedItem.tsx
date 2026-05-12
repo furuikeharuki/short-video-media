@@ -17,8 +17,10 @@ const SKIP_SEC = 5;
 const DBL_TAP_MS = 300;
 const LONG_PRESS_MS = 500;
 const TAP_MOVE_THRESHOLD = 10;
-const PLAY_THRESHOLD = 0.5;
-const PRELOAD_THRESHOLD = 0.1;
+// スナップ完了直前（85%見えたら）に再生開始 → 待ち時間ゼロに近づける
+const PLAY_THRESHOLD = 0.85;
+// 少しでも見え始めたら即プリロード開始
+const PRELOAD_THRESHOLD = 0.01;
 
 const isLandscapeScreen = () => window.innerWidth > window.innerHeight;
 
@@ -153,6 +155,8 @@ export default function FeedItem({ item, isFirst, isSecond = false }: Props) {
   useEffect(() => {
     const video = videoRef.current;
     if (!video) return;
+
+    // 少しでも見えたら即プリロード（PRELOAD_THRESHOLD=0.01）
     const preloadObserver = new IntersectionObserver(
       ([entry]) => {
         if (entry.isIntersecting && !preloadStartedRef.current) {
@@ -162,6 +166,8 @@ export default function FeedItem({ item, isFirst, isSecond = false }: Props) {
       },
       { threshold: PRELOAD_THRESHOLD }
     );
+
+    // 85%見えたら再生開始（スナップ完了直前）
     const playObserver = new IntersectionObserver(
       ([entry]) => {
         if (entry.isIntersecting) {
@@ -171,8 +177,7 @@ export default function FeedItem({ item, isFirst, isSecond = false }: Props) {
           video.currentTime = 0;
           video.playbackRate = 1;
           video.muted = true;
-          video.preload = isFirst || isSecond ? "auto" : "none";
-          preloadStartedRef.current = isFirst || isSecond;
+          // preloadはリセットしない → 戻ったときに即再生できる
           setIsPlaying(false);
           setIsFast(false);
           setIsMuted(true);
@@ -217,7 +222,6 @@ export default function FeedItem({ item, isFirst, isSecond = false }: Props) {
     else { video.pause(); setIsPlaying(false); showOverlay("pause"); }
   }, [playVideo, showOverlay]);
 
-  // ミュートバッジのタッチ: stopPropagation + preventDefault でコンテナのtouchEndに伝播しない
   const handleUnmute = useCallback((e: React.MouseEvent | React.TouchEvent) => {
     e.stopPropagation();
     e.preventDefault();
@@ -356,6 +360,7 @@ export default function FeedItem({ item, isFirst, isSecond = false }: Props) {
             playsInline
             preload={preloadAttr}
             onLoadedMetadata={handleMetadata}
+            onLoadedData={() => setVideoReady(true)}
             onCanPlay={() => setVideoReady(true)}
             style={videoStyle}
           />

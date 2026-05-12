@@ -24,7 +24,6 @@ export default async function HomePage() {
           <FeedItem
             key={item.id}
             item={item}
-            index={index}
             isFirst={index === 0}
           />
         ))}

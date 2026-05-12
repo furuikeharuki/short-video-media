@@ -97,13 +97,12 @@ const feedStyle = `
     display: none;
   }
 
-  /* タイトル・タグ・ボタンエリア：bottom を上げて全体を上寄せ */
   .info-overlay {
     position: absolute;
     bottom: 0;
     left: 0;
     right: 0;
-    padding: 0 16px 52px;
+    padding: 0 16px 32px;
     color: #fff;
     z-index: 10;
   }
@@ -178,27 +177,6 @@ const feedStyle = `
     background: #e91e63;
     color: #fff;
     flex: 1;
-  }
-
-  .scroll-hint {
-    position: absolute;
-    bottom: 140px;
-    right: 16px;
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    gap: 4px;
-    color: rgba(255, 255, 255, 0.5);
-    font-size: 11px;
-    z-index: 10;
-    animation: bounce 2s ease-in-out infinite;
-  }
-  .scroll-arrow {
-    font-size: 18px;
-  }
-  @keyframes bounce {
-    0%, 100% { transform: translateY(0); }
-    50%       { transform: translateY(6px); }
   }
 
   @media (prefers-reduced-motion: reduce) {

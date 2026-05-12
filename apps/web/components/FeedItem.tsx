@@ -112,7 +112,7 @@ export default function FeedItem({ item, isFirst, isSecond = false }: Props) {
     video.style.width          = `${width}px`;
     video.style.height         = `${height}px`;
     video.style.objectFit      = resolvedFit;
-    video.style.objectPosition = resolvedFit === "contain" ? "center 20%" : "center center";
+    video.style.objectPosition = resolvedFit === "contain" ? "center 40%" : "center center";
     video.style.borderRadius   = "8px";
   }, []);
 
@@ -487,13 +487,6 @@ export default function FeedItem({ item, isFirst, isSecond = false }: Props) {
         </div>
       </div>
 
-      {isFirst && (
-        <div className="scroll-hint">
-          <span>スワイプ</span>
-          <span className="scroll-arrow">↓</span>
-        </div>
-      )}
-
       <style>{itemStyle}</style>
     </section>
   );
@@ -649,7 +642,6 @@ const itemStyle = `
 
   @media (prefers-reduced-motion: reduce) {
     .shimmer-inner  { animation: none; }
-    .scroll-hint    { animation: none; }
     .skip-ripple    { animation: none; opacity: 0; }
     .action-overlay { animation: none; opacity: 0; }
   }

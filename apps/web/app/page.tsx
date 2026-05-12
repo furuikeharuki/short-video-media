@@ -49,7 +49,7 @@ const feedStyle = `
     overflow: hidden;
   }
 
-  /* ─── フィードコンテナ ───────────────────── */
+  /* ─── フィードコンテナ ─────────────────────── */
   .feed-container {
     height: 100dvh;
     overflow-y: scroll;
@@ -72,7 +72,7 @@ const feedStyle = `
     background: #111;
   }
 
-  /* ─── 動画プレイヤー ───────────────── */
+  /* ─── 動画プレイヤー ────────────────── */
   .video-bg {
     position: absolute;
     inset: 0;
@@ -96,17 +96,9 @@ const feedStyle = `
     display: block;
   }
 
-  /* ─── オーバーレイ共通 ──────────────── */
+  /* ─── オーバーレイ削除（暗転なし） ────────── */
   .thumbnail-overlay {
-    position: absolute;
-    inset: 0;
-    background: linear-gradient(
-      to bottom,
-      transparent 35%,
-      rgba(0, 0, 0, 0.3) 55%,
-      rgba(0, 0, 0, 0.85) 80%,
-      rgba(0, 0, 0, 0.95) 100%
-    );
+    display: none;
   }
 
   /* ─── 下部オーバーレイ ──────────────── */

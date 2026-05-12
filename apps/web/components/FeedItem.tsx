@@ -7,7 +7,7 @@ import type { MovieCard } from "@/lib/api/feed";
 interface Props {
   item: MovieCard;
   isFirst: boolean;
-  isSecond?: boolean; // 2番目のアイテムかどうか（先読み用）
+  isSecond?: boolean;
 }
 
 const H_PADDING = 4;
@@ -17,10 +17,7 @@ const SKIP_SEC = 5;
 const DBL_TAP_MS = 300;
 const LONG_PRESS_MS = 500;
 const TAP_MOVE_THRESHOLD = 10;
-
-// 再生開始のトリガー閾値：0.5に下げてスマホで早く開始
 const PLAY_THRESHOLD = 0.5;
-// バッファ先読みの閾値：画面に少しでも入ったらload開始
 const PRELOAD_THRESHOLD = 0.1;
 
 const isLandscapeScreen = () => window.innerWidth > window.innerHeight;
@@ -49,6 +46,7 @@ export default function FeedItem({ item, isFirst, isSecond = false }: Props) {
   const lastTouchEndRef = useRef(0);
 
   const [videoReady, setVideoReady] = useState(false);
+  const videoReadyRef = useRef(false); // calcVideoArea内で参照する用（stale closure回避）
   const [isPlaying, setIsPlaying] = useState(false);
   const [isMuted, setIsMuted] = useState(true);
   const [isFast, setIsFast] = useState(false);
@@ -56,22 +54,29 @@ export default function FeedItem({ item, isFirst, isSecond = false }: Props) {
   const [ripples, setRipples] = useState<Ripple[]>([]);
   const [overlay, setOverlay] = useState<Overlay>(null);
 
-  const [videoStyle, setVideoStyle] = useState<React.CSSProperties>({
+  // 動画の位置・サイズのみを管理する state（opacity は含めない）
+  const [videoLayout, setVideoLayout] = useState<React.CSSProperties>({
     position: "absolute",
     inset: 0,
     width: "100%",
     height: "100%",
     objectFit: "cover",
     objectPosition: "center center",
-    opacity: 0,
-    transition: "opacity 0.3s ease",
   });
+
+  // opacity は videoReady のみで決まる——calcVideoArea から完全分離
+  const videoStyle: React.CSSProperties = {
+    ...videoLayout,
+    opacity: videoReady ? 1 : 0,
+    transition: "opacity 0.3s ease",
+  };
 
   const showOverlay = useCallback((type: Overlay) => {
     setOverlay(type);
     setTimeout(() => setOverlay(null), 700);
   }, []);
 
+  // 位置・サイズのみを更新。opacity は一切聴れない
   const calcVideoArea = useCallback((fit: "cover" | "contain" = objectFit) => {
     const cta = ctaRef.current;
     const section = sectionRef.current;
@@ -86,7 +91,7 @@ export default function FeedItem({ item, isFirst, isSecond = false }: Props) {
     const top = V_PADDING_TOP;
     const height = ctaTopInSection - top - V_PADDING_BOTTOM;
     const width = section.offsetWidth - H_PADDING * 2;
-    setVideoStyle({
+    setVideoLayout({
       position: "absolute",
       top: `${top}px`,
       left: `${H_PADDING}px`,
@@ -95,14 +100,13 @@ export default function FeedItem({ item, isFirst, isSecond = false }: Props) {
       objectFit: fit,
       objectPosition: "center center",
       borderRadius: "8px",
-      opacity: videoReady ? 1 : 0,
-      transition: "opacity 0.3s ease",
     });
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [objectFit]);
 
+  // videoReady 変化時に ref も同期（将来の calcVideoArea 呼び出し用）
   useEffect(() => {
-    setVideoStyle((prev) => ({ ...prev, opacity: videoReady ? 1 : 0 }));
+    videoReadyRef.current = videoReady;
   }, [videoReady]);
 
   useEffect(() => { calcVideoArea(objectFit); }, [objectFit, calcVideoArea]);
@@ -166,7 +170,6 @@ export default function FeedItem({ item, isFirst, isSecond = false }: Props) {
     const video = videoRef.current;
     if (!video) return;
 
-    // ① PRELOAD用 Observer：画面に10%入ったら即座に load()でバッファ引こ合い開始
     const preloadObserver = new IntersectionObserver(
       ([entry]) => {
         if (entry.isIntersecting && !preloadStartedRef.current) {
@@ -180,7 +183,6 @@ export default function FeedItem({ item, isFirst, isSecond = false }: Props) {
       { threshold: PRELOAD_THRESHOLD }
     );
 
-    // ② PLAY用 Observer：50%表示で再生開始
     const playObserver = new IntersectionObserver(
       ([entry]) => {
         if (entry.isIntersecting) {
@@ -196,6 +198,7 @@ export default function FeedItem({ item, isFirst, isSecond = false }: Props) {
           setIsFast(false);
           setIsMuted(true);
           setVideoReady(false);
+          videoReadyRef.current = false;
         }
       },
       { threshold: PLAY_THRESHOLD }
@@ -373,7 +376,6 @@ export default function FeedItem({ item, isFirst, isSecond = false }: Props) {
     }
   }, [fireTogglePlay, fireSkip]);
 
-  // preload 属性: 1番目・2番目は auto、それ以外は none（Observerが自動切り替え）
   const preloadAttr = isFirst || isSecond ? "auto" : "none";
 
   return (

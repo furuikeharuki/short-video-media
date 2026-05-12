@@ -140,6 +140,9 @@ html, body {
   pointer-events: none;
   z-index: 20;
   filter: drop-shadow(0 2px 6px rgba(0,0,0,0.6));
+  display: flex;
+  align-items: center;
+  justify-content: center;
 }
 
 .fast-badge {
@@ -219,14 +222,16 @@ html, body {
   padding: 2px 8px;
   border-radius: 999px;
   background: rgba(255,255,255,0.15);
+  border: 1px solid rgba(255,255,255,0.3);
   color: #fff;
   white-space: nowrap;
 }
 
 .item-title {
-  font-size: 14px;
-  font-weight: 600;
+  font-size: clamp(14px, 3.5vw, 20px);
+  font-weight: 700;
   line-height: 1.4;
+  text-shadow: 0 1px 8px rgba(0,0,0,0.6);
   display: -webkit-box;
   -webkit-line-clamp: 2;
   -webkit-box-orient: vertical;
@@ -248,21 +253,29 @@ html, body {
 }
 .btn-detail, .btn-buy {
   flex: 1;
-  padding: 10px 0;
-  border-radius: 8px;
+  padding: 12px 0;
+  border-radius: 10px;
   font-size: 14px;
   font-weight: 700;
   text-align: center;
   text-decoration: none;
   display: block;
+  min-height: 44px;
+  transition: opacity 0.15s ease, transform 0.15s ease;
+}
+.btn-detail:active, .btn-buy:active {
+  opacity: 0.75;
+  transform: scale(0.97);
 }
 .btn-detail {
   background: rgba(255,255,255,0.15);
   color: #fff;
   border: 1px solid rgba(255,255,255,0.3);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
 }
 .btn-buy {
-  background: #e8003d;
+  background: #e91e63;
   color: #fff;
 }
 
@@ -286,6 +299,32 @@ html, body {
 @keyframes hint-bounce {
   0%, 100% { transform: translateX(-50%) translateY(0); }
   50%       { transform: translateX(-50%) translateY(6px); }
+}
+
+/* ========== empty state ========== */
+.empty-state {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100dvh;
+  background: #0a0a0a;
+  color: #fff;
+}
+.empty-inner {
+  text-align: center;
+  padding: 24px;
+}
+.empty-icon {
+  font-size: 48px;
+  margin-bottom: 16px;
+}
+.empty-inner h2 {
+  font-size: 20px;
+  margin-bottom: 8px;
+}
+.empty-inner p {
+  color: rgba(255,255,255,0.5);
+  font-size: 14px;
 }
 
 /* ========== アクセシビリティ ========== */

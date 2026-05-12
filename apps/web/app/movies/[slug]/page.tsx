@@ -73,7 +73,6 @@ export default async function MovieDetailPage({ params }: PageProps) {
 
 const styles: Record<string, React.CSSProperties> = {
   main: {
-    // bodyはスクロールさせず、mainで閉じ込めることで fixed Header と競合しない
     position: 'fixed' as const,
     top: '52px' as unknown as string,
     left: 0,
@@ -83,12 +82,10 @@ const styles: Record<string, React.CSSProperties> = {
     background: '#0a0a0a',
     color: '#fff',
     fontFamily: "-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif",
-    WebkitOverflowScrolling: 'touch' as unknown as string,
   },
   heroWrap: {
     position: 'relative',
     width: '100%',
-    // 85svh → 55svh に縮小
     height: '55svh' as unknown as string,
     overflow: 'hidden',
     background: '#111',

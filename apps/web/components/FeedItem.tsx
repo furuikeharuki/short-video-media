@@ -13,8 +13,8 @@ const H_PADDING = 4;
 const V_PADDING_TOP = 4;
 const V_PADDING_BOTTOM = 16;
 const SKIP_SEC = 5;
-const DBL_TAP_MS = 300;   // ダブルタップ判定ウィンドウ
-const LONG_PRESS_MS = 500; // 長押し判定閾値
+const DBL_TAP_MS = 300;
+const LONG_PRESS_MS = 500;
 
 const isLandscapeScreen = () => window.innerWidth > window.innerHeight;
 
@@ -29,7 +29,6 @@ export default function FeedItem({ item, isFirst }: Props) {
   // タップ判定
   const tapTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const tapCountRef = useRef(0);
-  const tapPosRef = useRef<{ x: number; y: number }>({ x: 0, y: 0 });
 
   // 長押し判定
   const longPressTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -53,7 +52,7 @@ export default function FeedItem({ item, isFirst }: Props) {
     transition: "opacity 0.3s ease",
   });
 
-  // ─── オーバーレイ表示ヘルパー ───────────────────
+  // ─── オーバーレイ表示 ───────────────────────────
   const showOverlay = useCallback((type: Overlay) => {
     setOverlay(type);
     setTimeout(() => setOverlay(null), 700);
@@ -131,7 +130,7 @@ export default function FeedItem({ item, isFirst }: Props) {
     setObjectFit(fit); calcVideoArea(fit);
   };
 
-  // ─── IntersectionObserver（自動再生/停止）───────
+  // ─── IntersectionObserver ───────────────────────
   useEffect(() => {
     const video = videoRef.current;
     if (!video) return;
@@ -142,7 +141,8 @@ export default function FeedItem({ item, isFirst }: Props) {
           setIsPlaying(true);
         } else {
           video.pause(); video.currentTime = 0;
-          setIsPlaying(false); setVideoReady(false);
+          video.playbackRate = 1;
+          setIsPlaying(false); setIsFast(false); setVideoReady(false);
         }
       },
       { threshold: 0.7 }
@@ -155,7 +155,7 @@ export default function FeedItem({ item, isFirst }: Props) {
     history.replaceState(null, "", `#${item.slug}`);
   };
 
-  // ─── スキップ（ダブルタップ/クリック共通）───────
+  // ─── スキップ ───────────────────────────────────
   const fireSkip = useCallback((clientX: number, clientY: number) => {
     const video = videoRef.current;
     const section = sectionRef.current;
@@ -173,12 +173,18 @@ export default function FeedItem({ item, isFirst }: Props) {
     setTimeout(() => setRipples((prev) => prev.filter((r) => r.id !== id)), 700);
   }, []);
 
-  // ─── 再生/一時停止トグル ────────────────────────
-  const fireTogglePlay = useCallback(() => {
+  // ─── 再生/停止トグル ────────────────────────────
+  // Fix1: muted フォールバック付き async play() でモバイル停止後の再生を保証
+  const fireTogglePlay = useCallback(async () => {
     const video = videoRef.current;
     if (!video) return;
     if (video.paused) {
-      video.play().catch(() => {});
+      try {
+        await video.play();
+      } catch {
+        video.muted = true;
+        try { await video.play(); } catch { return; }
+      }
       setIsPlaying(true);
       showOverlay("play");
     } else {
@@ -188,7 +194,7 @@ export default function FeedItem({ item, isFirst }: Props) {
     }
   }, [showOverlay]);
 
-  // ─── 長押し開始（2倍速）────────────────────────
+  // ─── 長押し開始 ─────────────────────────────────
   const startLongPress = useCallback(() => {
     isLongPressRef.current = false;
     longPressTimerRef.current = setTimeout(() => {
@@ -201,31 +207,36 @@ export default function FeedItem({ item, isFirst }: Props) {
     }, LONG_PRESS_MS);
   }, [showOverlay]);
 
-  // ─── 長押し終了（1倍速に戻す）──────────────────
-  const endLongPress = useCallback(() => {
+  // ─── 長押し終了 ─────────────────────────────────
+  // Fix3: 長押し確定フラグを返す（呼び出し元で判断できるように）
+  const endLongPress = useCallback((): boolean => {
     if (longPressTimerRef.current) clearTimeout(longPressTimerRef.current);
     const video = videoRef.current;
-    if (!video) return;
-    if (isLongPressRef.current) {
+    const wasLong = isLongPressRef.current;
+    if (wasLong && video) {
       video.playbackRate = 1;
       setIsFast(false);
       isLongPressRef.current = false;
     }
+    return wasLong;
   }, []);
 
   // ─── タッチイベント ─────────────────────────────
+  // Fix2: e.preventDefault() で長押し時のコンテキストメニュー（ダウンロードUI）を抑制
   const handleTouchStart = useCallback((e: React.TouchEvent) => {
     if (!videoRef.current) return;
+    e.preventDefault();
     const touch = e.touches[0];
-    tapPosRef.current = { x: touch.clientX, y: touch.clientY };
+    tapCountRef.current; // アクセスのみ（型エラー回避）
+    void touch;
     startLongPress();
   }, [startLongPress]);
 
   const handleTouchEnd = useCallback((e: React.TouchEvent) => {
     if (!videoRef.current) return;
-    endLongPress();
-    // 長押し確定していたらタップ判定しない
-    if (isLongPressRef.current) return;
+    // Fix3: endLongPress の戻り値で長押し確定を判断（endLongPress がフラグをリセットする前に取得）
+    const wasLong = endLongPress();
+    if (wasLong) return; // 長押し確定 → 一時停止しない
 
     const touch = e.changedTouches[0];
     const { clientX, clientY } = touch;
@@ -233,14 +244,12 @@ export default function FeedItem({ item, isFirst }: Props) {
     tapCountRef.current += 1;
     if (tapCountRef.current === 1) {
       tapTimerRef.current = setTimeout(() => {
-        // シングルタップ確定
         if (tapCountRef.current === 1) fireTogglePlay();
         tapCountRef.current = 0;
       }, DBL_TAP_MS);
     } else if (tapCountRef.current >= 2) {
       if (tapTimerRef.current) clearTimeout(tapTimerRef.current);
       tapCountRef.current = 0;
-      // ダブルタップ確定 → スキップ
       fireSkip(clientX, clientY);
     }
   }, [endLongPress, fireTogglePlay, fireSkip]);
@@ -249,31 +258,16 @@ export default function FeedItem({ item, isFirst }: Props) {
     endLongPress();
   }, [endLongPress]);
 
-  // ─── マウスイベント ─────────────────────────────
-  const handleMouseDown = useCallback(() => {
-    startLongPress();
-  }, [startLongPress]);
-
-  const handleMouseUp = useCallback(() => {
-    endLongPress();
-  }, [endLongPress]);
-
-  const handleMouseLeave = useCallback(() => {
-    endLongPress();
-  }, [endLongPress]);
-
-  const handleClick = useCallback(() => {
-    // 長押し確定後のクリックは無視
-    if (isLongPressRef.current) return;
-    // ダブルクリックと競合しないよう dblclick に委ねる（PC はブラウザが自然に処理）
+  // Fix2: コンテキストメニュー（長押しダウンロードUI）を完全に抑制
+  const handleContextMenu = useCallback((e: React.MouseEvent | React.TouchEvent) => {
+    e.preventDefault();
   }, []);
 
-  const handleDoubleClick = useCallback((e: React.MouseEvent) => {
-    if (isLongPressRef.current) return;
-    fireSkip(e.clientX, e.clientY);
-  }, [fireSkip]);
+  // ─── マウスイベント（PC）───────────────────────
+  const handleMouseDown = useCallback(() => { startLongPress(); }, [startLongPress]);
+  const handleMouseUp = useCallback(() => { endLongPress(); }, [endLongPress]);
+  const handleMouseLeave = useCallback(() => { endLongPress(); }, [endLongPress]);
 
-  // PC シングルクリック: dblclick と区別するため自前タイマー
   const pcClickCountRef = useRef(0);
   const pcClickTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const handlePcClick = useCallback((e: React.MouseEvent) => {
@@ -299,6 +293,7 @@ export default function FeedItem({ item, isFirst }: Props) {
           onTouchStart={handleTouchStart}
           onTouchEnd={handleTouchEnd}
           onTouchCancel={handleTouchCancel}
+          onContextMenu={handleContextMenu}
           onMouseDown={handleMouseDown}
           onMouseUp={handleMouseUp}
           onMouseLeave={handleMouseLeave}
@@ -321,7 +316,6 @@ export default function FeedItem({ item, isFirst }: Props) {
             style={videoStyle}
           />
 
-          {/* 再生/停止/倍速オーバーレイ */}
           {overlay && (
             <div className="action-overlay" aria-hidden="true">
               <span className="action-icon">
@@ -332,17 +326,14 @@ export default function FeedItem({ item, isFirst }: Props) {
             </div>
           )}
 
-          {/* 一時停止中バッジ */}
           {videoReady && !isPlaying && (
             <div className="pause-badge" aria-hidden="true">⏸</div>
           )}
 
-          {/* 2倍速バッジ */}
           {isFast && (
             <div className="fast-badge" aria-hidden="true">2×</div>
           )}
 
-          {/* スキップリップル */}
           {ripples.map((r) => (
             <div
               key={r.id}
@@ -438,7 +429,6 @@ const itemStyle = `
     user-select: none;
   }
 
-  /* ─── 中央ポップオーバーレイ ─── */
   .action-overlay {
     position: absolute;
     inset: 0;
@@ -461,7 +451,6 @@ const itemStyle = `
     100% { opacity: 0; transform: scale(1); }
   }
 
-  /* ─── 一時停止バッジ（常時表示）─── */
   .pause-badge {
     position: absolute;
     top: 50%;
@@ -474,7 +463,6 @@ const itemStyle = `
     filter: drop-shadow(0 2px 6px rgba(0,0,0,0.6));
   }
 
-  /* ─── 2倍速バッジ（長押し中）─── */
   .fast-badge {
     position: absolute;
     top: 12px;
@@ -491,7 +479,6 @@ const itemStyle = `
     backdrop-filter: blur(4px);
   }
 
-  /* ─── スキップリップル ─── */
   .skip-ripple {
     position: absolute;
     transform: translate(-50%, -50%);

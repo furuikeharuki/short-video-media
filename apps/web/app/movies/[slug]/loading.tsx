@@ -86,6 +86,9 @@ const styles: Record<string, React.CSSProperties> = {
 };
 
 const shimmerCSS = `
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { background: #0a0a0a !important; overflow: auto !important; }
+
   @keyframes shimmer {
     0%   { opacity: 0.4; }
     50%  { opacity: 0.8; }

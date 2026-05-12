@@ -19,15 +19,6 @@ const TAP_MOVE_THRESHOLD = 10;
 const PLAY_THRESHOLD = 0.85;
 const PRELOAD_THRESHOLD = 0.01;
 
-// CSS変数 --header-h の実測値（SSR時は52pxフォールバック）
-const getHeaderH = () => {
-  if (typeof window === "undefined") return 52;
-  const raw = getComputedStyle(document.documentElement)
-    .getPropertyValue("--header-h")
-    .trim();
-  return parseInt(raw, 10) || 52;
-};
-
 const isLandscapeScreen = () => window.innerWidth > window.innerHeight;
 
 let globalUserGestured = false;
@@ -96,11 +87,11 @@ export default function FeedItem({ item, isFirst, isSecond = false }: Props) {
 
   // ── 動画エリア計算 ──
   //
-  // 座標はすべて section 内相対で統一する。
-  //
-  //  areaTop    = --header-h  (ヘッダーの高さ分 = sectionの上から見た動画エリアの上端)
-  //  areaBottom = cta.offsetTop - V_PADDING_BOTTOM  (ボタン上端まで)
-  //  中心 = (areaTop + areaBottom) / 2
+  // feed-container は position:fixed; top:var(--header-h) なので、
+  // feed-item の top:0 はすでにヘッダー直下。
+  // → areaTop = 0（section内座標でヘッダー分は不要）
+  // → areaBottom = cta.offsetTop - V_PADDING_BOTTOM
+  // → 動画をその範囲の垂直中央に配置する
 
   const calcVideoArea = useCallback((fit?: "cover" | "contain") => {
     const resolvedFit = fit ?? objectFitRef.current;
@@ -109,19 +100,18 @@ export default function FeedItem({ item, isFirst, isSecond = false }: Props) {
     const video   = videoRef.current;
     if (!cta || !section || !video) return;
 
-    // cta.offsetTop は section 内の相対座標。まだ 0 なら次フレームに遅延。
+    // cta.offsetTop が未レイアウト(0)なら次フレームに遅延
     if (cta.offsetTop === 0) {
       requestAnimationFrame(() => calcVideoArea(resolvedFit));
       return;
     }
 
-    const headerH    = getHeaderH();                        // section内相対: ヘッダー下端
-    const areaTop    = headerH;
-    const areaBottom = cta.offsetTop - V_PADDING_BOTTOM;   // section内相対: CTA上端
+    const areaTop    = 0;                                  // section内: 上端
+    const areaBottom = cta.offsetTop - V_PADDING_BOTTOM;  // section内: CTAボタン上端
     const availableH = Math.max(areaBottom - areaTop, 0);
     const availableW = section.offsetWidth - H_PADDING * 2;
 
-    // 動画の表示サイズ（contain時はアスペクト比を決定）
+    // 動画の表示サイズ（contain時はアスペクト比を保持）
     let videoW = availableW;
     let videoH = availableH;
     const nativeW = video.videoWidth;
@@ -138,8 +128,8 @@ export default function FeedItem({ item, isFirst, isSecond = false }: Props) {
       }
     }
 
-    // section内座標で垂直中央に配置
-    const centerY      = (areaTop + areaBottom) / 2;
+    // 垂直中央配置
+    const centerY       = (areaTop + areaBottom) / 2;
     const topInSection  = Math.round(centerY - videoH / 2);
     const leftInSection = Math.round(H_PADDING + (availableW - videoW) / 2);
 
@@ -152,7 +142,6 @@ export default function FeedItem({ item, isFirst, isSecond = false }: Props) {
     video.style.objectPosition = "center center";
     video.style.borderRadius   = "8px";
 
-    // shimmerも同位置・同サイズ
     const shimmer = shimmerRef.current;
     if (shimmer) {
       shimmer.style.top    = `${topInSection}px`;

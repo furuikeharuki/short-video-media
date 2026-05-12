@@ -6,6 +6,7 @@ export type MovieCard = {
   sample_embed_url: string;
   actresses: string[];
   genres: string[];
+  affiliate_url: string;
 };
 
 export type FeedResponse = {

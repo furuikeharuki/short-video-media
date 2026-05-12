@@ -15,6 +15,7 @@ def get_feed() -> FeedResponse:
             sample_embed_url=movie.sample_embed_url,
             actresses=movie.actresses,
             genres=movie.genres,
+            affiliate_url=movie.affiliate_url,
         )
         for movie in movies
     ]

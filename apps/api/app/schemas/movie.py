@@ -9,6 +9,7 @@ class MovieCard(BaseModel):
     sample_embed_url: str
     actresses: list[str]
     genres: list[str]
+    affiliate_url: str
 
 
 class MovieDetail(BaseModel):

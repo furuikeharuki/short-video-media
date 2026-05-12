@@ -45,12 +45,21 @@ export default function FeedItem({ item, isFirst }: Props) {
     const cta = ctaRef.current;
     const section = sectionRef.current;
     if (!cta || !section) return;
+
     const sectionRect = section.getBoundingClientRect();
     const ctaRect = cta.getBoundingClientRect();
+
+    // DOMがまだレイアウトされていない場合（isFirst の早期発火時に発生）は再試行
+    if (ctaRect.top === 0 && ctaRect.height === 0) {
+      requestAnimationFrame(() => calcVideoArea(fit));
+      return;
+    }
+
     const ctaTopInSection = ctaRect.top - sectionRect.top;
     const top = V_PADDING_TOP;
     const height = ctaTopInSection - top - V_PADDING_BOTTOM;
     const width = section.offsetWidth - H_PADDING * 2;
+
     setVideoStyle({
       position: "absolute",
       top: `${top}px`,
@@ -276,13 +285,10 @@ const itemStyle = `
     100% { background-position: -200% 0; }
   }
 
-  /* ダブルタップ操作用ラップー: レイアウトに影響させないよう CSS クラスで管理 */
   .video-bg--interactive {
     cursor: pointer;
-    /* タッチ時の青ハイライトを消去 */
     -webkit-tap-highlight-color: transparent;
     tap-highlight-color: transparent;
-    /* 長押し時のコンテキストメニューを無効化 */
     -webkit-touch-callout: none;
     user-select: none;
   }

@@ -4,13 +4,12 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
 
-// 人気タグは将来アピーから取得する想定。今はハードコード。
-const POPULAR_TAGS = [
-  "素人", "美少女", "OL", "創作", "ハード", "女優情報",
-  "中出し", "プロ作品", "VR", "ランキング上位",
-];
+type Props = {
+  /** サーバーコンポーネントから事前取得したタグ一覧 */
+  popularTags: string[];
+};
 
-export default function Header() {
+export default function Header({ popularTags }: Props) {
   const router = useRouter();
   const inputRef    = useRef<HTMLInputElement>(null);
   const dropdownRef = useRef<HTMLDivElement>(null);
@@ -19,32 +18,22 @@ export default function Header() {
   const [open, setOpen]   = useState(false);
   const [query, setQuery] = useState("");
 
-  // プルダウン外クリックで閉じる
+  // プルダウン外クリック / タッチで閉じる
   useEffect(() => {
     if (!open) return;
-    const handler = (e: MouseEvent) => {
+    const close = (e: MouseEvent | TouchEvent) => {
       if (
         dropdownRef.current?.contains(e.target as Node) ||
         btnRef.current?.contains(e.target as Node)
       ) return;
       setOpen(false);
     };
-    document.addEventListener("mousedown", handler);
-    return () => document.removeEventListener("mousedown", handler);
-  }, [open]);
-
-  // プルダウン外タッチで閉じる（スマホ）
-  useEffect(() => {
-    if (!open) return;
-    const handler = (e: TouchEvent) => {
-      if (
-        dropdownRef.current?.contains(e.target as Node) ||
-        btnRef.current?.contains(e.target as Node)
-      ) return;
-      setOpen(false);
+    document.addEventListener("mousedown", close);
+    document.addEventListener("touchstart", close);
+    return () => {
+      document.removeEventListener("mousedown", close);
+      document.removeEventListener("touchstart", close);
     };
-    document.addEventListener("touchstart", handler);
-    return () => document.removeEventListener("touchstart", handler);
   }, [open]);
 
   const toggleOpen = useCallback(() => {
@@ -65,29 +54,12 @@ export default function Header() {
     [router]
   );
 
-  const handleFormSubmit = useCallback(
-    (e: React.FormEvent) => {
-      e.preventDefault();
-      submit(query);
-    },
-    [query, submit]
-  );
-
-  const handleTag = useCallback(
-    (tag: string) => {
-      submit(tag);
-    },
-    [submit]
-  );
-
   return (
     <header className="site-header">
-      {/* ロゴ */}
       <Link href="/" className="header-logo" aria-label="トップへ戻る">
         <span className="header-logo-text">ShortVid</span>
       </Link>
 
-      {/* 右側 */}
       <div className="header-actions">
         <button
           ref={btnRef}
@@ -99,18 +71,14 @@ export default function Header() {
           type="button"
         >
           {open ? (
-            /* 閉じる： × */
             <svg width="22" height="22" viewBox="0 0 24 24" fill="none"
-              stroke="currentColor" strokeWidth="2.2"
-              strokeLinecap="round" aria-hidden="true">
+              stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" aria-hidden="true">
               <line x1="4" y1="4" x2="20" y2="20" />
               <line x1="20" y1="4" x2="4" y2="20" />
             </svg>
           ) : (
-            /* 開く：検索 */
             <svg width="22" height="22" viewBox="0 0 24 24" fill="none"
-              stroke="currentColor" strokeWidth="2"
-              strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+              stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
               <circle cx="11" cy="11" r="7" />
               <line x1="16.5" y1="16.5" x2="22" y2="22" />
             </svg>
@@ -126,7 +94,11 @@ export default function Header() {
         aria-hidden={!open}
       >
         {/* フリーワード検索 */}
-        <form onSubmit={handleFormSubmit} role="search" className="search-form">
+        <form
+          onSubmit={(e) => { e.preventDefault(); submit(query); }}
+          role="search"
+          className="search-form"
+        >
           <div className="search-input-wrap">
             <svg className="search-input-icon" width="18" height="18" viewBox="0 0 24 24"
               fill="none" stroke="currentColor" strokeWidth="2"
@@ -165,21 +137,23 @@ export default function Header() {
         </form>
 
         {/* 人気タグ */}
-        <div className="search-tags-section">
-          <p className="search-tags-label">人気タグ</p>
-          <div className="search-tags">
-            {POPULAR_TAGS.map((tag) => (
-              <button
-                key={tag}
-                type="button"
-                className="search-tag-btn"
-                onClick={() => handleTag(tag)}
-              >
-                #{tag}
-              </button>
-            ))}
+        {popularTags.length > 0 && (
+          <div className="search-tags-section">
+            <p className="search-tags-label">人気タグ</p>
+            <div className="search-tags">
+              {popularTags.map((tag) => (
+                <button
+                  key={tag}
+                  type="button"
+                  className="search-tag-btn"
+                  onClick={() => submit(tag)}
+                >
+                  #{tag}
+                </button>
+              ))}
+            </div>
           </div>
-        </div>
+        )}
       </div>
     </header>
   );

@@ -6,6 +6,7 @@ class MovieCard(BaseModel):
     title: str
     slug: str
     thumbnail_url: str
+    sample_video_url: str | None = None
     sample_embed_url: str
     actresses: list[str]
     genres: list[str]
@@ -18,6 +19,7 @@ class MovieDetail(BaseModel):
     slug: str
     description: str
     thumbnail_url: str
+    sample_video_url: str | None = None
     sample_embed_url: str
     actresses: list[str]
     genres: list[str]

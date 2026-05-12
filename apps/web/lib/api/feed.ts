@@ -3,6 +3,7 @@ export type MovieCard = {
   title: string;
   slug: string;
   thumbnail_url: string;
+  sample_video_url?: string | null;
   sample_embed_url: string;
   actresses: string[];
   genres: string[];

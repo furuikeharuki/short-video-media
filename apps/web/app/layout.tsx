@@ -1,18 +1,23 @@
 import type { Metadata } from "next";
+import "./globals.css";
+import Header from "@/components/Header";
 
 export const metadata: Metadata = {
-  title: "Short Video Media",
-  description: "Short video style media frontend",
+  title: "ShortVid",
+  description: "ショート動画メディア",
 };
 
 export default function RootLayout({
   children,
-}: Readonly<{
+}: {
   children: React.ReactNode;
-}>) {
+}) {
   return (
     <html lang="ja">
-      <body>{children}</body>
+      <body>
+        <Header />
+        <main className="main-content">{children}</main>
+      </body>
     </html>
   );
 }

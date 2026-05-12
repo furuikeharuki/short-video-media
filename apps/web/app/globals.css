@@ -1,0 +1,181 @@
+/* ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+   globals.css — ベースリセット＋ヘッダー
+   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ */
+
+*, *::before, *::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+html, body {
+  height: 100%;
+  background: #000;
+  color: #fff;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  -webkit-font-smoothing: antialiased;
+  overscroll-behavior: none;
+}
+
+/* ━━━ ヘッダー ━━━━━━━━━━━━━━━━━━━━━━━━━━━━ */
+
+:root {
+  --header-h: 52px;
+  --header-bg: rgba(0, 0, 0, 0.72);
+  --header-blur: blur(12px);
+  --accent: #E8003D;
+}
+
+.site-header {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 100;
+  height: var(--header-h);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 14px;
+  background: var(--header-bg);
+  backdrop-filter: var(--header-blur);
+  -webkit-backdrop-filter: var(--header-blur);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  /* GPU レイヤー化でスクロール追従を軽量に */
+  will-change: transform;
+  transform: translateZ(0);
+}
+
+/* ── ロゴ ── */
+.header-logo {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  text-decoration: none;
+  color: #fff;
+  flex-shrink: 0;
+  /* タッチターゲット確保 */
+  min-height: 44px;
+}
+
+.header-logo-text {
+  font-size: 17px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  line-height: 1;
+}
+
+/* ── 右側エリア ── */
+.header-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+/* ── 検索フォーム（折りたたみ） ── */
+.header-search-form {
+  display: flex;
+  align-items: center;
+  overflow: hidden;
+  width: 0;
+  opacity: 0;
+  transition:
+    width 200ms cubic-bezier(0.16, 1, 0.3, 1),
+    opacity 150ms ease;
+  pointer-events: none;
+}
+
+.header-search-form.is-open {
+  width: min(220px, 55vw);
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.header-search-input {
+  width: 100%;
+  height: 34px;
+  background: rgba(255, 255, 255, 0.12);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 999px;
+  padding: 0 14px;
+  font-size: 14px;
+  color: #fff;
+  outline: none;
+  caret-color: var(--accent);
+  /* iOS フォントズーム防止 */
+  font-size: max(16px, 14px);
+}
+
+.header-search-input::placeholder {
+  color: rgba(255, 255, 255, 0.45);
+}
+
+.header-search-input:focus {
+  border-color: var(--accent);
+  background: rgba(255, 255, 255, 0.16);
+}
+
+/* 検索フォームのネイティブUIリセット */
+.header-search-input::-webkit-search-cancel-button,
+.header-search-input::-webkit-search-decoration {
+  -webkit-appearance: none;
+}
+
+/* ── アイコンボタン共通 ── */
+.header-icon-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 44px;
+  height: 44px;
+  border-radius: 50%;
+  background: none;
+  border: none;
+  color: #fff;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+  transition: background 150ms ease;
+  flex-shrink: 0;
+}
+
+.header-icon-btn:active {
+  background: rgba(255, 255, 255, 0.12);
+}
+
+/* ── メインコンテンツ（ヘッダー分押し下げ） ── */
+.main-content {
+  padding-top: var(--header-h);
+}
+
+/* ━━━ フィードページのリセット ━━━━━━━━━━━━━━━━
+   ヘッダー込みで 100dvh にするため
+   page.tsx の feed-container は height 調整済み想定
+   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ */
+
+.feed-container {
+  height: calc(100dvh - var(--header-h));
+  overflow-y: scroll;
+  scroll-snap-type: y mandatory;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior-y: contain;
+}
+
+/* ━━━ ユーティリティ ━━━━━━━━━━━━━━━━━━━━━━━━━━ */
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0,0,0,0);
+  white-space: nowrap;
+  border-width: 0;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .header-search-form {
+    transition: none;
+  }
+}

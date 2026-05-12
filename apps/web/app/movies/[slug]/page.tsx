@@ -88,6 +88,8 @@ const styles: Record<string, React.CSSProperties> = {
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'center',
+    // ナビバーに隠れないよう上部にセーフエリア + 固定オフセットを確保
+    paddingTop: 'calc(env(safe-area-inset-top, 0px) + 56px)' as unknown as string,
   },
   heroBgBlur: {
     position: 'absolute',

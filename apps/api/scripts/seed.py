@@ -8,6 +8,7 @@ import asyncio
 import json
 from pathlib import Path
 
+from sqlalchemy import delete
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from app.core.config import settings
@@ -19,6 +20,15 @@ MOCK_PATH = Path(__file__).parent.parent / "app" / "mock_data" / "movies.json"
 
 
 async def seed(session: AsyncSession) -> None:
+    # 既存データを全削除（中間テーブルから先に削除）
+    await session.execute(delete(MovieGenre))
+    await session.execute(delete(MoviePerformer))
+    await session.execute(delete(Movie))
+    await session.execute(delete(Genre))
+    await session.execute(delete(Performer))
+    await session.commit()
+    print("🗑️  既存データを削除しました")
+
     with MOCK_PATH.open(encoding="utf-8") as f:
         movies_data: list[dict] = json.load(f)
 
@@ -34,6 +44,7 @@ async def seed(session: AsyncSession) -> None:
             slug=data["slug"],
             description=data.get("description", ""),
             thumbnail_url=data.get("thumbnail_url", ""),
+            sample_video_url=data.get("sample_video_url"),
             sample_embed_url=data.get("sample_embed_url", ""),
             affiliate_url=data.get("affiliate_url", ""),
         )
@@ -60,7 +71,7 @@ async def seed(session: AsyncSession) -> None:
             session.add(MoviePerformer(movie_id=movie.id, performer_id=performer.id))
 
     await session.commit()
-    print(f"✅ {len(movies_data)}件のメッセージをシードしました")
+    print(f"✅ {len(movies_data)}件のデータをシードしました")
 
 
 async def main() -> None:

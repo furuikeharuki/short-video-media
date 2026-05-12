@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState, useCallback } from "react";
+import { useEffect, useRef, useCallback } from "react";
 import Link from "next/link";
 import type { MovieCard } from "@/lib/api/feed";
 
@@ -17,103 +17,132 @@ const SKIP_SEC = 5;
 const DBL_TAP_MS = 300;
 const LONG_PRESS_MS = 500;
 const TAP_MOVE_THRESHOLD = 10;
-// スナップ完了直前（85%見えたら）に再生開始 → 待ち時間ゼロに近づける
 const PLAY_THRESHOLD = 0.85;
-// 少しでも見え始めたら即プリロード開始
 const PRELOAD_THRESHOLD = 0.01;
 
 const isLandscapeScreen = () => window.innerWidth > window.innerHeight;
 
-type Ripple = { id: number; x: number; y: number; dir: "left" | "right" };
-type Overlay = "pause" | "play" | null;
-
 let globalUserGestured = false;
 
 export default function FeedItem({ item, isFirst, isSecond = false }: Props) {
-  const videoRef = useRef<HTMLVideoElement>(null);
-  const ctaRef = useRef<HTMLDivElement>(null);
-  const sectionRef = useRef<HTMLElement>(null);
-  const containerRef = useRef<HTMLDivElement>(null);
-  const preloadStartedRef = useRef(false);
+  const videoRef       = useRef<HTMLVideoElement>(null);
+  const ctaRef         = useRef<HTMLDivElement>(null);
+  const sectionRef     = useRef<HTMLElement>(null);
+  const containerRef   = useRef<HTMLDivElement>(null);
+  const shimmerRef     = useRef<HTMLDivElement>(null);
+  const pauseBadgeRef  = useRef<HTMLDivElement>(null);
+  const fastBadgeRef   = useRef<HTMLDivElement>(null);
+  const muteBadgeRef   = useRef<HTMLDivElement>(null);
+  const overlayRef     = useRef<HTMLDivElement>(null);
 
-  const tapTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const tapCountRef = useRef(0);
-  const tapStartPosRef = useRef<{ x: number; y: number }>({ x: 0, y: 0 });
+  const preloadStartedRef        = useRef(false);
+  const objectFitRef             = useRef<"cover" | "contain">("cover");
+  const isPlayingRef             = useRef(false);
+  const isMutedRef               = useRef(true);
 
-  const longPressTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const isLongPressRef = useRef(false);
+  const tapTimerRef              = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const tapCountRef              = useRef(0);
+  const tapStartPosRef           = useRef<{ x: number; y: number }>({ x: 0, y: 0 });
+  const longPressTimerRef        = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const isLongPressRef           = useRef(false);
   const wasLongPressJustEndedRef = useRef(false);
+  const isTouchDeviceRef         = useRef(false);
+  const lastTouchEndRef          = useRef(0);
+  const pcClickCountRef          = useRef(0);
+  const pcClickTimerRef          = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  const isTouchDeviceRef = useRef(false);
-  const lastTouchEndRef = useRef(0);
+  // ── DOM直接操作ヘルパー ─────────────────────────────
 
-  const [videoReady, setVideoReady] = useState(false);
-  const [isPlaying, setIsPlaying] = useState(false);
-  const [isMuted, setIsMuted] = useState(true);
-  const [isFast, setIsFast] = useState(false);
-  const [objectFit, setObjectFit] = useState<"cover" | "contain">("cover");
-  const [ripples, setRipples] = useState<Ripple[]>([]);
-  const [overlay, setOverlay] = useState<Overlay>(null);
-
-  const [videoStyle, setVideoStyle] = useState<React.CSSProperties>({
-    position: "absolute",
-    inset: 0,
-    width: "100%",
-    height: "100%",
-    objectFit: "cover",
-    objectPosition: "center center",
-    opacity: 0,
-    transition: "opacity 0.3s ease",
-  });
-
-  const showOverlay = useCallback((type: Overlay) => {
-    setOverlay(type);
-    setTimeout(() => setOverlay(null), 700);
+  /** shimmer 表示/非表示 — React再レンダリングなし */
+  const setVideoReady = useCallback((ready: boolean) => {
+    const video   = videoRef.current;
+    const shimmer = shimmerRef.current;
+    if (video)   video.style.opacity   = ready ? "1" : "0";
+    if (shimmer) shimmer.style.display = ready ? "none" : "block";
   }, []);
 
-  const calcVideoArea = useCallback((fit: "cover" | "contain" = objectFit) => {
-    const cta = ctaRef.current;
+  /** 一時オーバーレイ（再生/一時停止アイコン） */
+  const showOverlay = useCallback((type: "play" | "pause") => {
+    const el = overlayRef.current;
+    if (!el) return;
+    el.dataset.type = type;
+    el.style.display = "flex";
+    el.style.animation = "none";
+    // reflow で animation をリセット
+    void el.offsetHeight;
+    el.style.animation = "";
+    setTimeout(() => { if (overlayRef.current) overlayRef.current.style.display = "none"; }, 700);
+  }, []);
+
+  /** 一時停止バッジ */
+  const setPauseBadge = useCallback((visible: boolean) => {
+    const el = pauseBadgeRef.current;
+    if (el) el.style.display = visible ? "flex" : "none";
+  }, []);
+
+  /** 2×バッジ */
+  const setFastBadge = useCallback((visible: boolean) => {
+    const el = fastBadgeRef.current;
+    if (el) el.style.display = visible ? "block" : "none";
+  }, []);
+
+  /** ミュートバッジ */
+  const setMuteBadge = useCallback((visible: boolean) => {
+    const el = muteBadgeRef.current;
+    if (el) el.style.display = visible ? "flex" : "none";
+  }, []);
+
+  // ── 動画エリア計算（DOM直接操作） ───────────────────
+
+  const calcVideoArea = useCallback((fit?: "cover" | "contain") => {
+    const resolvedFit = fit ?? objectFitRef.current;
+    const cta     = ctaRef.current;
     const section = sectionRef.current;
-    if (!cta || !section) return;
+    const video   = videoRef.current;
+    if (!cta || !section || !video) return;
+
     const sectionRect = section.getBoundingClientRect();
-    const ctaRect = cta.getBoundingClientRect();
+    const ctaRect     = cta.getBoundingClientRect();
     if (ctaRect.top === 0 && ctaRect.height === 0) {
-      requestAnimationFrame(() => calcVideoArea(fit));
+      requestAnimationFrame(() => calcVideoArea(resolvedFit));
       return;
     }
     const ctaTopInSection = ctaRect.top - sectionRect.top;
-    const top = V_PADDING_TOP;
-    const height = ctaTopInSection - top - V_PADDING_BOTTOM;
-    const width = section.offsetWidth - H_PADDING * 2;
-    setVideoStyle({
-      position: "absolute",
-      top: `${top}px`,
-      left: `${H_PADDING}px`,
-      width: `${width}px`,
-      height: `${Math.max(height, 0)}px`,
-      objectFit: fit,
-      objectPosition: "center center",
-      borderRadius: "8px",
-      opacity: videoReady ? 1 : 0,
-      transition: "opacity 0.3s ease",
-    });
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [objectFit]);
+    const top    = V_PADDING_TOP;
+    const height = Math.max(ctaTopInSection - top - V_PADDING_BOTTOM, 0);
+    const width  = section.offsetWidth - H_PADDING * 2;
+
+    video.style.position      = "absolute";
+    video.style.top           = `${top}px`;
+    video.style.left          = `${H_PADDING}px`;
+    video.style.width         = `${width}px`;
+    video.style.height        = `${height}px`;
+    video.style.objectFit     = resolvedFit;
+    video.style.objectPosition = "center center";
+    video.style.borderRadius  = "8px";
+    // opacity は setVideoReady が管理するので触らない
+  }, []);
+
+  // ── 初期スタイル（SSR対応） ──────────────────────────
 
   useEffect(() => {
-    setVideoStyle((prev) => ({ ...prev, opacity: videoReady ? 1 : 0 }));
-  }, [videoReady]);
+    const video = videoRef.current;
+    if (!video) return;
+    // opacity: 0 はインラインで初期設定済み。calcVideoArea で位置確定。
+    calcVideoArea();
+  }, [calcVideoArea]);
 
-  useEffect(() => { calcVideoArea(objectFit); }, [objectFit, calcVideoArea]);
+  // ── ResizeObserver で CTA 高さ変化に追従 ─────────────
 
   useEffect(() => {
     const cta = ctaRef.current;
     if (!cta) return;
     const ro = new ResizeObserver(() => calcVideoArea());
     ro.observe(cta);
-    calcVideoArea();
     return () => ro.disconnect();
   }, [calcVideoArea]);
+
+  // ── ハッシュによる初期スクロール ─────────────────────
 
   useEffect(() => {
     const hash = window.location.hash.slice(1);
@@ -127,69 +156,85 @@ export default function FeedItem({ item, isFirst, isSecond = false }: Props) {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const handleMetadata = () => {
-    const video = videoRef.current;
+  // ── メタデータ取得後に object-fit 決定 ───────────────
+
+  const handleMetadata = useCallback(() => {
+    const video   = videoRef.current;
     const section = sectionRef.current;
     if (!video || !section) return;
+    let fit: "cover" | "contain";
     if (isLandscapeScreen()) {
-      setObjectFit("contain"); calcVideoArea("contain"); return;
+      fit = "contain";
+    } else {
+      const videoAspect  = video.videoWidth / video.videoHeight;
+      const screenAspect = section.offsetWidth / section.offsetHeight;
+      fit = videoAspect <= screenAspect ? "cover" : "contain";
     }
-    const videoAspect = video.videoWidth / video.videoHeight;
-    const screenAspect = section.offsetWidth / section.offsetHeight;
-    const fit = videoAspect <= screenAspect ? "cover" : "contain";
-    setObjectFit(fit); calcVideoArea(fit);
-  };
+    objectFitRef.current = fit;
+    calcVideoArea(fit);
+  }, [calcVideoArea]);
+
+  // ── 再生 ─────────────────────────────────────────────
 
   const playVideo = useCallback(async (video: HTMLVideoElement, withGesture = false) => {
     if (withGesture) globalUserGestured = true;
     if (globalUserGestured) {
       video.muted = false;
-      setIsMuted(false);
-      try { await video.play(); setIsPlaying(true); return; } catch { /* fall through */ }
+      isMutedRef.current = false;
+      setMuteBadge(false);
+      try {
+        await video.play();
+        isPlayingRef.current = true;
+        setPauseBadge(false);
+        return;
+      } catch { /* fall through to muted */ }
     }
     video.muted = true;
-    setIsMuted(true);
-    try { await video.play(); setIsPlaying(true); } catch { /* ignore */ }
-  }, []);
+    isMutedRef.current = true;
+    try {
+      await video.play();
+      isPlayingRef.current = true;
+      setPauseBadge(false);
+      setMuteBadge(true);
+    } catch { /* ignore */ }
+  }, [setMuteBadge, setPauseBadge]);
+
+  // ── IntersectionObserver（プリロード + 再生/停止） ────
 
   useEffect(() => {
     const video = videoRef.current;
     if (!video) return;
 
-    // 少しでも見えたら即プリロード（PRELOAD_THRESHOLD=0.01）
-    const preloadObserver = new IntersectionObserver(
-      ([entry]) => {
-        if (entry.isIntersecting && !preloadStartedRef.current) {
-          preloadStartedRef.current = true;
-          if (video.preload === "none") { video.preload = "auto"; video.load(); }
-        }
-      },
-      { threshold: PRELOAD_THRESHOLD }
-    );
+    const preloadObserver = new IntersectionObserver(([entry]) => {
+      if (entry.isIntersecting && !preloadStartedRef.current) {
+        preloadStartedRef.current = true;
+        if (video.preload === "none") { video.preload = "auto"; video.load(); }
+      }
+    }, { threshold: PRELOAD_THRESHOLD });
 
-    // 85%見えたら再生開始（スナップ完了直前）
-    const playObserver = new IntersectionObserver(
-      ([entry]) => {
-        if (entry.isIntersecting) {
-          playVideo(video, false);
-        } else {
-          video.pause();
-          video.currentTime = 0;
-          video.playbackRate = 1;
-          video.muted = true;
-          // preloadはリセットしない → 戻ったときに即再生できる
-          setIsPlaying(false);
-          setIsFast(false);
-          setIsMuted(true);
-          setVideoReady(false);
-        }
-      },
-      { threshold: PLAY_THRESHOLD }
-    );
+    const playObserver = new IntersectionObserver(([entry]) => {
+      if (entry.isIntersecting) {
+        playVideo(video, false);
+      } else {
+        video.pause();
+        video.currentTime = 0;
+        video.playbackRate = 1;
+        video.muted = true;
+        isPlayingRef.current = false;
+        isMutedRef.current   = true;
+        setVideoReady(false);
+        setPauseBadge(false);
+        setFastBadge(false);
+        setMuteBadge(false);
+      }
+    }, { threshold: PLAY_THRESHOLD });
+
     preloadObserver.observe(video);
     playObserver.observe(video);
     return () => { preloadObserver.disconnect(); playObserver.disconnect(); };
-  }, [playVideo, isFirst, isSecond]);
+  }, [playVideo, setVideoReady, setPauseBadge, setFastBadge, setMuteBadge, isFirst, isSecond]);
+
+  // ── contextmenu 抑制 ─────────────────────────────────
 
   useEffect(() => {
     const el = containerRef.current;
@@ -199,28 +244,42 @@ export default function FeedItem({ item, isFirst, isSecond = false }: Props) {
     return () => el.removeEventListener("contextmenu", prevent);
   }, []);
 
+  // ── インタラクション ──────────────────────────────────
+
   const handleDetailClick = () => { history.replaceState(null, "", `#${item.slug}`); };
 
   const fireSkip = useCallback((clientX: number, clientY: number) => {
-    const video = videoRef.current;
+    const video   = videoRef.current;
     const section = sectionRef.current;
     if (!video || !section) return;
-    const rect = section.getBoundingClientRect();
+    const rect  = section.getBoundingClientRect();
     const isLeft = clientX - rect.left < rect.width / 2;
-    const dir = isLeft ? "left" : "right";
-    if (isLeft) { video.currentTime = Math.max(0, video.currentTime - SKIP_SEC); }
-    else { video.currentTime = Math.min(video.duration || Infinity, video.currentTime + SKIP_SEC); }
-    const id = Date.now();
-    setRipples((prev) => [...prev, { id, x: clientX - rect.left, y: clientY - rect.top, dir }]);
-    setTimeout(() => setRipples((prev) => prev.filter((r) => r.id !== id)), 700);
+    if (isLeft) video.currentTime = Math.max(0, video.currentTime - SKIP_SEC);
+    else        video.currentTime = Math.min(video.duration || Infinity, video.currentTime + SKIP_SEC);
+
+    // リップルは軽量なので DOM を直接生成して自動削除
+    const ripple = document.createElement("div");
+    ripple.className = "skip-ripple";
+    ripple.style.left = `${clientX - rect.left}px`;
+    ripple.style.top  = `${clientY - rect.top}px`;
+    ripple.innerHTML  = `<span class="skip-icon">${isLeft ? "« -5s" : "+5s »"}</span>`;
+    containerRef.current?.appendChild(ripple);
+    setTimeout(() => ripple.remove(), 700);
   }, []);
 
   const fireTogglePlay = useCallback(async () => {
     const video = videoRef.current;
     if (!video) return;
-    if (video.paused) { await playVideo(video, true); showOverlay("play"); }
-    else { video.pause(); setIsPlaying(false); showOverlay("pause"); }
-  }, [playVideo, showOverlay]);
+    if (video.paused) {
+      await playVideo(video, true);
+      showOverlay("play");
+    } else {
+      video.pause();
+      isPlayingRef.current = false;
+      setPauseBadge(true);
+      showOverlay("pause");
+    }
+  }, [playVideo, showOverlay, setPauseBadge]);
 
   const handleUnmute = useCallback((e: React.MouseEvent | React.TouchEvent) => {
     e.stopPropagation();
@@ -229,9 +288,10 @@ export default function FeedItem({ item, isFirst, isSecond = false }: Props) {
     if (!video) return;
     globalUserGestured = true;
     video.muted = false;
-    setIsMuted(false);
-    if (video.paused) { video.play().catch(() => {}); setIsPlaying(true); }
-  }, []);
+    isMutedRef.current = false;
+    setMuteBadge(false);
+    if (video.paused) { video.play().catch(() => {}); isPlayingRef.current = true; setPauseBadge(false); }
+  }, [setMuteBadge, setPauseBadge]);
 
   const startLongPress = useCallback(() => {
     isLongPressRef.current = false;
@@ -240,17 +300,17 @@ export default function FeedItem({ item, isFirst, isSecond = false }: Props) {
       if (!video) return;
       isLongPressRef.current = true;
       video.playbackRate = 2;
-      setIsFast(true);
+      setFastBadge(true);
     }, LONG_PRESS_MS);
-  }, []);
+  }, [setFastBadge]);
 
   const endLongPress = useCallback((): boolean => {
     if (longPressTimerRef.current) clearTimeout(longPressTimerRef.current);
-    const video = videoRef.current;
+    const video   = videoRef.current;
     const wasLong = isLongPressRef.current;
-    if (wasLong && video) { video.playbackRate = 1; setIsFast(false); isLongPressRef.current = false; }
+    if (wasLong && video) { video.playbackRate = 1; setFastBadge(false); isLongPressRef.current = false; }
     return wasLong;
-  }, []);
+  }, [setFastBadge]);
 
   const handleTouchStart = useCallback((e: React.TouchEvent) => {
     if (!videoRef.current) return;
@@ -264,7 +324,6 @@ export default function FeedItem({ item, isFirst, isSecond = false }: Props) {
     if (!videoRef.current) return;
     const wasLong = endLongPress();
     if (wasLong) return;
-
     const touch = e.changedTouches[0];
     const { clientX, clientY } = touch;
     const dx = Math.abs(clientX - tapStartPosRef.current.x);
@@ -311,9 +370,6 @@ export default function FeedItem({ item, isFirst, isSecond = false }: Props) {
     if (wasLong) wasLongPressJustEndedRef.current = true;
   }, [endLongPress]);
 
-  const pcClickCountRef = useRef(0);
-  const pcClickTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-
   const handlePcClick = useCallback((e: React.MouseEvent) => {
     if (isTouchDeviceRef.current) return;
     if (Date.now() - lastTouchEndRef.current < 500) return;
@@ -347,11 +403,12 @@ export default function FeedItem({ item, isFirst, isSecond = false }: Props) {
           onMouseLeave={handleMouseLeaveWithFlag}
           onClick={handlePcClick}
         >
-          {!videoReady && (
-            <div className="shimmer" aria-hidden="true">
-              <div className="shimmer-inner" />
-            </div>
-          )}
+          {/* shimmer — DOM直接表示切替 */}
+          <div ref={shimmerRef} className="shimmer" aria-hidden="true">
+            <div className="shimmer-inner" />
+          </div>
+
+          {/* 動画本体 — スタイルは ref.style で直接管理 */}
           <video
             ref={videoRef}
             src={item.sample_video_url}
@@ -362,66 +419,65 @@ export default function FeedItem({ item, isFirst, isSecond = false }: Props) {
             onLoadedMetadata={handleMetadata}
             onLoadedData={() => setVideoReady(true)}
             onCanPlay={() => setVideoReady(true)}
-            style={videoStyle}
+            style={{
+              position: "absolute",
+              opacity: 0,
+              transition: "opacity 0.3s ease",
+              // 初期サイズは calcVideoArea が上書き
+              inset: 0, width: "100%", height: "100%",
+              objectFit: "cover", objectPosition: "center center",
+            }}
           />
 
-          {overlay && (
-            <div className="action-overlay" aria-hidden="true">
-              <span className="action-icon">
-                {overlay === "pause" && (
-                  <svg width="48" height="48" viewBox="0 0 48 48" fill="none">
-                    <rect x="12" y="8" width="10" height="32" rx="2" fill="white"/>
-                    <rect x="26" y="8" width="10" height="32" rx="2" fill="white"/>
-                  </svg>
-                )}
-                {overlay === "play" && (
-                  <svg width="48" height="48" viewBox="0 0 48 48" fill="none">
-                    <path d="M14 8L40 24L14 40V8Z" fill="white"/>
-                  </svg>
-                )}
-              </span>
-            </div>
-          )}
-
-          {videoReady && !isPlaying && (
-            <div className="pause-badge" aria-hidden="true">
-              <svg width="40" height="40" viewBox="0 0 48 48" fill="none">
+          {/* 一時オーバーレイ — 常にDOMに存在、display切替 */}
+          <div
+            ref={overlayRef}
+            className="action-overlay"
+            aria-hidden="true"
+            style={{ display: "none" }}
+          >
+            <span className="action-icon action-icon--pause" style={{ display: "none" }}>
+              <svg width="48" height="48" viewBox="0 0 48 48" fill="none">
                 <rect x="12" y="8" width="10" height="32" rx="2" fill="white"/>
                 <rect x="26" y="8" width="10" height="32" rx="2" fill="white"/>
               </svg>
-            </div>
-          )}
-
-          {isFast && <div className="fast-badge" aria-hidden="true">2×</div>}
-
-          {isMuted && isPlaying && (
-            <div
-              className="mute-badge"
-              aria-label="タップしてミュート解除"
-              role="button"
-              onTouchStart={(e) => e.stopPropagation()}
-              onTouchEnd={handleUnmute}
-              onClick={handleUnmute}
-            >
-              <svg width="26" height="26" viewBox="0 0 24 24" fill="none">
-                <path d="M11 5L6 9H2v6h4l5 4V5z" fill="white"/>
-                <line x1="23" y1="9" x2="17" y2="15" stroke="white" strokeWidth="2.2" strokeLinecap="round"/>
-                <line x1="17" y1="9" x2="23" y2="15" stroke="white" strokeWidth="2.2" strokeLinecap="round"/>
+            </span>
+            <span className="action-icon action-icon--play" style={{ display: "none" }}>
+              <svg width="48" height="48" viewBox="0 0 48 48" fill="none">
+                <path d="M14 8L40 24L14 40V8Z" fill="white"/>
               </svg>
-              <span className="mute-label">タップで音声ON</span>
-            </div>
-          )}
+            </span>
+          </div>
 
-          {ripples.map((r) => (
-            <div
-              key={r.id}
-              className="skip-ripple"
-              style={{ left: r.x, top: r.y }}
-              aria-hidden="true"
-            >
-              <span className="skip-icon">{r.dir === "left" ? "« -5s" : "+5s »"}</span>
-            </div>
-          ))}
+          {/* 一時停止バッジ */}
+          <div ref={pauseBadgeRef} className="pause-badge" aria-hidden="true" style={{ display: "none" }}>
+            <svg width="40" height="40" viewBox="0 0 48 48" fill="none">
+              <rect x="12" y="8" width="10" height="32" rx="2" fill="white"/>
+              <rect x="26" y="8" width="10" height="32" rx="2" fill="white"/>
+            </svg>
+          </div>
+
+          {/* 2×バッジ */}
+          <div ref={fastBadgeRef} className="fast-badge" aria-hidden="true" style={{ display: "none" }}>2×</div>
+
+          {/* ミュートバッジ */}
+          <div
+            ref={muteBadgeRef}
+            className="mute-badge"
+            aria-label="タップしてミュート解除"
+            role="button"
+            style={{ display: "none" }}
+            onTouchStart={(e) => e.stopPropagation()}
+            onTouchEnd={handleUnmute}
+            onClick={handleUnmute}
+          >
+            <svg width="26" height="26" viewBox="0 0 24 24" fill="none">
+              <path d="M11 5L6 9H2v6h4l5 4V5z" fill="white"/>
+              <line x1="23" y1="9" x2="17" y2="15" stroke="white" strokeWidth="2.2" strokeLinecap="round"/>
+              <line x1="17" y1="9" x2="23" y2="15" stroke="white" strokeWidth="2.2" strokeLinecap="round"/>
+            </svg>
+            <span className="mute-label">タップで音声ON</span>
+          </div>
         </div>
       ) : (
         <div className="thumbnail-bg">
@@ -507,7 +563,6 @@ const itemStyle = `
   .action-overlay {
     position: absolute;
     inset: 0;
-    display: flex;
     align-items: center;
     justify-content: center;
     z-index: 25;
@@ -515,11 +570,13 @@ const itemStyle = `
     animation: overlay-pop 0.65s ease-out forwards;
   }
   .action-icon {
-    display: flex;
     align-items: center;
     justify-content: center;
     filter: drop-shadow(0 2px 8px rgba(0,0,0,0.7));
   }
+  /* data-type に応じてどちらのアイコンを出すか制御 */
+  .action-overlay[data-type="pause"] .action-icon--pause { display: flex !important; }
+  .action-overlay[data-type="play"]  .action-icon--play  { display: flex !important; }
   @keyframes overlay-pop {
     0%   { opacity: 1; transform: scale(0.7); }
     30%  { opacity: 1; transform: scale(1.1); }
@@ -536,7 +593,6 @@ const itemStyle = `
     pointer-events: none;
     z-index: 20;
     filter: drop-shadow(0 2px 6px rgba(0,0,0,0.6));
-    display: flex;
     align-items: center;
     justify-content: center;
   }
@@ -568,7 +624,6 @@ const itemStyle = `
     padding: 8px 14px 8px 10px;
     z-index: 20;
     cursor: pointer;
-    display: flex;
     align-items: center;
     gap: 6px;
     backdrop-filter: blur(8px);

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useCallback } from "react";
+import { useEffect, useRef, useCallback, useState } from "react";
 import Link from "next/link";
 import type { MovieCard } from "@/lib/api/feed";
 
@@ -50,6 +50,18 @@ export default function FeedItem({ item, isFirst, isSecond = false }: Props) {
   const lastTouchEndRef          = useRef(0);
   const pcClickCountRef          = useRef(0);
   const pcClickTimerRef          = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // scroll-hint 表示制御
+  const [hintVisible, setHintVisible] = useState(isFirst);
+
+  useEffect(() => {
+    if (!isFirst) return;
+    const container = document.querySelector(".feed-container");
+    if (!container) return;
+    const hide = () => setHintVisible(false);
+    container.addEventListener("scroll", hide, { once: true, passive: true });
+    return () => container.removeEventListener("scroll", hide);
+  }, [isFirst]);
 
   // ── DOM直接操作ヘルパー ──
 
@@ -487,6 +499,13 @@ export default function FeedItem({ item, isFirst, isSecond = false }: Props) {
         </div>
       </div>
 
+      {isFirst && (
+        <div className={`scroll-hint${hintVisible ? "" : " scroll-hint--hidden"}`} aria-hidden="true">
+          <span className="scroll-hint-text">スクロール</span>
+          <span className="scroll-hint-arrow">↓</span>
+        </div>
+      )}
+
       <style>{itemStyle}</style>
     </section>
   );
@@ -611,6 +630,41 @@ const itemStyle = `
     text-shadow: 0 1px 3px rgba(0,0,0,0.6);
   }
 
+  /* scroll-hint: 画面中央に表示、スクロール後フェードアウト */
+  .scroll-hint {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 6px;
+    color: rgba(255, 255, 255, 0.75);
+    font-size: 13px;
+    font-weight: 600;
+    letter-spacing: 0.06em;
+    text-shadow: 0 1px 6px rgba(0,0,0,0.6);
+    pointer-events: none;
+    z-index: 30;
+    transition: opacity 0.5s ease;
+    animation: bounce 2s ease-in-out infinite;
+  }
+  .scroll-hint--hidden {
+    opacity: 0;
+    animation: none;
+  }
+  .scroll-hint-text {
+    font-size: 13px;
+  }
+  .scroll-hint-arrow {
+    font-size: 22px;
+  }
+  @keyframes bounce {
+    0%, 100% { transform: translate(-50%, -50%); }
+    50%       { transform: translate(-50%, calc(-50% + 8px)); }
+  }
+
   .skip-ripple {
     position: absolute;
     transform: translate(-50%, -50%);
@@ -642,6 +696,7 @@ const itemStyle = `
 
   @media (prefers-reduced-motion: reduce) {
     .shimmer-inner  { animation: none; }
+    .scroll-hint    { animation: none; }
     .skip-ripple    { animation: none; opacity: 0; }
     .action-overlay { animation: none; opacity: 0; }
   }

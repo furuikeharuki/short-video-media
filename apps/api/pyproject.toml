@@ -11,6 +11,10 @@ dependencies = [
   "pydantic-settings>=2.0.0",
 ]
 
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["app*"]
+
 [tool.pytest.ini_options]
 pythonpath = ["."]
 testpaths = ["tests"]

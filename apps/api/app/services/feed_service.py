@@ -14,6 +14,7 @@ async def get_feed(db: AsyncSession) -> FeedResponse:
             title=movie.title,
             slug=movie.slug,
             thumbnail_url=movie.thumbnail_url,
+            sample_video_url=movie.sample_video_url,
             sample_embed_url=movie.sample_embed_url,
             actresses=[p.name for p in movie.performers],
             genres=[g.name for g in movie.genres],

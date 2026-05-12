@@ -19,7 +19,7 @@ const TAP_MOVE_THRESHOLD = 10;
 const PLAY_THRESHOLD = 0.85;
 const PRELOAD_THRESHOLD = 0.01;
 
-// CSS変数 --header-h の実測値を取得（SSR時は52pxにフォールバック）
+// CSS変数 --header-h の実測値（SSR時は52pxフォールバック）
 const getHeaderH = () => {
   if (typeof window === "undefined") return 52;
   const raw = getComputedStyle(document.documentElement)
@@ -59,7 +59,7 @@ export default function FeedItem({ item, isFirst, isSecond = false }: Props) {
   const pcClickCountRef          = useRef(0);
   const pcClickTimerRef          = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  // ── DOM直接操作ヘルパー ────────────────────────────
+  // ── DOM直接操作ヘルパー ──
 
   const setVideoReady = useCallback((ready: boolean) => {
     const video   = videoRef.current;
@@ -94,17 +94,13 @@ export default function FeedItem({ item, isFirst, isSecond = false }: Props) {
     if (el) el.style.display = visible ? "flex" : "none";
   }, []);
 
-  // ── 動画エリア計算 ────────────────────────────────
+  // ── 動画エリア計算 ──
   //
-  // 【座標系】すべて viewport 座標（getBoundingClientRect）で統一する。
+  // 座標はすべて section 内相対で統一する。
   //
-  //  areaTop    = ヘッダー下端 = --header-h px
-  //  areaBottom = CTAボタン上端 - V_PADDING_BOTTOM
-  //  availableH = areaBottom - areaTop
-  //
-  //  動画の中心Y(viewport) = (areaTop + areaBottom) / 2
-  //  → section 内相対座標に変換:  centerY_in_section = 中心Y - sectionRect.top
-  //  → video の top_in_section  = centerY_in_section - videoH / 2
+  //  areaTop    = --header-h  (ヘッダーの高さ分 = sectionの上から見た動画エリアの上端)
+  //  areaBottom = cta.offsetTop - V_PADDING_BOTTOM  (ボタン上端まで)
+  //  中心 = (areaTop + areaBottom) / 2
 
   const calcVideoArea = useCallback((fit?: "cover" | "contain") => {
     const resolvedFit = fit ?? objectFitRef.current;
@@ -113,22 +109,19 @@ export default function FeedItem({ item, isFirst, isSecond = false }: Props) {
     const video   = videoRef.current;
     if (!cta || !section || !video) return;
 
-    const sectionRect = section.getBoundingClientRect();
-    const ctaRect     = cta.getBoundingClientRect();
-
-    // CTAがまだレイアウト前（高さ0）なら次フレームに遅延
-    if (ctaRect.top === 0 && ctaRect.height === 0) {
+    // cta.offsetTop は section 内の相対座標。まだ 0 なら次フレームに遅延。
+    if (cta.offsetTop === 0) {
       requestAnimationFrame(() => calcVideoArea(resolvedFit));
       return;
     }
 
-    const headerH   = getHeaderH();
-    const areaTop    = headerH;                              // viewport座標
-    const areaBottom = ctaRect.top - V_PADDING_BOTTOM;      // viewport座標
+    const headerH    = getHeaderH();                        // section内相対: ヘッダー下端
+    const areaTop    = headerH;
+    const areaBottom = cta.offsetTop - V_PADDING_BOTTOM;   // section内相対: CTA上端
     const availableH = Math.max(areaBottom - areaTop, 0);
     const availableW = section.offsetWidth - H_PADDING * 2;
 
-    // 動画の表示サイズをアスペクト比を保ちつつ利用可能エリアに収める
+    // 動画の表示サイズ（contain時はアスペクト比を決定）
     let videoW = availableW;
     let videoH = availableH;
     const nativeW = video.videoWidth;
@@ -145,11 +138,10 @@ export default function FeedItem({ item, isFirst, isSecond = false }: Props) {
       }
     }
 
-    // viewport座標での動画中心Y → section内相対座標に変換
-    const centerY_vp         = (areaTop + areaBottom) / 2;
-    const centerY_in_section = centerY_vp - sectionRect.top;
-    const topInSection        = Math.round(centerY_in_section - videoH / 2);
-    const leftInSection       = Math.round(H_PADDING + (availableW - videoW) / 2);
+    // section内座標で垂直中央に配置
+    const centerY      = (areaTop + areaBottom) / 2;
+    const topInSection  = Math.round(centerY - videoH / 2);
+    const leftInSection = Math.round(H_PADDING + (availableW - videoW) / 2);
 
     video.style.position       = "absolute";
     video.style.top            = `${topInSection}px`;
@@ -160,7 +152,7 @@ export default function FeedItem({ item, isFirst, isSecond = false }: Props) {
     video.style.objectPosition = "center center";
     video.style.borderRadius   = "8px";
 
-    // shimmerも同位置・同サイズに連動
+    // shimmerも同位置・同サイズ
     const shimmer = shimmerRef.current;
     if (shimmer) {
       shimmer.style.top    = `${topInSection}px`;
@@ -172,13 +164,13 @@ export default function FeedItem({ item, isFirst, isSecond = false }: Props) {
     }
   }, []);
 
-  // ── 初期化 ─────────────────────────────────────
+  // ── 初期化 ──
 
   useEffect(() => {
     calcVideoArea();
   }, [calcVideoArea]);
 
-  // ── ResizeObserver ───────────────────────────────
+  // ── ResizeObserver ──
 
   useEffect(() => {
     const cta = ctaRef.current;
@@ -188,7 +180,7 @@ export default function FeedItem({ item, isFirst, isSecond = false }: Props) {
     return () => ro.disconnect();
   }, [calcVideoArea]);
 
-  // ── ハッシュによる初期スクロール ────────────────────
+  // ── ハッシュによる初期スクロール ──
 
   useEffect(() => {
     const hash = window.location.hash.slice(1);
@@ -202,7 +194,7 @@ export default function FeedItem({ item, isFirst, isSecond = false }: Props) {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // ── メタデータ取得後に object-fit 決定 ─────────────
+  // ── メタデータ取得後に object-fit 決定 ──
 
   const handleMetadata = useCallback(() => {
     const video   = videoRef.current;
@@ -220,7 +212,7 @@ export default function FeedItem({ item, isFirst, isSecond = false }: Props) {
     calcVideoArea(fit);
   }, [calcVideoArea]);
 
-  // ── 再生 ─────────────────────────────────────
+  // ── 再生 ──
 
   const playVideo = useCallback(async (video: HTMLVideoElement, withGesture = false) => {
     if (withGesture) globalUserGestured = true;
@@ -245,7 +237,7 @@ export default function FeedItem({ item, isFirst, isSecond = false }: Props) {
     } catch { /* ignore */ }
   }, [setMuteBadge, setPauseBadge]);
 
-  // ── IntersectionObserver ─────────────────────────
+  // ── IntersectionObserver ──
 
   useEffect(() => {
     const video = videoRef.current;
@@ -280,7 +272,7 @@ export default function FeedItem({ item, isFirst, isSecond = false }: Props) {
     return () => { preloadObserver.disconnect(); playObserver.disconnect(); };
   }, [playVideo, setVideoReady, setPauseBadge, setFastBadge, setMuteBadge, isFirst, isSecond]);
 
-  // ── contextmenu 抑制 ────────────────────────────
+  // ── contextmenu 抑制 ──
 
   useEffect(() => {
     const el = containerRef.current;
@@ -290,7 +282,7 @@ export default function FeedItem({ item, isFirst, isSecond = false }: Props) {
     return () => el.removeEventListener("contextmenu", prevent);
   }, []);
 
-  // ── インタラクション ─────────────────────────────
+  // ── インタラクション ──
 
   const handleDetailClick = () => { history.replaceState(null, "", `#${item.slug}`); };
 
@@ -448,7 +440,6 @@ export default function FeedItem({ item, isFirst, isSecond = false }: Props) {
           onMouseLeave={handleMouseLeaveWithFlag}
           onClick={handlePcClick}
         >
-          {/* shimmer — calcVideoArea が位置・サイズを後から展開する */}
           <div
             ref={shimmerRef}
             className="shimmer"
@@ -458,7 +449,6 @@ export default function FeedItem({ item, isFirst, isSecond = false }: Props) {
             <div className="shimmer-inner" />
           </div>
 
-          {/* 動画本体 — calcVideoArea が垂直中央に配置 */}
           <video
             ref={videoRef}
             src={item.sample_video_url}
@@ -483,7 +473,6 @@ export default function FeedItem({ item, isFirst, isSecond = false }: Props) {
             }}
           />
 
-          {/* 一時オーバーレイ */}
           <div ref={overlayRef} className="action-overlay" aria-hidden="true" style={{ display: "none" }}>
             <span className="action-icon action-icon--pause" style={{ display: "none" }}>
               <svg width="48" height="48" viewBox="0 0 48 48" fill="none">
@@ -498,7 +487,6 @@ export default function FeedItem({ item, isFirst, isSecond = false }: Props) {
             </span>
           </div>
 
-          {/* 一時停止バッジ */}
           <div ref={pauseBadgeRef} className="pause-badge" aria-hidden="true" style={{ display: "none" }}>
             <svg width="40" height="40" viewBox="0 0 48 48" fill="none">
               <rect x="12" y="8" width="10" height="32" rx="2" fill="white"/>
@@ -506,10 +494,8 @@ export default function FeedItem({ item, isFirst, isSecond = false }: Props) {
             </svg>
           </div>
 
-          {/* 2×バッジ */}
           <div ref={fastBadgeRef} className="fast-badge" aria-hidden="true" style={{ display: "none" }}>2×</div>
 
-          {/* ミュートバッジ */}
           <div
             ref={muteBadgeRef}
             className="mute-badge"

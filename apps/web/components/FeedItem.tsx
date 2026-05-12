@@ -12,16 +12,23 @@ interface Props {
 const H_PADDING = 4;
 const V_PADDING_TOP = 4;
 const V_PADDING_BOTTOM = 16;
+const SKIP_SEC = 5;
+const DBL_TAP_MS = 300;
 
 const isLandscapeScreen = () => window.innerWidth > window.innerHeight;
+
+type Ripple = { id: number; x: number; y: number; dir: "left" | "right" };
 
 export default function FeedItem({ item, isFirst }: Props) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const ctaRef = useRef<HTMLDivElement>(null);
   const sectionRef = useRef<HTMLElement>(null);
+  const tapTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const tapCountRef = useRef(0);
 
   const [videoReady, setVideoReady] = useState(false);
   const [objectFit, setObjectFit] = useState<"cover" | "contain">("cover");
+  const [ripples, setRipples] = useState<Ripple[]>([]);
 
   const [videoStyle, setVideoStyle] = useState<React.CSSProperties>({
     position: "absolute",
@@ -38,15 +45,12 @@ export default function FeedItem({ item, isFirst }: Props) {
     const cta = ctaRef.current;
     const section = sectionRef.current;
     if (!cta || !section) return;
-
     const sectionRect = section.getBoundingClientRect();
     const ctaRect = cta.getBoundingClientRect();
-
     const ctaTopInSection = ctaRect.top - sectionRect.top;
     const top = V_PADDING_TOP;
     const height = ctaTopInSection - top - V_PADDING_BOTTOM;
     const width = section.offsetWidth - H_PADDING * 2;
-
     setVideoStyle({
       position: "absolute",
       top: `${top}px`,
@@ -66,9 +70,7 @@ export default function FeedItem({ item, isFirst }: Props) {
     setVideoStyle((prev) => ({ ...prev, opacity: videoReady ? 1 : 0 }));
   }, [videoReady]);
 
-  useEffect(() => {
-    calcVideoArea(objectFit);
-  }, [objectFit, calcVideoArea]);
+  useEffect(() => { calcVideoArea(objectFit); }, [objectFit, calcVideoArea]);
 
   useEffect(() => {
     const cta = ctaRef.current;
@@ -79,19 +81,16 @@ export default function FeedItem({ item, isFirst }: Props) {
     return () => ro.disconnect();
   }, [calcVideoArea]);
 
-  // ハッシュ復元: マウント時に #slug が自分なら即スクロール
+  // ハッシュ復元
   useEffect(() => {
     const hash = window.location.hash.slice(1);
     if (hash !== item.slug) return;
     const section = sectionRef.current;
     if (!section) return;
-    // scroll-snap コンテナが親なので requestAnimationFrame で確実に
     requestAnimationFrame(() => {
       section.scrollIntoView({ behavior: "instant", block: "start" });
-      // 復元後はハッシュをクリアして次の訪問時に先頭に戻る
       history.replaceState(null, "", window.location.pathname);
     });
-  // item.slug は変わらないので初回のみ
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -99,18 +98,13 @@ export default function FeedItem({ item, isFirst }: Props) {
     const video = videoRef.current;
     const section = sectionRef.current;
     if (!video || !section) return;
-
     if (isLandscapeScreen()) {
-      setObjectFit("contain");
-      calcVideoArea("contain");
-      return;
+      setObjectFit("contain"); calcVideoArea("contain"); return;
     }
-
     const videoAspect = video.videoWidth / video.videoHeight;
     const screenAspect = section.offsetWidth / section.offsetHeight;
     const fit = videoAspect <= screenAspect ? "cover" : "contain";
-    setObjectFit(fit);
-    calcVideoArea(fit);
+    setObjectFit(fit); calcVideoArea(fit);
   };
 
   useEffect(() => {
@@ -119,14 +113,9 @@ export default function FeedItem({ item, isFirst }: Props) {
     const observer = new IntersectionObserver(
       ([entry]) => {
         if (entry.isIntersecting) {
-          video.play().catch(() => {
-            video.muted = true;
-            video.play().catch(() => {});
-          });
+          video.play().catch(() => { video.muted = true; video.play().catch(() => {}); });
         } else {
-          video.pause();
-          video.currentTime = 0;
-          setVideoReady(false);
+          video.pause(); video.currentTime = 0; setVideoReady(false);
         }
       },
       { threshold: 0.7 }
@@ -135,15 +124,65 @@ export default function FeedItem({ item, isFirst }: Props) {
     return () => observer.disconnect();
   }, []);
 
-  // 詳細画面へ遷移する前にハッシュをセット
   const handleDetailClick = () => {
     history.replaceState(null, "", `#${item.slug}`);
   };
 
+  // ダブルタップ / ダブルクリック共通処理
+  const fireTap = useCallback((clientX: number, clientY: number) => {
+    const video = videoRef.current;
+    const section = sectionRef.current;
+    if (!video || !section) return;
+
+    const rect = section.getBoundingClientRect();
+    const isLeft = clientX - rect.left < rect.width / 2;
+    const dir = isLeft ? "left" : "right";
+
+    if (isLeft) {
+      video.currentTime = Math.max(0, video.currentTime - SKIP_SEC);
+    } else {
+      video.currentTime = Math.min(video.duration || Infinity, video.currentTime + SKIP_SEC);
+    }
+
+    const id = Date.now();
+    const x = clientX - rect.left;
+    const y = clientY - rect.top;
+    setRipples((prev) => [...prev, { id, x, y, dir }]);
+    setTimeout(() => setRipples((prev) => prev.filter((r) => r.id !== id)), 700);
+  }, []);
+
+  // タッチ: touchend でカウントしてダブル判定
+  const handleTouchEnd = useCallback((e: React.TouchEvent) => {
+    if (!videoRef.current) return;
+    const touch = e.changedTouches[0];
+    const { clientX, clientY } = touch;
+
+    tapCountRef.current += 1;
+    if (tapCountRef.current === 1) {
+      tapTimerRef.current = setTimeout(() => {
+        tapCountRef.current = 0;
+      }, DBL_TAP_MS);
+    } else if (tapCountRef.current >= 2) {
+      if (tapTimerRef.current) clearTimeout(tapTimerRef.current);
+      tapCountRef.current = 0;
+      fireTap(clientX, clientY);
+    }
+  }, [fireTap]);
+
+  // マウス: ブラウザネイティブの dblclick をそのまま利用
+  const handleDoubleClick = useCallback((e: React.MouseEvent) => {
+    fireTap(e.clientX, e.clientY);
+  }, [fireTap]);
+
   return (
     <section ref={sectionRef} className="feed-item">
       {item.sample_video_url ? (
-        <div className="video-bg">
+        <div
+          className="video-bg"
+          onTouchEnd={handleTouchEnd}
+          onDoubleClick={handleDoubleClick}
+          style={{ cursor: "pointer" }}
+        >
           {!videoReady && (
             <div className="shimmer" aria-hidden="true">
               <div className="shimmer-inner" />
@@ -160,6 +199,18 @@ export default function FeedItem({ item, isFirst }: Props) {
             onCanPlay={() => setVideoReady(true)}
             style={videoStyle}
           />
+          {ripples.map((r) => (
+            <div
+              key={r.id}
+              className="skip-ripple"
+              style={{ left: r.x, top: r.y }}
+              aria-hidden="true"
+            >
+              <span className="skip-icon">
+                {r.dir === "left" ? "« -5s" : "+5s »"}
+              </span>
+            </div>
+          ))}
         </div>
       ) : (
         <div className="thumbnail-bg">
@@ -185,19 +236,10 @@ export default function FeedItem({ item, isFirst }: Props) {
           <p className="item-actress">👤 {item.actresses.join(" / ")}</p>
         )}
         <div ref={ctaRef} className="cta-buttons">
-          <Link
-            href={`/movies/${item.slug}`}
-            className="btn-detail"
-            onClick={handleDetailClick}
-          >
+          <Link href={`/movies/${item.slug}`} className="btn-detail" onClick={handleDetailClick}>
             詳細を見る
           </Link>
-          <a
-            href={item.affiliate_url}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="btn-buy"
-          >
+          <a href={item.affiliate_url} target="_blank" rel="noopener noreferrer" className="btn-buy">
             購入する →
           </a>
         </div>
@@ -243,8 +285,39 @@ const itemStyle = `
     0%   { background-position: 200% 0; }
     100% { background-position: -200% 0; }
   }
+
+  .skip-ripple {
+    position: absolute;
+    transform: translate(-50%, -50%);
+    z-index: 20;
+    pointer-events: none;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 90px;
+    height: 90px;
+    border-radius: 50%;
+    background: rgba(255,255,255,0.2);
+    backdrop-filter: blur(6px);
+    animation: ripple-pop 0.65s ease-out forwards;
+  }
+  .skip-icon {
+    color: #fff;
+    font-size: 14px;
+    font-weight: 700;
+    letter-spacing: 0.02em;
+    text-shadow: 0 1px 4px rgba(0,0,0,0.6);
+    white-space: nowrap;
+  }
+  @keyframes ripple-pop {
+    0%   { opacity: 1; transform: translate(-50%, -50%) scale(0.6); }
+    40%  { opacity: 1; transform: translate(-50%, -50%) scale(1.1); }
+    100% { opacity: 0; transform: translate(-50%, -50%) scale(1.35); }
+  }
+
   @media (prefers-reduced-motion: reduce) {
     .shimmer-inner { animation: none; }
     .scroll-hint   { animation: none; }
+    .skip-ripple   { animation: none; opacity: 0; }
   }
 `;

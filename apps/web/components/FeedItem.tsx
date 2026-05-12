@@ -9,24 +9,72 @@ interface Props {
   isFirst: boolean;
 }
 
+// 動画を配置する安全領域の上下パディング
+const VERTICAL_PADDING = 16; // px
+
 export default function FeedItem({ item, isFirst }: Props) {
   const videoRef = useRef<HTMLVideoElement>(null);
+  const overlayRef = useRef<HTMLDivElement>(null);
   const [videoReady, setVideoReady] = useState(false);
-  // 動画の縦横比 > 画面の縦横比 → cover（縦長動画）
-  // 動画の縦横比 < 画面の縦横比 → contain（横長動画）
   const [objectFit, setObjectFit] = useState<"cover" | "contain">("cover");
+  // 動画エリアの上下位置（下部オーバーレイ分を除いた中央）
+  const [videoStyle, setVideoStyle] = useState<React.CSSProperties>({});
 
-  // メタデータロード時に動画サイズ vs 画面サイズを比較
+  // 下部オーバーレイの高さを計測して動画配置領域を計算
+  const calcVideoArea = () => {
+    const overlay = overlayRef.current;
+    if (!overlay) return;
+
+    const overlayHeight = overlay.offsetHeight;
+    const screenH = window.innerHeight;
+    const screenW = window.innerWidth;
+
+    // 安全領域: 上下 VERTICAL_PADDING + 下部オーバーレイ分を除いた高さ
+    const safeTop = VERTICAL_PADDING;
+    const safeBottom = overlayHeight + VERTICAL_PADDING;
+    const safeHeight = screenH - safeTop - safeBottom;
+
+    setVideoStyle({
+      position: "absolute",
+      left: `${VERTICAL_PADDING}px`,
+      right: `${VERTICAL_PADDING}px`,
+      top: `${safeTop}px`,
+      height: `${safeHeight}px`,
+      width: `calc(100% - ${VERTICAL_PADDING * 2}px)`,
+      objectFit,
+      objectPosition: "center center",
+      borderRadius: "12px",
+      opacity: videoReady ? 1 : 0,
+      transition: "opacity 0.3s ease",
+    });
+  };
+
+  // メタデータロード時に動画 vs 画面の縦横比を比較
   const handleMetadata = () => {
     const video = videoRef.current;
     if (!video) return;
 
     const videoAspect = video.videoWidth / video.videoHeight;
     const screenAspect = window.innerWidth / window.innerHeight;
-
-    // 動画の方が縦長（小さい）ならcover、横長（大きい）ならcontain
-    setObjectFit(videoAspect <= screenAspect ? "cover" : "contain");
+    const fit = videoAspect <= screenAspect ? "cover" : "contain";
+    setObjectFit(fit);
   };
+
+  // objectFit または overlay 高さが変わったら videoStyle を再計算
+  useEffect(() => {
+    calcVideoArea();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [objectFit]);
+
+  // ResizeObserver で overlay 高さ変化を監視
+  useEffect(() => {
+    const overlay = overlayRef.current;
+    if (!overlay) return;
+    const ro = new ResizeObserver(() => calcVideoArea());
+    ro.observe(overlay);
+    return () => ro.disconnect();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [objectFit]);
 
   // IntersectionObserver: 画面内に入ったら再生・出たら停止
   useEffect(() => {
@@ -62,25 +110,24 @@ export default function FeedItem({ item, isFirst }: Props) {
               <div className="shimmer-inner" />
             </div>
           )}
-
           <video
             ref={videoRef}
-            className="video-player"
             src={item.sample_video_url}
             muted
             loop
             playsInline
             preload={isFirst ? "auto" : "none"}
             onLoadedMetadata={handleMetadata}
-            onCanPlay={() => setVideoReady(true)}
-            style={{
-              opacity: videoReady ? 1 : 0,
-              transition: "opacity 0.3s ease",
-              objectFit,
-              // contain時は上下ティアテッドにセンタリング
-              objectPosition: "center center",
+            onCanPlay={() => {
+              setVideoReady(true);
+              calcVideoArea();
             }}
+            style={videoStyle}
           />
+          {/* contain時の黒帯部分にボカシ投影効果 */}
+          {objectFit === "contain" && (
+            <div className="video-blur-bg" aria-hidden="true" />
+          )}
           <div className="thumbnail-overlay" />
         </div>
       ) : (
@@ -98,20 +145,16 @@ export default function FeedItem({ item, isFirst }: Props) {
       )}
 
       {/* 下部オーバーレイ */}
-      <div className="info-overlay">
+      <div ref={overlayRef} className="info-overlay">
         <div className="genre-list">
           {item.genres.map((g) => (
-            <span key={g} className="genre-badge">
-              {g}
-            </span>
+            <span key={g} className="genre-badge">{g}</span>
           ))}
         </div>
-
         <h2 className="item-title">{item.title}</h2>
         {item.actresses.length > 0 && (
           <p className="item-actress">👤 {item.actresses.join(" / ")}</p>
         )}
-
         <div className="cta-buttons">
           <Link href={`/movies/${item.slug}`} className="btn-detail">
             詳細を見る
@@ -146,6 +189,7 @@ const itemStyle = `
     background: #1a1a1a;
     z-index: 1;
     overflow: hidden;
+    border-radius: 12px;
   }
   .shimmer-inner {
     position: absolute;
@@ -162,6 +206,13 @@ const itemStyle = `
   @keyframes shimmer-slide {
     0%   { background-position: 200% 0; }
     100% { background-position: -200% 0; }
+  }
+  /* contain時の背景: サムネイルをゼロでblur */
+  .video-blur-bg {
+    position: absolute;
+    inset: 0;
+    background: #0d0d0d;
+    z-index: 0;
   }
   @media (prefers-reduced-motion: reduce) {
     .shimmer-inner { animation: none; }

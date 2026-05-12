@@ -12,6 +12,21 @@ interface Props {
 export default function FeedItem({ item, isFirst }: Props) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const [videoReady, setVideoReady] = useState(false);
+  // 動画の縦横比 > 画面の縦横比 → cover（縦長動画）
+  // 動画の縦横比 < 画面の縦横比 → contain（横長動画）
+  const [objectFit, setObjectFit] = useState<"cover" | "contain">("cover");
+
+  // メタデータロード時に動画サイズ vs 画面サイズを比較
+  const handleMetadata = () => {
+    const video = videoRef.current;
+    if (!video) return;
+
+    const videoAspect = video.videoWidth / video.videoHeight;
+    const screenAspect = window.innerWidth / window.innerHeight;
+
+    // 動画の方が縦長（小さい）ならcover、横長（大きい）ならcontain
+    setObjectFit(videoAspect <= screenAspect ? "cover" : "contain");
+  };
 
   // IntersectionObserver: 画面内に入ったら再生・出たら停止
   useEffect(() => {
@@ -28,7 +43,6 @@ export default function FeedItem({ item, isFirst }: Props) {
         } else {
           video.pause();
           video.currentTime = 0;
-          // 画面外に出たらローディング状態にリセット
           setVideoReady(false);
         }
       },
@@ -43,7 +57,6 @@ export default function FeedItem({ item, isFirst }: Props) {
     <section className="feed-item">
       {item.sample_video_url ? (
         <div className="video-bg">
-          {/* シマーローダー: 動画がcanplayになるまで表示 */}
           {!videoReady && (
             <div className="shimmer" aria-hidden="true">
               <div className="shimmer-inner" />
@@ -58,8 +71,15 @@ export default function FeedItem({ item, isFirst }: Props) {
             loop
             playsInline
             preload={isFirst ? "auto" : "none"}
+            onLoadedMetadata={handleMetadata}
             onCanPlay={() => setVideoReady(true)}
-            style={{ opacity: videoReady ? 1 : 0, transition: "opacity 0.3s ease" }}
+            style={{
+              opacity: videoReady ? 1 : 0,
+              transition: "opacity 0.3s ease",
+              objectFit,
+              // contain時は上下ティアテッドにセンタリング
+              objectPosition: "center center",
+            }}
           />
           <div className="thumbnail-overlay" />
         </div>
@@ -107,7 +127,6 @@ export default function FeedItem({ item, isFirst }: Props) {
         </div>
       </div>
 
-      {/* スクロールヒント（最初の1枚のみ） */}
       {isFirst && (
         <div className="scroll-hint">
           <span>スワイプ</span>
@@ -121,7 +140,6 @@ export default function FeedItem({ item, isFirst }: Props) {
 }
 
 const itemStyle = `
-  /* ─── シマーローダー ─────────────────── */
   .shimmer {
     position: absolute;
     inset: 0;

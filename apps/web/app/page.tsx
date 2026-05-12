@@ -1,5 +1,5 @@
-import Link from "next/link";
 import { getFeed } from "@/lib/api/feed";
+import FeedItem from "@/components/FeedItem";
 
 export default async function HomePage() {
   const feed = await getFeed();
@@ -21,75 +21,12 @@ export default async function HomePage() {
     <>
       <main className="feed-container">
         {feed.items.map((item, index) => (
-          <section key={item.id} className="feed-item">
-            {/* 動画（あり）かサムネイル（なし）かで分岐 */}
-            {item.sample_video_url ? (
-              <div className="video-bg">
-                <video
-                  className="video-player"
-                  src={item.sample_video_url}
-                  poster={item.thumbnail_url}
-                  autoPlay={index === 0}
-                  muted
-                  loop
-                  playsInline
-                  preload={index === 0 ? "auto" : "none"}
-                />
-                <div className="thumbnail-overlay" />
-              </div>
-            ) : (
-              <div className="thumbnail-bg">
-                <img
-                  src={item.thumbnail_url}
-                  alt={item.title}
-                  className="thumbnail-img"
-                  loading={index === 0 ? "eager" : "lazy"}
-                  width={720}
-                  height={1280}
-                />
-                <div className="thumbnail-overlay" />
-              </div>
-            )}
-
-            {/* 下部オーバーレイ情報 */}
-            <div className="info-overlay">
-              {/* ジャンルバッジ */}
-              <div className="genre-list">
-                {item.genres.map((g) => (
-                  <span key={g} className="genre-badge">{g}</span>
-                ))}
-              </div>
-
-              {/* タイトル・女優名 */}
-              <h2 className="item-title">{item.title}</h2>
-              {item.actresses.length > 0 && (
-                <p className="item-actress">👤 {item.actresses.join(" / ")}</p>
-              )}
-
-              {/* CTAボタン */}
-              <div className="cta-buttons">
-                <Link href={`/movies/${item.slug}`} className="btn-detail">
-                  詳細を見る
-                </Link>
-                <a
-                  href={item.affiliate_url}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="btn-buy"
-                >
-                  購入する →
-                </a>
-              </div>
-            </div>
-
-            {/* スクロールヒント（最初の1枚のみ） */}
-            {index === 0 && (
-              <div className="scroll-hint">
-                <span>スワイプ</span>
-                <span className="scroll-arrow">↓</span>
-              </div>
-            )}
-          </section>
+          <FeedItem
+            key={item.id}
+            item={item}
+            index={index}
+            isFirst={index === 0}
+          />
         ))}
       </main>
 

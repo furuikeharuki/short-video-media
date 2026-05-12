@@ -21,7 +21,6 @@ html, body {
 
 :root {
   --header-h:   52px;
-  /* 背景と同じ純黒 */
   --header-bg:  #000;
   --accent:     #E8003D;
   --dropdown-bg: rgba(0, 0, 0, 0.97);
@@ -30,7 +29,11 @@ html, body {
 /* ━━━ ヘッダー ━━━━━━━━━━━━━━━━━━━━━━━━━━━━ */
 
 .site-header {
-  position: fixed;
+  /* fixed → sticky に変更:
+     - body スクロールとの競合がなくなりスクロールジャンクが解消
+     - will-change: transform も削除（iOS Safari での fixed ずれバグ回避）
+  */
+  position: sticky;
   top: 0;
   left: 0;
   right: 0;
@@ -40,10 +43,7 @@ html, body {
   align-items: center;
   justify-content: space-between;
   padding: 0 14px;
-  /* 背景と同じ色・blur・境界線なし */
   background: var(--header-bg);
-  will-change: transform;
-  transform: translateZ(0);
 }
 
 .header-logo {
@@ -105,7 +105,6 @@ html, body {
   flex-direction: column;
   gap: 16px;
 
-  /* アニメーション */
   transform: translateY(-8px);
   opacity: 0;
   pointer-events: none;

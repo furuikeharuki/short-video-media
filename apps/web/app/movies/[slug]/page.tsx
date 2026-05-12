@@ -73,17 +73,15 @@ export default async function MovieDetailPage({ params }: PageProps) {
 
 const styles: Record<string, React.CSSProperties> = {
   main: {
-    // dvh はスクロール中にブラウザUIの出入りで再計算されガタつくため svh に変更
     minHeight: '100svh' as unknown as string,
     background: '#0a0a0a',
     color: '#fff',
     fontFamily: "-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif",
-    paddingTop: '52px', // fixed Header (--header-h) の分
+    // sticky header はドキュメントフローに含まれるため paddingTop 不要
   },
   heroWrap: {
     position: 'relative',
     width: '100%',
-    // svh: ブラウザUIが最大表示された状態の安定した高さ
     height: 'calc(100svh - 52px)' as unknown as string,
     overflow: 'hidden',
     background: '#111',

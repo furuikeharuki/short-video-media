@@ -12,13 +12,11 @@ interface Props {
 const H_PADDING = 12;
 const V_PADDING = 12;
 
-/** 画面が横長（PC・タブレット横）かどうか */
 const isLandscapeScreen = () => window.innerWidth > window.innerHeight;
 
 export default function FeedItem({ item, isFirst }: Props) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const overlayRef = useRef<HTMLDivElement>(null);
-  const ctaRef = useRef<HTMLDivElement>(null);
   const sectionRef = useRef<HTMLElement>(null);
 
   const [videoReady, setVideoReady] = useState(false);
@@ -36,17 +34,15 @@ export default function FeedItem({ item, isFirst }: Props) {
   });
 
   const calcVideoArea = useCallback((fit: "cover" | "contain" = objectFit) => {
-    const cta = ctaRef.current;
+    const overlay = overlayRef.current;
     const section = sectionRef.current;
-    if (!cta || !section) return;
+    if (!overlay || !section) return;
 
-    const ctaH = cta.offsetHeight;
+    const overlayH = overlay.offsetHeight;
     const sectionH = section.offsetHeight;
     const sectionW = section.offsetWidth;
 
-    // ボタンの高さ分だけ下院を避ける。上下左右に少し余白
-    const ctaBottomOffset = ctaH + V_PADDING * 2; // ボタン + 上下余白
-    const safeH = sectionH - V_PADDING - ctaBottomOffset;
+    const safeH = sectionH - V_PADDING - overlayH - V_PADDING;
     const safeW = sectionW - H_PADDING * 2;
 
     setVideoStyle({
@@ -73,10 +69,10 @@ export default function FeedItem({ item, isFirst }: Props) {
   }, [objectFit, calcVideoArea]);
 
   useEffect(() => {
-    const cta = ctaRef.current;
-    if (!cta) return;
+    const overlay = overlayRef.current;
+    if (!overlay) return;
     const ro = new ResizeObserver(() => calcVideoArea());
-    ro.observe(cta);
+    ro.observe(overlay);
     calcVideoArea();
     return () => ro.disconnect();
   }, [calcVideoArea]);
@@ -86,14 +82,12 @@ export default function FeedItem({ item, isFirst }: Props) {
     const section = sectionRef.current;
     if (!video || !section) return;
 
-    // 画面が横長（PC）なら常に contain
     if (isLandscapeScreen()) {
       setObjectFit("contain");
       calcVideoArea("contain");
       return;
     }
 
-    // 縦長（スマホ）: 動画 vs 画面の縦横比で判定
     const videoAspect = video.videoWidth / video.videoHeight;
     const screenAspect = section.offsetWidth / section.offsetHeight;
     const fit = videoAspect <= screenAspect ? "cover" : "contain";
@@ -159,7 +153,6 @@ export default function FeedItem({ item, isFirst }: Props) {
         </div>
       )}
 
-      {/* 下部オーバーレイ（ボタン以外は動画に重なってOK） */}
       <div ref={overlayRef} className="info-overlay">
         <div className="genre-list">
           {item.genres.map((g) => (
@@ -170,8 +163,7 @@ export default function FeedItem({ item, isFirst }: Props) {
         {item.actresses.length > 0 && (
           <p className="item-actress">👤 {item.actresses.join(" / ")}</p>
         )}
-        {/* CTAボタンは動画の下に出る */}
-        <div ref={ctaRef} className="cta-buttons">
+        <div className="cta-buttons">
           <Link href={`/movies/${item.slug}`} className="btn-detail">
             詳細を見る
           </Link>

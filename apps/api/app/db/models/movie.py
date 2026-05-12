@@ -15,6 +15,7 @@ class Movie(Base):
     slug: Mapped[str] = mapped_column(unique=True, index=True)
     description: Mapped[str] = mapped_column(Text, default="")
     thumbnail_url: Mapped[str] = mapped_column(default="")
+    sample_video_url: Mapped[str | None] = mapped_column(default=None)
     sample_embed_url: Mapped[str] = mapped_column(default="")
     affiliate_url: Mapped[str] = mapped_column(default="")
 

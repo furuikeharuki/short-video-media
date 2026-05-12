@@ -51,9 +51,8 @@ export default function FeedItem({ item, isFirst, isSecond = false }: Props) {
   const pcClickCountRef          = useRef(0);
   const pcClickTimerRef          = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  // ── DOM直接操作ヘルパー ─────────────────────────────
+  // ── DOM直接操作ヘルパー ────────────────────────────
 
-  /** shimmer 表示/非表示 — React再レンダリングなし */
   const setVideoReady = useCallback((ready: boolean) => {
     const video   = videoRef.current;
     const shimmer = shimmerRef.current;
@@ -61,32 +60,27 @@ export default function FeedItem({ item, isFirst, isSecond = false }: Props) {
     if (shimmer) shimmer.style.display = ready ? "none" : "block";
   }, []);
 
-  /** 一時オーバーレイ（再生/一時停止アイコン） */
   const showOverlay = useCallback((type: "play" | "pause") => {
     const el = overlayRef.current;
     if (!el) return;
     el.dataset.type = type;
     el.style.display = "flex";
     el.style.animation = "none";
-    // reflow で animation をリセット
     void el.offsetHeight;
     el.style.animation = "";
     setTimeout(() => { if (overlayRef.current) overlayRef.current.style.display = "none"; }, 700);
   }, []);
 
-  /** 一時停止バッジ */
   const setPauseBadge = useCallback((visible: boolean) => {
     const el = pauseBadgeRef.current;
     if (el) el.style.display = visible ? "flex" : "none";
   }, []);
 
-  /** 2×バッジ */
   const setFastBadge = useCallback((visible: boolean) => {
     const el = fastBadgeRef.current;
     if (el) el.style.display = visible ? "block" : "none";
   }, []);
 
-  /** ミュートバッジ */
   const setMuteBadge = useCallback((visible: boolean) => {
     const el = muteBadgeRef.current;
     if (el) el.style.display = visible ? "flex" : "none";
@@ -112,27 +106,25 @@ export default function FeedItem({ item, isFirst, isSecond = false }: Props) {
     const height = Math.max(ctaTopInSection - top - V_PADDING_BOTTOM, 0);
     const width  = section.offsetWidth - H_PADDING * 2;
 
-    video.style.position      = "absolute";
-    video.style.top           = `${top}px`;
-    video.style.left          = `${H_PADDING}px`;
-    video.style.width         = `${width}px`;
-    video.style.height        = `${height}px`;
-    video.style.objectFit     = resolvedFit;
+    video.style.position       = "absolute";
+    video.style.top            = `${top}px`;
+    video.style.left           = `${H_PADDING}px`;
+    video.style.width          = `${width}px`;
+    video.style.height         = `${height}px`;
+    video.style.objectFit      = resolvedFit;
     video.style.objectPosition = "center center";
-    video.style.borderRadius  = "8px";
-    // opacity は setVideoReady が管理するので触らない
+    video.style.borderRadius   = "8px";
   }, []);
 
-  // ── 初期スタイル（SSR対応） ──────────────────────────
+  // ── 初期スタイル（SSR対応） ─────────────────────────
 
   useEffect(() => {
     const video = videoRef.current;
     if (!video) return;
-    // opacity: 0 はインラインで初期設定済み。calcVideoArea で位置確定。
     calcVideoArea();
   }, [calcVideoArea]);
 
-  // ── ResizeObserver で CTA 高さ変化に追従 ─────────────
+  // ── ResizeObserver ───────────────────────────────
 
   useEffect(() => {
     const cta = ctaRef.current;
@@ -142,7 +134,7 @@ export default function FeedItem({ item, isFirst, isSecond = false }: Props) {
     return () => ro.disconnect();
   }, [calcVideoArea]);
 
-  // ── ハッシュによる初期スクロール ─────────────────────
+  // ── ハッシュによる初期スクロール ────────────────────
 
   useEffect(() => {
     const hash = window.location.hash.slice(1);
@@ -156,7 +148,7 @@ export default function FeedItem({ item, isFirst, isSecond = false }: Props) {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // ── メタデータ取得後に object-fit 決定 ───────────────
+  // ── メタデータ取得後に object-fit 決定 ─────────────
 
   const handleMetadata = useCallback(() => {
     const video   = videoRef.current;
@@ -174,7 +166,7 @@ export default function FeedItem({ item, isFirst, isSecond = false }: Props) {
     calcVideoArea(fit);
   }, [calcVideoArea]);
 
-  // ── 再生 ─────────────────────────────────────────────
+  // ── 再生 ─────────────────────────────────────
 
   const playVideo = useCallback(async (video: HTMLVideoElement, withGesture = false) => {
     if (withGesture) globalUserGestured = true;
@@ -234,7 +226,7 @@ export default function FeedItem({ item, isFirst, isSecond = false }: Props) {
     return () => { preloadObserver.disconnect(); playObserver.disconnect(); };
   }, [playVideo, setVideoReady, setPauseBadge, setFastBadge, setMuteBadge, isFirst, isSecond]);
 
-  // ── contextmenu 抑制 ─────────────────────────────────
+  // ── contextmenu 抑制 ────────────────────────────
 
   useEffect(() => {
     const el = containerRef.current;
@@ -244,7 +236,7 @@ export default function FeedItem({ item, isFirst, isSecond = false }: Props) {
     return () => el.removeEventListener("contextmenu", prevent);
   }, []);
 
-  // ── インタラクション ──────────────────────────────────
+  // ── インタラクション ─────────────────────────────
 
   const handleDetailClick = () => { history.replaceState(null, "", `#${item.slug}`); };
 
@@ -257,7 +249,6 @@ export default function FeedItem({ item, isFirst, isSecond = false }: Props) {
     if (isLeft) video.currentTime = Math.max(0, video.currentTime - SKIP_SEC);
     else        video.currentTime = Math.min(video.duration || Infinity, video.currentTime + SKIP_SEC);
 
-    // リップルは軽量なので DOM を直接生成して自動削除
     const ripple = document.createElement("div");
     ripple.className = "skip-ripple";
     ripple.style.left = `${clientX - rect.left}px`;
@@ -403,12 +394,12 @@ export default function FeedItem({ item, isFirst, isSecond = false }: Props) {
           onMouseLeave={handleMouseLeaveWithFlag}
           onClick={handlePcClick}
         >
-          {/* shimmer — DOM直接表示切替 */}
+          {/* shimmer */}
           <div ref={shimmerRef} className="shimmer" aria-hidden="true">
             <div className="shimmer-inner" />
           </div>
 
-          {/* 動画本体 — スタイルは ref.style で直接管理 */}
+          {/* 動画本体— 初期は場所・サイズ未確定なので寝かせておく。calcVideoArea が下书きする */}
           <video
             ref={videoRef}
             src={item.sample_video_url}
@@ -421,15 +412,20 @@ export default function FeedItem({ item, isFirst, isSecond = false }: Props) {
             onCanPlay={() => setVideoReady(true)}
             style={{
               position: "absolute",
+              top: `${V_PADDING_TOP}px`,
+              left: `${H_PADDING}px`,
+              /* width/height は calcVideoArea が確定するまで 0 にして果の外に出さない */
+              width: 0,
+              height: 0,
+              objectFit: "cover",
+              objectPosition: "center center",
+              borderRadius: "8px",
               opacity: 0,
               transition: "opacity 0.3s ease",
-              // 初期サイズは calcVideoArea が上書き
-              inset: 0, width: "100%", height: "100%",
-              objectFit: "cover", objectPosition: "center center",
             }}
           />
 
-          {/* 一時オーバーレイ — 常にDOMに存在、display切替 */}
+          {/* 一時オーバーレイ */}
           <div
             ref={overlayRef}
             className="action-overlay"
@@ -523,6 +519,13 @@ export default function FeedItem({ item, isFirst, isSecond = false }: Props) {
 }
 
 const itemStyle = `
+  /* video-bg: 枠からはみ出さないよう overflow:hidden */
+  .video-bg {
+    position: absolute;
+    inset: 0;
+    overflow: hidden;
+  }
+
   .shimmer {
     position: absolute;
     top: ${V_PADDING_TOP}px;
@@ -574,7 +577,6 @@ const itemStyle = `
     justify-content: center;
     filter: drop-shadow(0 2px 8px rgba(0,0,0,0.7));
   }
-  /* data-type に応じてどちらのアイコンを出すか制御 */
   .action-overlay[data-type="pause"] .action-icon--pause { display: flex !important; }
   .action-overlay[data-type="play"]  .action-icon--play  { display: flex !important; }
   @keyframes overlay-pop {

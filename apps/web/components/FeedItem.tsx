@@ -13,22 +13,34 @@ const H_PADDING = 4;
 const V_PADDING_TOP = 4;
 const V_PADDING_BOTTOM = 16;
 const SKIP_SEC = 5;
-const DBL_TAP_MS = 300;
+const DBL_TAP_MS = 300;   // ダブルタップ判定ウィンドウ
+const LONG_PRESS_MS = 500; // 長押し判定閾値
 
 const isLandscapeScreen = () => window.innerWidth > window.innerHeight;
 
 type Ripple = { id: number; x: number; y: number; dir: "left" | "right" };
+type Overlay = "pause" | "play" | "fast" | null;
 
 export default function FeedItem({ item, isFirst }: Props) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const ctaRef = useRef<HTMLDivElement>(null);
   const sectionRef = useRef<HTMLElement>(null);
+
+  // タップ判定
   const tapTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const tapCountRef = useRef(0);
+  const tapPosRef = useRef<{ x: number; y: number }>({ x: 0, y: 0 });
+
+  // 長押し判定
+  const longPressTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const isLongPressRef = useRef(false);
 
   const [videoReady, setVideoReady] = useState(false);
+  const [isPlaying, setIsPlaying] = useState(false);
+  const [isFast, setIsFast] = useState(false);
   const [objectFit, setObjectFit] = useState<"cover" | "contain">("cover");
   const [ripples, setRipples] = useState<Ripple[]>([]);
+  const [overlay, setOverlay] = useState<Overlay>(null);
 
   const [videoStyle, setVideoStyle] = useState<React.CSSProperties>({
     position: "absolute",
@@ -41,25 +53,27 @@ export default function FeedItem({ item, isFirst }: Props) {
     transition: "opacity 0.3s ease",
   });
 
+  // ─── オーバーレイ表示ヘルパー ───────────────────
+  const showOverlay = useCallback((type: Overlay) => {
+    setOverlay(type);
+    setTimeout(() => setOverlay(null), 700);
+  }, []);
+
+  // ─── 動画エリア計算 ─────────────────────────────
   const calcVideoArea = useCallback((fit: "cover" | "contain" = objectFit) => {
     const cta = ctaRef.current;
     const section = sectionRef.current;
     if (!cta || !section) return;
-
     const sectionRect = section.getBoundingClientRect();
     const ctaRect = cta.getBoundingClientRect();
-
-    // DOMがまだレイアウトされていない場合（isFirst の早期発火時に発生）は再試行
     if (ctaRect.top === 0 && ctaRect.height === 0) {
       requestAnimationFrame(() => calcVideoArea(fit));
       return;
     }
-
     const ctaTopInSection = ctaRect.top - sectionRect.top;
     const top = V_PADDING_TOP;
     const height = ctaTopInSection - top - V_PADDING_BOTTOM;
     const width = section.offsetWidth - H_PADDING * 2;
-
     setVideoStyle({
       position: "absolute",
       top: `${top}px`,
@@ -103,6 +117,7 @@ export default function FeedItem({ item, isFirst }: Props) {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // ─── メタデータ処理 ─────────────────────────────
   const handleMetadata = () => {
     const video = videoRef.current;
     const section = sectionRef.current;
@@ -116,6 +131,7 @@ export default function FeedItem({ item, isFirst }: Props) {
     setObjectFit(fit); calcVideoArea(fit);
   };
 
+  // ─── IntersectionObserver（自動再生/停止）───────
   useEffect(() => {
     const video = videoRef.current;
     if (!video) return;
@@ -123,8 +139,10 @@ export default function FeedItem({ item, isFirst }: Props) {
       ([entry]) => {
         if (entry.isIntersecting) {
           video.play().catch(() => { video.muted = true; video.play().catch(() => {}); });
+          setIsPlaying(true);
         } else {
-          video.pause(); video.currentTime = 0; setVideoReady(false);
+          video.pause(); video.currentTime = 0;
+          setIsPlaying(false); setVideoReady(false);
         }
       },
       { threshold: 0.7 }
@@ -137,7 +155,8 @@ export default function FeedItem({ item, isFirst }: Props) {
     history.replaceState(null, "", `#${item.slug}`);
   };
 
-  const fireTap = useCallback((clientX: number, clientY: number) => {
+  // ─── スキップ（ダブルタップ/クリック共通）───────
+  const fireSkip = useCallback((clientX: number, clientY: number) => {
     const video = videoRef.current;
     const section = sectionRef.current;
     if (!video || !section) return;
@@ -150,37 +169,140 @@ export default function FeedItem({ item, isFirst }: Props) {
       video.currentTime = Math.min(video.duration || Infinity, video.currentTime + SKIP_SEC);
     }
     const id = Date.now();
-    const x = clientX - rect.left;
-    const y = clientY - rect.top;
-    setRipples((prev) => [...prev, { id, x, y, dir }]);
+    setRipples((prev) => [...prev, { id, x: clientX - rect.left, y: clientY - rect.top, dir }]);
     setTimeout(() => setRipples((prev) => prev.filter((r) => r.id !== id)), 700);
   }, []);
 
+  // ─── 再生/一時停止トグル ────────────────────────
+  const fireTogglePlay = useCallback(() => {
+    const video = videoRef.current;
+    if (!video) return;
+    if (video.paused) {
+      video.play().catch(() => {});
+      setIsPlaying(true);
+      showOverlay("play");
+    } else {
+      video.pause();
+      setIsPlaying(false);
+      showOverlay("pause");
+    }
+  }, [showOverlay]);
+
+  // ─── 長押し開始（2倍速）────────────────────────
+  const startLongPress = useCallback(() => {
+    isLongPressRef.current = false;
+    longPressTimerRef.current = setTimeout(() => {
+      const video = videoRef.current;
+      if (!video) return;
+      isLongPressRef.current = true;
+      video.playbackRate = 2;
+      setIsFast(true);
+      showOverlay("fast");
+    }, LONG_PRESS_MS);
+  }, [showOverlay]);
+
+  // ─── 長押し終了（1倍速に戻す）──────────────────
+  const endLongPress = useCallback(() => {
+    if (longPressTimerRef.current) clearTimeout(longPressTimerRef.current);
+    const video = videoRef.current;
+    if (!video) return;
+    if (isLongPressRef.current) {
+      video.playbackRate = 1;
+      setIsFast(false);
+      isLongPressRef.current = false;
+    }
+  }, []);
+
+  // ─── タッチイベント ─────────────────────────────
+  const handleTouchStart = useCallback((e: React.TouchEvent) => {
+    if (!videoRef.current) return;
+    const touch = e.touches[0];
+    tapPosRef.current = { x: touch.clientX, y: touch.clientY };
+    startLongPress();
+  }, [startLongPress]);
+
   const handleTouchEnd = useCallback((e: React.TouchEvent) => {
     if (!videoRef.current) return;
+    endLongPress();
+    // 長押し確定していたらタップ判定しない
+    if (isLongPressRef.current) return;
+
     const touch = e.changedTouches[0];
     const { clientX, clientY } = touch;
+
     tapCountRef.current += 1;
     if (tapCountRef.current === 1) {
-      tapTimerRef.current = setTimeout(() => { tapCountRef.current = 0; }, DBL_TAP_MS);
+      tapTimerRef.current = setTimeout(() => {
+        // シングルタップ確定
+        if (tapCountRef.current === 1) fireTogglePlay();
+        tapCountRef.current = 0;
+      }, DBL_TAP_MS);
     } else if (tapCountRef.current >= 2) {
       if (tapTimerRef.current) clearTimeout(tapTimerRef.current);
       tapCountRef.current = 0;
-      fireTap(clientX, clientY);
+      // ダブルタップ確定 → スキップ
+      fireSkip(clientX, clientY);
     }
-  }, [fireTap]);
+  }, [endLongPress, fireTogglePlay, fireSkip]);
+
+  const handleTouchCancel = useCallback(() => {
+    endLongPress();
+  }, [endLongPress]);
+
+  // ─── マウスイベント ─────────────────────────────
+  const handleMouseDown = useCallback(() => {
+    startLongPress();
+  }, [startLongPress]);
+
+  const handleMouseUp = useCallback(() => {
+    endLongPress();
+  }, [endLongPress]);
+
+  const handleMouseLeave = useCallback(() => {
+    endLongPress();
+  }, [endLongPress]);
+
+  const handleClick = useCallback(() => {
+    // 長押し確定後のクリックは無視
+    if (isLongPressRef.current) return;
+    // ダブルクリックと競合しないよう dblclick に委ねる（PC はブラウザが自然に処理）
+  }, []);
 
   const handleDoubleClick = useCallback((e: React.MouseEvent) => {
-    fireTap(e.clientX, e.clientY);
-  }, [fireTap]);
+    if (isLongPressRef.current) return;
+    fireSkip(e.clientX, e.clientY);
+  }, [fireSkip]);
+
+  // PC シングルクリック: dblclick と区別するため自前タイマー
+  const pcClickCountRef = useRef(0);
+  const pcClickTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const handlePcClick = useCallback((e: React.MouseEvent) => {
+    if (isLongPressRef.current) return;
+    pcClickCountRef.current += 1;
+    if (pcClickCountRef.current === 1) {
+      pcClickTimerRef.current = setTimeout(() => {
+        if (pcClickCountRef.current === 1) fireTogglePlay();
+        pcClickCountRef.current = 0;
+      }, DBL_TAP_MS);
+    } else if (pcClickCountRef.current >= 2) {
+      if (pcClickTimerRef.current) clearTimeout(pcClickTimerRef.current);
+      pcClickCountRef.current = 0;
+      fireSkip(e.clientX, e.clientY);
+    }
+  }, [fireTogglePlay, fireSkip]);
 
   return (
     <section ref={sectionRef} className="feed-item">
       {item.sample_video_url ? (
         <div
           className="video-bg video-bg--interactive"
+          onTouchStart={handleTouchStart}
           onTouchEnd={handleTouchEnd}
-          onDoubleClick={handleDoubleClick}
+          onTouchCancel={handleTouchCancel}
+          onMouseDown={handleMouseDown}
+          onMouseUp={handleMouseUp}
+          onMouseLeave={handleMouseLeave}
+          onClick={handlePcClick}
         >
           {!videoReady && (
             <div className="shimmer" aria-hidden="true">
@@ -198,6 +320,29 @@ export default function FeedItem({ item, isFirst }: Props) {
             onCanPlay={() => setVideoReady(true)}
             style={videoStyle}
           />
+
+          {/* 再生/停止/倍速オーバーレイ */}
+          {overlay && (
+            <div className="action-overlay" aria-hidden="true">
+              <span className="action-icon">
+                {overlay === "pause" && "⏸"}
+                {overlay === "play"  && "▶"}
+                {overlay === "fast"  && "2×"}
+              </span>
+            </div>
+          )}
+
+          {/* 一時停止中バッジ */}
+          {videoReady && !isPlaying && (
+            <div className="pause-badge" aria-hidden="true">⏸</div>
+          )}
+
+          {/* 2倍速バッジ */}
+          {isFast && (
+            <div className="fast-badge" aria-hidden="true">2×</div>
+          )}
+
+          {/* スキップリップル */}
           {ripples.map((r) => (
             <div
               key={r.id}
@@ -293,6 +438,60 @@ const itemStyle = `
     user-select: none;
   }
 
+  /* ─── 中央ポップオーバーレイ ─── */
+  .action-overlay {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 25;
+    pointer-events: none;
+    animation: overlay-pop 0.65s ease-out forwards;
+  }
+  .action-icon {
+    font-size: 48px;
+    line-height: 1;
+    filter: drop-shadow(0 2px 8px rgba(0,0,0,0.7));
+  }
+  @keyframes overlay-pop {
+    0%   { opacity: 1; transform: scale(0.7); }
+    30%  { opacity: 1; transform: scale(1.1); }
+    70%  { opacity: 0.8; transform: scale(1); }
+    100% { opacity: 0; transform: scale(1); }
+  }
+
+  /* ─── 一時停止バッジ（常時表示）─── */
+  .pause-badge {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    font-size: 40px;
+    opacity: 0.7;
+    pointer-events: none;
+    z-index: 20;
+    filter: drop-shadow(0 2px 6px rgba(0,0,0,0.6));
+  }
+
+  /* ─── 2倍速バッジ（長押し中）─── */
+  .fast-badge {
+    position: absolute;
+    top: 12px;
+    right: 12px;
+    background: rgba(255,200,0,0.85);
+    color: #000;
+    font-size: 13px;
+    font-weight: 800;
+    letter-spacing: 0.04em;
+    padding: 3px 10px;
+    border-radius: 999px;
+    pointer-events: none;
+    z-index: 20;
+    backdrop-filter: blur(4px);
+  }
+
+  /* ─── スキップリップル ─── */
   .skip-ripple {
     position: absolute;
     transform: translate(-50%, -50%);
@@ -323,8 +522,9 @@ const itemStyle = `
   }
 
   @media (prefers-reduced-motion: reduce) {
-    .shimmer-inner { animation: none; }
-    .scroll-hint   { animation: none; }
-    .skip-ripple   { animation: none; opacity: 0; }
+    .shimmer-inner  { animation: none; }
+    .scroll-hint    { animation: none; }
+    .skip-ripple    { animation: none; opacity: 0; }
+    .action-overlay { animation: none; opacity: 0; }
   }
 `;

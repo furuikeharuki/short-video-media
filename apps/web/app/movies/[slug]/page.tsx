@@ -77,11 +77,13 @@ const styles: Record<string, React.CSSProperties> = {
     background: '#0a0a0a',
     color: '#fff',
     fontFamily: "-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif",
+    overflowY: 'auto',
   },
   heroWrap: {
     position: 'relative',
     width: '100%',
-    height: '85dvh',
+    aspectRatio: '3 / 4',
+    maxHeight: '80dvh',
     overflow: 'hidden',
     background: '#111',
     display: 'flex',
@@ -101,17 +103,16 @@ const styles: Record<string, React.CSSProperties> = {
   heroImg: {
     position: 'relative',
     zIndex: 1,
-    width: 'calc(100% - 60px)' as unknown as string,
-    height: 'auto',
-    maxHeight: 'calc(85dvh - 60px)' as unknown as string,
-    objectFit: 'contain',
+    width: '100%',
+    height: '100%',
+    objectFit: 'cover',
+    objectPosition: 'center top',
     display: 'block',
-    borderRadius: '8px',
   },
   content: {
-    padding: '24px 20px 48px',
-    maxWidth: '640px',
-    margin: '0 auto',
+    padding: '20px 16px 48px',
+    width: '100%',
+    boxSizing: 'border-box',
   },
   genreList: { display: 'flex', flexWrap: 'wrap', gap: '6px', marginBottom: '14px' },
   badge: {
@@ -126,13 +127,13 @@ const styles: Record<string, React.CSSProperties> = {
     borderRadius: '999px',
   },
   title: {
-    fontSize: 'clamp(20px, 5vw, 28px)' as unknown as string,
+    fontSize: 'clamp(18px, 5vw, 26px)' as unknown as string,
     fontWeight: 700,
-    lineHeight: 1.3,
+    lineHeight: 1.35,
     marginBottom: '10px',
     color: '#fff',
   },
-  actress: { fontSize: '14px', color: 'rgba(255,255,255,0.55)', marginBottom: '16px' },
+  actress: { fontSize: '13px', color: 'rgba(255,255,255,0.55)', marginBottom: '16px' },
   description: {
     fontSize: '14px',
     lineHeight: 1.8,
@@ -145,6 +146,10 @@ const styles: Record<string, React.CSSProperties> = {
 };
 
 const pageCSS = `
+  html, body {
+    overflow: auto !important;
+  }
+
   .affiliate-btn {
     display: flex;
     align-items: center;
@@ -160,6 +165,7 @@ const pageCSS = `
     text-align: center;
     text-decoration: none;
     transition: opacity 0.15s ease, transform 0.15s ease;
+    box-sizing: border-box;
   }
   .affiliate-btn:active { opacity: 0.75; transform: scale(0.98); }
   @media (hover: hover) { .affiliate-btn:hover { opacity: 0.88; } }

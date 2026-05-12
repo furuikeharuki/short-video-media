@@ -114,7 +114,8 @@ export default function FeedItem({ item, isFirst, isSecond = false }: Props) {
     video.style.width          = `${width}px`;
     video.style.height         = `${height}px`;
     video.style.objectFit      = resolvedFit;
-    video.style.objectPosition = "center center";
+    // containの場合は上寄せにしてバランスを改善
+    video.style.objectPosition = resolvedFit === "contain" ? "center 15%" : "center center";
     video.style.borderRadius   = "8px";
   }, []);
 

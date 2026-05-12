@@ -7,6 +7,7 @@ import type { MovieCard } from "@/lib/api/feed";
 interface Props {
   item: MovieCard;
   isFirst: boolean;
+  isSecond?: boolean; // 2番目のアイテムかどうか（先読み用）
 }
 
 const H_PADDING = 4;
@@ -17,6 +18,11 @@ const DBL_TAP_MS = 300;
 const LONG_PRESS_MS = 500;
 const TAP_MOVE_THRESHOLD = 10;
 
+// 再生開始のトリガー閾値：0.5に下げてスマホで早く開始
+const PLAY_THRESHOLD = 0.5;
+// バッファ先読みの閾値：画面に少しでも入ったらload開始
+const PRELOAD_THRESHOLD = 0.1;
+
 const isLandscapeScreen = () => window.innerWidth > window.innerHeight;
 
 type Ripple = { id: number; x: number; y: number; dir: "left" | "right" };
@@ -24,11 +30,12 @@ type Overlay = "pause" | "play" | null;
 
 let globalUserGestured = false;
 
-export default function FeedItem({ item, isFirst }: Props) {
+export default function FeedItem({ item, isFirst, isSecond = false }: Props) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const ctaRef = useRef<HTMLDivElement>(null);
   const sectionRef = useRef<HTMLElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
+  const preloadStartedRef = useRef(false);
 
   const tapTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const tapCountRef = useRef(0);
@@ -144,9 +151,7 @@ export default function FeedItem({ item, isFirst }: Props) {
         await video.play();
         setIsPlaying(true);
         return;
-      } catch {
-        // fall through to muted retry
-      }
+      } catch { /* fall through */ }
     }
 
     video.muted = true;
@@ -160,7 +165,23 @@ export default function FeedItem({ item, isFirst }: Props) {
   useEffect(() => {
     const video = videoRef.current;
     if (!video) return;
-    const observer = new IntersectionObserver(
+
+    // ① PRELOAD用 Observer：画面に10%入ったら即座に load()でバッファ引こ合い開始
+    const preloadObserver = new IntersectionObserver(
+      ([entry]) => {
+        if (entry.isIntersecting && !preloadStartedRef.current) {
+          preloadStartedRef.current = true;
+          if (video.preload === "none") {
+            video.preload = "auto";
+            video.load();
+          }
+        }
+      },
+      { threshold: PRELOAD_THRESHOLD }
+    );
+
+    // ② PLAY用 Observer：50%表示で再生開始
+    const playObserver = new IntersectionObserver(
       ([entry]) => {
         if (entry.isIntersecting) {
           playVideo(video, false);
@@ -169,17 +190,24 @@ export default function FeedItem({ item, isFirst }: Props) {
           video.currentTime = 0;
           video.playbackRate = 1;
           video.muted = true;
+          video.preload = isFirst || isSecond ? "auto" : "none";
+          preloadStartedRef.current = isFirst || isSecond;
           setIsPlaying(false);
           setIsFast(false);
           setIsMuted(true);
           setVideoReady(false);
         }
       },
-      { threshold: 0.7 }
+      { threshold: PLAY_THRESHOLD }
     );
-    observer.observe(video);
-    return () => observer.disconnect();
-  }, [playVideo]);
+
+    preloadObserver.observe(video);
+    playObserver.observe(video);
+    return () => {
+      preloadObserver.disconnect();
+      playObserver.disconnect();
+    };
+  }, [playVideo, isFirst, isSecond]);
 
   useEffect(() => {
     const el = containerRef.current;
@@ -223,7 +251,6 @@ export default function FeedItem({ item, isFirst }: Props) {
     }
   }, [playVideo, showOverlay]);
 
-  /** ミュートバッジ押下：伝播を止めてunmuteのみ行う */
   const handleUnmute = useCallback((e: React.MouseEvent | React.TouchEvent) => {
     e.stopPropagation();
     const video = videoRef.current;
@@ -231,7 +258,6 @@ export default function FeedItem({ item, isFirst }: Props) {
     globalUserGestured = true;
     video.muted = false;
     setIsMuted(false);
-    // 停止中なら再生も開始
     if (video.paused) {
       video.play().catch(() => {});
       setIsPlaying(true);
@@ -347,6 +373,9 @@ export default function FeedItem({ item, isFirst }: Props) {
     }
   }, [fireTogglePlay, fireSkip]);
 
+  // preload 属性: 1番目・2番目は auto、それ以外は none（Observerが自動切り替え）
+  const preloadAttr = isFirst || isSecond ? "auto" : "none";
+
   return (
     <section ref={sectionRef} className="feed-item">
       {item.sample_video_url ? (
@@ -372,7 +401,7 @@ export default function FeedItem({ item, isFirst }: Props) {
             muted
             loop
             playsInline
-            preload={isFirst ? "auto" : "none"}
+            preload={preloadAttr}
             onLoadedMetadata={handleMetadata}
             onCanPlay={() => setVideoReady(true)}
             style={videoStyle}
@@ -409,7 +438,6 @@ export default function FeedItem({ item, isFirst }: Props) {
             <div className="fast-badge" aria-hidden="true">2×</div>
           )}
 
-          {/* ミュートバッジ：stopPropagation で親への伝播を遮断 */}
           {isMuted && isPlaying && (
             <div
               className="mute-badge"

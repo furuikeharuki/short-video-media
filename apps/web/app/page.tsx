@@ -8,7 +8,7 @@ export default async function HomePage() {
     return (
       <main className="empty-state">
         <div className="empty-inner">
-          <p className="empty-icon">🎦</p>
+          <p className="empty-icon">🎬</p>
           <h2>まだ作品がありません</h2>
           <p>しばらくしてから再度ご確認ください。</p>
         </div>
@@ -44,36 +44,40 @@ const feedStyle = `
     padding: 0;
   }
 
-  html,
-  body {
+  html, body {
     background: #000;
     overflow: hidden;
   }
 
-  /* ─── フィードコンテナ ───────────────────── */
+  /* ヘッダー高さはCSS変数で一元管理。
+     globals.cssの --header-h と必ず一致させること */
+  :root { --header-h: 52px; }
+
+  /* フィードコンテナ: 画面全体からヘッダー分を引いた高さ */
   .feed-container {
-    height: 100dvh;
+    height: calc(100dvh - var(--header-h));
     overflow-y: scroll;
     scroll-snap-type: y mandatory;
     -webkit-overflow-scrolling: touch;
+    overscroll-behavior-y: contain;
     scrollbar-width: none;
   }
   .feed-container::-webkit-scrollbar {
     display: none;
   }
 
-  /* ─── 各アイテム ────────────── */
+  /* 各アイテム: 同様にヘッダー分を引いた高さ */
   .feed-item {
     position: relative;
     width: 100%;
-    height: 100dvh;
+    height: calc(100dvh - var(--header-h));
     scroll-snap-align: start;
     scroll-snap-stop: always;
     overflow: hidden;
     background: #111;
   }
 
-  /* ─── 動画プレイヤー ──────────────── */
+  /* 動画プレイヤー */
   .video-bg {
     position: absolute;
     inset: 0;
@@ -85,7 +89,7 @@ const feedStyle = `
     display: block;
   }
 
-  /* ─── サムネイル（動画なしのフォールバック） ── */
+  /* サムネイル（動画なしのフォールバック） */
   .thumbnail-bg {
     position: absolute;
     inset: 0;
@@ -97,12 +101,11 @@ const feedStyle = `
     display: block;
   }
 
-  /* ─── オーバーレイ削除（暗転なし） ────────── */
   .thumbnail-overlay {
     display: none;
   }
 
-  /* ─── 下部オーバーレイ ────────────── */
+  /* 下部オーバーレイ */
   .info-overlay {
     position: absolute;
     bottom: 0;
@@ -113,7 +116,6 @@ const feedStyle = `
     z-index: 10;
   }
 
-  /* ジャンルバッジ */
   .genre-list {
     display: flex;
     flex-wrap: wrap;
@@ -133,7 +135,6 @@ const feedStyle = `
     border-radius: 999px;
   }
 
-  /* タイトル */
   .item-title {
     font-size: clamp(16px, 4vw, 22px);
     font-weight: 700;
@@ -146,14 +147,12 @@ const feedStyle = `
     overflow: hidden;
   }
 
-  /* 女優名 */
   .item-actress {
     font-size: 13px;
     color: rgba(255, 255, 255, 0.75);
     margin-bottom: 16px;
   }
 
-  /* CTAボタン */
   .cta-buttons {
     display: flex;
     gap: 10px;
@@ -189,7 +188,6 @@ const feedStyle = `
     flex: 1;
   }
 
-  /* スクロールヒント */
   .scroll-hint {
     position: absolute;
     bottom: 140px;
@@ -208,7 +206,7 @@ const feedStyle = `
   }
   @keyframes bounce {
     0%, 100% { transform: translateY(0); }
-    50% { transform: translateY(6px); }
+    50%       { transform: translateY(6px); }
   }
 
   @media (prefers-reduced-motion: reduce) {

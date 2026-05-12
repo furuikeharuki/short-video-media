@@ -1,9 +1,9 @@
-import Link from "next/link";
 import { notFound } from "next/navigation";
 import type { Metadata } from "next";
 
 import AffiliateLink from "@/components/analytics/affiliate-link";
 import DetailViewTracker from "@/components/analytics/detail-view-tracker";
+import BackButton from "@/components/BackButton";
 import { getMovieBySlug } from "@/lib/api/movies";
 
 type PageProps = {
@@ -41,12 +41,7 @@ export default async function MovieDetailPage({ params }: PageProps) {
               height={1280}
               loading="eager"
             />
-            <Link href="/" style={styles.backBtn} aria-label="フィードに戻る">
-              <svg width="20" height="20" viewBox="0 0 24 24" fill="none"
-                stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-                <path d="M19 12H5M12 5l-7 7 7 7" />
-              </svg>
-            </Link>
+            <BackButton />
           </div>
 
           <div style={styles.content}>
@@ -106,31 +101,12 @@ const styles: Record<string, React.CSSProperties> = {
   heroImg: {
     position: 'relative',
     zIndex: 1,
-    // 左右30pxずつマージン = calc(100% - 60px)
-    // 縦はアスペクト比自動、画面高さからはみ出ない
     width: 'calc(100% - 60px)' as unknown as string,
     height: 'auto',
     maxHeight: 'calc(85dvh - 60px)' as unknown as string,
     objectFit: 'contain',
     display: 'block',
     borderRadius: '8px',
-  },
-  backBtn: {
-    position: 'absolute',
-    top: '16px',
-    left: '16px',
-    zIndex: 2,
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'center',
-    width: '40px',
-    height: '40px',
-    borderRadius: '50%',
-    background: 'rgba(0,0,0,0.5)',
-    backdropFilter: 'blur(8px)',
-    color: '#fff',
-    textDecoration: 'none',
-    border: '1px solid rgba(255,255,255,0.15)',
   },
   content: {
     padding: '24px 20px 48px',

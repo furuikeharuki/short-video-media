@@ -11,7 +11,7 @@ interface Props {
 
 const H_PADDING = 4;
 const V_PADDING_TOP = 4;
-const V_PADDING_BOTTOM = 16; // ボタン上の余白だけ広め
+const V_PADDING_BOTTOM = 16;
 
 const isLandscapeScreen = () => window.innerWidth > window.innerHeight;
 
@@ -79,6 +79,22 @@ export default function FeedItem({ item, isFirst }: Props) {
     return () => ro.disconnect();
   }, [calcVideoArea]);
 
+  // ハッシュ復元: マウント時に #slug が自分なら即スクロール
+  useEffect(() => {
+    const hash = window.location.hash.slice(1);
+    if (hash !== item.slug) return;
+    const section = sectionRef.current;
+    if (!section) return;
+    // scroll-snap コンテナが親なので requestAnimationFrame で確実に
+    requestAnimationFrame(() => {
+      section.scrollIntoView({ behavior: "instant", block: "start" });
+      // 復元後はハッシュをクリアして次の訪問時に先頭に戻る
+      history.replaceState(null, "", window.location.pathname);
+    });
+  // item.slug は変わらないので初回のみ
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   const handleMetadata = () => {
     const video = videoRef.current;
     const section = sectionRef.current;
@@ -118,6 +134,11 @@ export default function FeedItem({ item, isFirst }: Props) {
     observer.observe(video);
     return () => observer.disconnect();
   }, []);
+
+  // 詳細画面へ遷移する前にハッシュをセット
+  const handleDetailClick = () => {
+    history.replaceState(null, "", `#${item.slug}`);
+  };
 
   return (
     <section ref={sectionRef} className="feed-item">
@@ -164,7 +185,11 @@ export default function FeedItem({ item, isFirst }: Props) {
           <p className="item-actress">👤 {item.actresses.join(" / ")}</p>
         )}
         <div ref={ctaRef} className="cta-buttons">
-          <Link href={`/movies/${item.slug}`} className="btn-detail">
+          <Link
+            href={`/movies/${item.slug}`}
+            className="btn-detail"
+            onClick={handleDetailClick}
+          >
             詳細を見る
           </Link>
           <a

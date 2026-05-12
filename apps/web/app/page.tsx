@@ -36,12 +36,8 @@ export default async function HomePage() {
 }
 
 const feedStyle = `
-  /* ヘッダー高さ共通変数 */
-  :root { --header-h: 52px; }
-
   html {
     background: #000;
-    /* overflowは設定しない：フィードコンテナ内でスクロールする */
   }
   body {
     background: #000;

@@ -87,8 +87,6 @@ export default function FeedItem({ item, isFirst, isSecond = false }: Props) {
   }, []);
 
   // ── 動画エリア計算 ──
-  // section内の cta.top を getBoundingClientRect で取得し、
-  // video を top:V_PADDING_TOP から CTA上端まで塗りつぶす。
 
   const calcVideoArea = useCallback((fit?: "cover" | "contain") => {
     const resolvedFit = fit ?? objectFitRef.current;
@@ -114,8 +112,7 @@ export default function FeedItem({ item, isFirst, isSecond = false }: Props) {
     video.style.width          = `${width}px`;
     video.style.height         = `${height}px`;
     video.style.objectFit      = resolvedFit;
-    // containの場合は上寄せにしてバランスを改善
-    video.style.objectPosition = resolvedFit === "contain" ? "center 15%" : "center center";
+    video.style.objectPosition = resolvedFit === "contain" ? "center 20%" : "center center";
     video.style.borderRadius   = "8px";
   }, []);
 

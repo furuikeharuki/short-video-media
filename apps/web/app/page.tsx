@@ -45,7 +45,6 @@ const feedStyle = `
     height: 100dvh;
   }
 
-  /* フィードコンテナ：ヘッダーの真下から展開、画面いっぱい */
   .feed-container {
     position: fixed;
     top: var(--header-h);
@@ -62,7 +61,6 @@ const feedStyle = `
     display: none;
   }
 
-  /* 各アイテム：100dvh - ヘッダー分を 1画面として使用 */
   .feed-item {
     position: relative;
     width: 100%;
@@ -73,7 +71,6 @@ const feedStyle = `
     background: #000;
   }
 
-  /* 動画プレイヤー */
   .video-bg {
     position: absolute;
     inset: 0;
@@ -85,7 +82,6 @@ const feedStyle = `
     display: block;
   }
 
-  /* サムネイル（動画なしのフォールバック） */
   .thumbnail-bg {
     position: absolute;
     inset: 0;
@@ -101,13 +97,13 @@ const feedStyle = `
     display: none;
   }
 
-  /* 下部オーバーレイ */
+  /* タイトル・タグ・ボタンエリア：bottom を上げて全体を上寄せ */
   .info-overlay {
     position: absolute;
     bottom: 0;
     left: 0;
     right: 0;
-    padding: 0 16px 32px;
+    padding: 0 16px 52px;
     color: #fff;
     z-index: 10;
   }

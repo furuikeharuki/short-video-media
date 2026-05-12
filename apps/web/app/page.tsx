@@ -36,26 +36,26 @@ export default async function HomePage() {
 }
 
 const feedStyle = `
-  *,
-  *::before,
-  *::after {
-    box-sizing: border-box;
-    margin: 0;
-    padding: 0;
-  }
-
-  html, body {
-    background: #000;
-    overflow: hidden;
-  }
-
-  /* ヘッダー高さはCSS変数で一元管理。
-     globals.cssの --header-h と必ず一致させること */
+  /* ヘッダー高さ共通変数 */
   :root { --header-h: 52px; }
 
-  /* フィードコンテナ: 画面全体からヘッダー分を引いた高さ */
+  html {
+    background: #000;
+    /* overflowは設定しない：フィードコンテナ内でスクロールする */
+  }
+  body {
+    background: #000;
+    overflow: hidden;
+    height: 100dvh;
+  }
+
+  /* フィードコンテナ：ヘッダーの真下から展開、画面いっぱい */
   .feed-container {
-    height: calc(100dvh - var(--header-h));
+    position: fixed;
+    top: var(--header-h);
+    left: 0;
+    right: 0;
+    bottom: 0;
     overflow-y: scroll;
     scroll-snap-type: y mandatory;
     -webkit-overflow-scrolling: touch;
@@ -66,7 +66,7 @@ const feedStyle = `
     display: none;
   }
 
-  /* 各アイテム: 同様にヘッダー分を引いた高さ */
+  /* 各アイテム：100dvh - ヘッダー分を 1画面として使用 */
   .feed-item {
     position: relative;
     width: 100%;
@@ -74,7 +74,7 @@ const feedStyle = `
     scroll-snap-align: start;
     scroll-snap-stop: always;
     overflow: hidden;
-    background: #111;
+    background: #000;
   }
 
   /* 動画プレイヤー */
@@ -220,7 +220,7 @@ const emptyStyle = `
     align-items: center;
     justify-content: center;
     height: 100dvh;
-    background: #0a0a0a;
+    background: #000;
     color: #fff;
   }
   .empty-inner {

@@ -106,13 +106,14 @@ const styles: Record<string, React.CSSProperties> = {
   heroImg: {
     position: 'relative',
     zIndex: 1,
-    // PCでは60vw、スマホでは画面幅いっみ。縦はアスペクト比で自動、画面からはみ出ない
-    width: 'min(60vw, 100%)',
+    // 左右30pxずつマージン = calc(100% - 60px)
+    // 縦はアスペクト比自動、画面高さからはみ出ない
+    width: 'calc(100% - 60px)' as unknown as string,
     height: 'auto',
-    maxHeight: '85dvh',
+    maxHeight: 'calc(85dvh - 60px)' as unknown as string,
     objectFit: 'contain',
     display: 'block',
-    borderRadius: '4px',
+    borderRadius: '8px',
   },
   backBtn: {
     position: 'absolute',

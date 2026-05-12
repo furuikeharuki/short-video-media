@@ -4,7 +4,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.models.genre import Genre
 from app.db.models.movie import MovieGenre
-from app.dependencies.db import get_db
+from app.db.session import get_db  # feed.py と同じパス
 
 router = APIRouter(prefix="/tags")
 

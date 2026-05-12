@@ -9,18 +9,21 @@ interface Props {
   isFirst: boolean;
 }
 
-const H_PADDING = 12; // 左右余白 px
-const V_PADDING = 12; // 上下余白 px
+const H_PADDING = 12;
+const V_PADDING = 12;
+
+/** 画面が横長（PC・タブレット横）かどうか */
+const isLandscapeScreen = () => window.innerWidth > window.innerHeight;
 
 export default function FeedItem({ item, isFirst }: Props) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const overlayRef = useRef<HTMLDivElement>(null);
+  const ctaRef = useRef<HTMLDivElement>(null);
   const sectionRef = useRef<HTMLElement>(null);
 
   const [videoReady, setVideoReady] = useState(false);
   const [objectFit, setObjectFit] = useState<"cover" | "contain">("cover");
 
-  // 動画のスタイル初期値: 全画面を占める fallback
   const [videoStyle, setVideoStyle] = useState<React.CSSProperties>({
     position: "absolute",
     inset: 0,
@@ -33,22 +36,22 @@ export default function FeedItem({ item, isFirst }: Props) {
   });
 
   const calcVideoArea = useCallback((fit: "cover" | "contain" = objectFit) => {
-    const overlay = overlayRef.current;
+    const cta = ctaRef.current;
     const section = sectionRef.current;
-    if (!overlay || !section) return;
+    if (!cta || !section) return;
 
-    const overlayH = overlay.offsetHeight;
-    const sectionH = section.offsetHeight; // = 100dvh 実値
+    const ctaH = cta.offsetHeight;
+    const sectionH = section.offsetHeight;
     const sectionW = section.offsetWidth;
 
-    const top = V_PADDING;
-    const bottom = overlayH + V_PADDING;
-    const safeH = sectionH - top - bottom;
+    // ボタンの高さ分だけ下院を避ける。上下左右に少し余白
+    const ctaBottomOffset = ctaH + V_PADDING * 2; // ボタン + 上下余白
+    const safeH = sectionH - V_PADDING - ctaBottomOffset;
     const safeW = sectionW - H_PADDING * 2;
 
     setVideoStyle({
       position: "absolute",
-      top: `${top}px`,
+      top: `${V_PADDING}px`,
       left: `${H_PADDING}px`,
       width: `${safeW}px`,
       height: `${safeH}px`,
@@ -58,39 +61,39 @@ export default function FeedItem({ item, isFirst }: Props) {
       opacity: videoReady ? 1 : 0,
       transition: "opacity 0.3s ease",
     });
-  // videoReady は別途 opacity のみ更新するので依存配列から除外
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [objectFit]);
 
-  // opacity だけ別途更新（calcVideoArea を再実行しない）
   useEffect(() => {
-    setVideoStyle((prev) => ({
-      ...prev,
-      opacity: videoReady ? 1 : 0,
-    }));
+    setVideoStyle((prev) => ({ ...prev, opacity: videoReady ? 1 : 0 }));
   }, [videoReady]);
 
-  // objectFit 変化時に再計算
   useEffect(() => {
     calcVideoArea(objectFit);
   }, [objectFit, calcVideoArea]);
 
-  // overlay 高さ変化を監視
   useEffect(() => {
-    const overlay = overlayRef.current;
-    if (!overlay) return;
+    const cta = ctaRef.current;
+    if (!cta) return;
     const ro = new ResizeObserver(() => calcVideoArea());
-    ro.observe(overlay);
-    // マウント直後に一度計算
+    ro.observe(cta);
     calcVideoArea();
     return () => ro.disconnect();
   }, [calcVideoArea]);
 
-  // メタデータ: 動画 vs 画面の縦横比を比較
   const handleMetadata = () => {
     const video = videoRef.current;
     const section = sectionRef.current;
     if (!video || !section) return;
+
+    // 画面が横長（PC）なら常に contain
+    if (isLandscapeScreen()) {
+      setObjectFit("contain");
+      calcVideoArea("contain");
+      return;
+    }
+
+    // 縦長（スマホ）: 動画 vs 画面の縦横比で判定
     const videoAspect = video.videoWidth / video.videoHeight;
     const screenAspect = section.offsetWidth / section.offsetHeight;
     const fit = videoAspect <= screenAspect ? "cover" : "contain";
@@ -98,7 +101,6 @@ export default function FeedItem({ item, isFirst }: Props) {
     calcVideoArea(fit);
   };
 
-  // IntersectionObserver
   useEffect(() => {
     const video = videoRef.current;
     if (!video) return;
@@ -157,6 +159,7 @@ export default function FeedItem({ item, isFirst }: Props) {
         </div>
       )}
 
+      {/* 下部オーバーレイ（ボタン以外は動画に重なってOK） */}
       <div ref={overlayRef} className="info-overlay">
         <div className="genre-list">
           {item.genres.map((g) => (
@@ -167,7 +170,8 @@ export default function FeedItem({ item, isFirst }: Props) {
         {item.actresses.length > 0 && (
           <p className="item-actress">👤 {item.actresses.join(" / ")}</p>
         )}
-        <div className="cta-buttons">
+        {/* CTAボタンは動画の下に出る */}
+        <div ref={ctaRef} className="cta-buttons">
           <Link href={`/movies/${item.slug}`} className="btn-detail">
             詳細を見る
           </Link>

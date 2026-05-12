@@ -15,13 +15,10 @@ export default function NotFoundPage() {
 
 const styles: Record<string, React.CSSProperties> = {
   main: {
-    position: "fixed" as const,
-    top: "52px",
-    left: 0,
-    right: 0,
-    bottom: 0,
+    minHeight: "100dvh",
+    paddingTop: "calc(52px + 40px)",
     display: "flex",
-    alignItems: "center",
+    alignItems: "flex-start",
     justifyContent: "center",
     background: "#0a0a0a",
     color: "#fff",
@@ -29,7 +26,7 @@ const styles: Record<string, React.CSSProperties> = {
   },
   inner: {
     textAlign: "center" as const,
-    padding: "24px",
+    padding: "0 24px 48px",
   },
   code: {
     fontSize: "72px",
@@ -60,6 +57,5 @@ const styles: Record<string, React.CSSProperties> = {
     fontSize: "15px",
     fontWeight: 700,
     textDecoration: "none",
-    transition: "opacity 0.15s ease",
   },
 };

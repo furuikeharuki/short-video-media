@@ -16,18 +16,14 @@ export default function ErrorPage({ error, reset }: ErrorPageProps) {
   return (
     <main style={styles.main}>
       <div style={styles.inner}>
-        <p style={styles.code}>⚠️</p>
+        <p style={styles.icon}>⚠️</p>
         <h1 style={styles.title}>エラーが発生しました</h1>
         <p style={styles.desc}>ページの表示中に問題が発生しました。</p>
         {error.message && (
           <p style={styles.errorMsg}>{error.message}</p>
         )}
         <div style={styles.actions}>
-          <button
-            type="button"
-            onClick={() => reset()}
-            style={styles.retryBtn}
-          >
+          <button type="button" onClick={() => reset()} style={styles.retryBtn}>
             もう一度試す
           </button>
           <Link href="/" style={styles.homeBtn}>トップに戻る</Link>
@@ -39,13 +35,10 @@ export default function ErrorPage({ error, reset }: ErrorPageProps) {
 
 const styles: Record<string, React.CSSProperties> = {
   main: {
-    position: "fixed" as const,
-    top: "52px",
-    left: 0,
-    right: 0,
-    bottom: 0,
+    minHeight: "100dvh",
+    paddingTop: "calc(52px + 40px)",
     display: "flex",
-    alignItems: "center",
+    alignItems: "flex-start",
     justifyContent: "center",
     background: "#0a0a0a",
     color: "#fff",
@@ -53,11 +46,11 @@ const styles: Record<string, React.CSSProperties> = {
   },
   inner: {
     textAlign: "center" as const,
-    padding: "24px",
+    padding: "0 24px 48px",
     maxWidth: "400px",
     width: "100%",
   },
-  code: {
+  icon: {
     fontSize: "56px",
     lineHeight: 1,
     marginBottom: "16px",
@@ -96,7 +89,6 @@ const styles: Record<string, React.CSSProperties> = {
     fontSize: "15px",
     fontWeight: 700,
     cursor: "pointer",
-    transition: "opacity 0.15s ease",
   },
   homeBtn: {
     display: "inline-block",
@@ -107,6 +99,5 @@ const styles: Record<string, React.CSSProperties> = {
     fontSize: "15px",
     fontWeight: 700,
     textDecoration: "none",
-    transition: "opacity 0.15s ease",
   },
 };

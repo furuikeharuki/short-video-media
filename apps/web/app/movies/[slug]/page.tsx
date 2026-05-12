@@ -32,14 +32,12 @@ export default async function MovieDetailPage({ params }: PageProps) {
           <DetailViewTracker slug={movie.slug} title={movie.title} />
 
           <div style={styles.heroWrap}>
-            {/* 背景: ぼかしblurで黒帯を埋める */}
             <img
               src={movie.thumbnail_url}
               alt=""
               aria-hidden="true"
               style={styles.heroBgBlur}
             />
-            {/* メイン画像: 枚内に収まる */}
             <img
               src={movie.thumbnail_url}
               alt={movie.title}
@@ -104,15 +102,13 @@ const styles: Record<string, React.CSSProperties> = {
   heroWrap: {
     position: 'relative',
     width: '100%',
-    height: '70dvh',
+    height: '80dvh',
     background: '#111',
     overflow: 'hidden',
-    // メイン画像を中央に配置
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'center',
   },
-  // 背景用: 拡大してblur、黒帯を埋める
   heroBgBlur: {
     position: 'absolute',
     inset: 0,
@@ -120,10 +116,9 @@ const styles: Record<string, React.CSSProperties> = {
     height: '100%',
     objectFit: 'cover',
     filter: 'blur(24px) brightness(0.3)',
-    transform: 'scale(1.1)', // blurの縁を隐す
+    transform: 'scale(1.1)',
     display: 'block',
   },
-  // メイン画像: 枚内に収まる
   heroImg: {
     position: 'relative',
     zIndex: 1,

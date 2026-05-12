@@ -51,7 +51,7 @@ export default function FeedItem({ item, isFirst, isSecond = false }: Props) {
   const pcClickCountRef          = useRef(0);
   const pcClickTimerRef          = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  // ── DOM直接操作ヘルパー ────────────────────────────
+  // ── DOM直接操作ヘルパー ──
 
   const setVideoReady = useCallback((ready: boolean) => {
     const video   = videoRef.current;
@@ -86,7 +86,10 @@ export default function FeedItem({ item, isFirst, isSecond = false }: Props) {
     if (el) el.style.display = visible ? "flex" : "none";
   }, []);
 
-  // ── 動画エリア計算（DOM直接操作） ───────────────────
+  // ── 動画エリア計算（垂直中央対応） ──
+  //
+  // 利用可能領域: V_PADDING_TOP 〜 ctaTop - V_PADDING_BOTTOM
+  // 場所: その領域の垃直中央
 
   const calcVideoArea = useCallback((fit?: "cover" | "contain") => {
     const resolvedFit = fit ?? objectFitRef.current;
@@ -101,22 +104,57 @@ export default function FeedItem({ item, isFirst, isSecond = false }: Props) {
       requestAnimationFrame(() => calcVideoArea(resolvedFit));
       return;
     }
+
     const ctaTopInSection = ctaRect.top - sectionRect.top;
-    const top    = V_PADDING_TOP;
-    const height = Math.max(ctaTopInSection - top - V_PADDING_BOTTOM, 0);
-    const width  = section.offsetWidth - H_PADDING * 2;
+    // 利用可能な縦の高さ（上下パディングを除いたエリア）
+    const availableH  = Math.max(ctaTopInSection - V_PADDING_TOP - V_PADDING_BOTTOM, 0);
+    const availableW  = section.offsetWidth - H_PADDING * 2;
+
+    // 動画のアスペクト比から実際の表示サイズを計算（利用可能エリアに収まる単位で最大化）
+    let videoW = availableW;
+    let videoH = availableH;
+    const nativeW = video.videoWidth;
+    const nativeH = video.videoHeight;
+    if (nativeW > 0 && nativeH > 0 && resolvedFit === "contain") {
+      const nativeAspect    = nativeW / nativeH;
+      const availableAspect = availableW / availableH;
+      if (nativeAspect > availableAspect) {
+        // 横長動画: 幅を基準に高さを決める
+        videoW = availableW;
+        videoH = availableW / nativeAspect;
+      } else {
+        // 縦長動画: 高さを基準に幅を決める
+        videoH = availableH;
+        videoW = availableH * nativeAspect;
+      }
+    }
+
+    // 垂直中央の top を計算
+    const centeredTop = V_PADDING_TOP + (availableH - videoH) / 2;
+    const centeredLeft = H_PADDING + (availableW - videoW) / 2;
 
     video.style.position       = "absolute";
-    video.style.top            = `${top}px`;
-    video.style.left           = `${H_PADDING}px`;
-    video.style.width          = `${width}px`;
-    video.style.height         = `${height}px`;
+    video.style.top            = `${Math.round(centeredTop)}px`;
+    video.style.left           = `${Math.round(centeredLeft)}px`;
+    video.style.width          = `${Math.round(videoW)}px`;
+    video.style.height         = `${Math.round(videoH)}px`;
     video.style.objectFit      = resolvedFit;
     video.style.objectPosition = "center center";
     video.style.borderRadius   = "8px";
+
+    // shimmerも垂直中央に連動
+    const shimmer = shimmerRef.current;
+    if (shimmer) {
+      shimmer.style.top    = `${Math.round(centeredTop)}px`;
+      shimmer.style.left   = `${Math.round(centeredLeft)}px`;
+      shimmer.style.width  = `${Math.round(videoW)}px`;
+      shimmer.style.height = `${Math.round(videoH)}px`;
+      shimmer.style.right  = "";
+      shimmer.style.bottom = "";
+    }
   }, []);
 
-  // ── 初期スタイル（SSR対応） ─────────────────────────
+  // ── 初期スタイル ──
 
   useEffect(() => {
     const video = videoRef.current;
@@ -124,7 +162,7 @@ export default function FeedItem({ item, isFirst, isSecond = false }: Props) {
     calcVideoArea();
   }, [calcVideoArea]);
 
-  // ── ResizeObserver ───────────────────────────────
+  // ── ResizeObserver ──
 
   useEffect(() => {
     const cta = ctaRef.current;
@@ -134,7 +172,7 @@ export default function FeedItem({ item, isFirst, isSecond = false }: Props) {
     return () => ro.disconnect();
   }, [calcVideoArea]);
 
-  // ── ハッシュによる初期スクロール ────────────────────
+  // ── ハッシュによる初期スクロール ──
 
   useEffect(() => {
     const hash = window.location.hash.slice(1);
@@ -148,7 +186,7 @@ export default function FeedItem({ item, isFirst, isSecond = false }: Props) {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // ── メタデータ取得後に object-fit 決定 ─────────────
+  // ── メタデータ取得後に object-fit 決定 ──
 
   const handleMetadata = useCallback(() => {
     const video   = videoRef.current;
@@ -166,7 +204,7 @@ export default function FeedItem({ item, isFirst, isSecond = false }: Props) {
     calcVideoArea(fit);
   }, [calcVideoArea]);
 
-  // ── 再生 ─────────────────────────────────────
+  // ── 再生 ──
 
   const playVideo = useCallback(async (video: HTMLVideoElement, withGesture = false) => {
     if (withGesture) globalUserGestured = true;
@@ -191,7 +229,7 @@ export default function FeedItem({ item, isFirst, isSecond = false }: Props) {
     } catch { /* ignore */ }
   }, [setMuteBadge, setPauseBadge]);
 
-  // ── IntersectionObserver（プリロード + 再生/停止） ────
+  // ── IntersectionObserver ──
 
   useEffect(() => {
     const video = videoRef.current;
@@ -226,7 +264,7 @@ export default function FeedItem({ item, isFirst, isSecond = false }: Props) {
     return () => { preloadObserver.disconnect(); playObserver.disconnect(); };
   }, [playVideo, setVideoReady, setPauseBadge, setFastBadge, setMuteBadge, isFirst, isSecond]);
 
-  // ── contextmenu 抑制 ────────────────────────────
+  // ── contextmenu 抑制 ──
 
   useEffect(() => {
     const el = containerRef.current;
@@ -236,7 +274,7 @@ export default function FeedItem({ item, isFirst, isSecond = false }: Props) {
     return () => el.removeEventListener("contextmenu", prevent);
   }, []);
 
-  // ── インタラクション ─────────────────────────────
+  // ── インタラクション ──
 
   const handleDetailClick = () => { history.replaceState(null, "", `#${item.slug}`); };
 
@@ -394,12 +432,17 @@ export default function FeedItem({ item, isFirst, isSecond = false }: Props) {
           onMouseLeave={handleMouseLeaveWithFlag}
           onClick={handlePcClick}
         >
-          {/* shimmer */}
-          <div ref={shimmerRef} className="shimmer" aria-hidden="true">
+          {/* shimmer — calcVideoArea が位置・サイズを後から展開する */}
+          <div
+            ref={shimmerRef}
+            className="shimmer"
+            aria-hidden="true"
+            style={{ position: "absolute", top: `${V_PADDING_TOP}px`, left: `${H_PADDING}px`, width: 0, height: 0 }}
+          >
             <div className="shimmer-inner" />
           </div>
 
-          {/* 動画本体— 初期は場所・サイズ未確定なので寝かせておく。calcVideoArea が下书きする */}
+          {/* 動画本体 — calcVideoArea が垂直中央に配置 */}
           <video
             ref={videoRef}
             src={item.sample_video_url}
@@ -414,7 +457,6 @@ export default function FeedItem({ item, isFirst, isSecond = false }: Props) {
               position: "absolute",
               top: `${V_PADDING_TOP}px`,
               left: `${H_PADDING}px`,
-              /* width/height は calcVideoArea が確定するまで 0 にして果の外に出さない */
               width: 0,
               height: 0,
               objectFit: "cover",
@@ -426,12 +468,7 @@ export default function FeedItem({ item, isFirst, isSecond = false }: Props) {
           />
 
           {/* 一時オーバーレイ */}
-          <div
-            ref={overlayRef}
-            className="action-overlay"
-            aria-hidden="true"
-            style={{ display: "none" }}
-          >
+          <div ref={overlayRef} className="action-overlay" aria-hidden="true" style={{ display: "none" }}>
             <span className="action-icon action-icon--pause" style={{ display: "none" }}>
               <svg width="48" height="48" viewBox="0 0 48 48" fill="none">
                 <rect x="12" y="8" width="10" height="32" rx="2" fill="white"/>
@@ -519,7 +556,6 @@ export default function FeedItem({ item, isFirst, isSecond = false }: Props) {
 }
 
 const itemStyle = `
-  /* video-bg: 枠からはみ出さないよう overflow:hidden */
   .video-bg {
     position: absolute;
     inset: 0;
@@ -527,11 +563,6 @@ const itemStyle = `
   }
 
   .shimmer {
-    position: absolute;
-    top: ${V_PADDING_TOP}px;
-    left: ${H_PADDING}px;
-    right: ${H_PADDING}px;
-    bottom: 0;
     background: #1a1a1a;
     z-index: 1;
     overflow: hidden;

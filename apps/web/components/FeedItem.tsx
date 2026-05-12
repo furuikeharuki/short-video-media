@@ -11,6 +11,7 @@ interface Props {
 }
 
 const H_PADDING = 4;
+const V_PADDING_TOP = 4;
 const V_PADDING_BOTTOM = 16;
 const SKIP_SEC = 5;
 const DBL_TAP_MS = 300;
@@ -86,12 +87,8 @@ export default function FeedItem({ item, isFirst, isSecond = false }: Props) {
   }, []);
 
   // ── 動画エリア計算 ──
-  //
-  // feed-container は position:fixed; top:var(--header-h) なので、
-  // feed-item の top:0 はすでにヘッダー直下。
-  // → areaTop = 0（section内座標でヘッダー分は不要）
-  // → areaBottom = cta.offsetTop - V_PADDING_BOTTOM
-  // → 動画をその範囲の垂直中央に配置する
+  // section内の cta.top を getBoundingClientRect で取得し、
+  // video を top:V_PADDING_TOP から CTA上端まで塗りつぶす。
 
   const calcVideoArea = useCallback((fit?: "cover" | "contain") => {
     const resolvedFit = fit ?? objectFitRef.current;
@@ -100,57 +97,25 @@ export default function FeedItem({ item, isFirst, isSecond = false }: Props) {
     const video   = videoRef.current;
     if (!cta || !section || !video) return;
 
-    // cta.offsetTop が未レイアウト(0)なら次フレームに遅延
-    if (cta.offsetTop === 0) {
+    const sectionRect = section.getBoundingClientRect();
+    const ctaRect     = cta.getBoundingClientRect();
+    if (ctaRect.top === 0 && ctaRect.height === 0) {
       requestAnimationFrame(() => calcVideoArea(resolvedFit));
       return;
     }
-
-    const areaTop    = 0;                                  // section内: 上端
-    const areaBottom = cta.offsetTop - V_PADDING_BOTTOM;  // section内: CTAボタン上端
-    const availableH = Math.max(areaBottom - areaTop, 0);
-    const availableW = section.offsetWidth - H_PADDING * 2;
-
-    // 動画の表示サイズ（contain時はアスペクト比を保持）
-    let videoW = availableW;
-    let videoH = availableH;
-    const nativeW = video.videoWidth;
-    const nativeH = video.videoHeight;
-    if (nativeW > 0 && nativeH > 0 && resolvedFit === "contain") {
-      const nativeAspect    = nativeW / nativeH;
-      const availableAspect = availableW / (availableH || 1);
-      if (nativeAspect > availableAspect) {
-        videoW = availableW;
-        videoH = availableW / nativeAspect;
-      } else {
-        videoH = availableH;
-        videoW = availableH * nativeAspect;
-      }
-    }
-
-    // 垂直中央配置
-    const centerY       = (areaTop + areaBottom) / 2;
-    const topInSection  = Math.round(centerY - videoH / 2);
-    const leftInSection = Math.round(H_PADDING + (availableW - videoW) / 2);
+    const ctaTopInSection = ctaRect.top - sectionRect.top;
+    const top    = V_PADDING_TOP;
+    const height = Math.max(ctaTopInSection - top - V_PADDING_BOTTOM, 0);
+    const width  = section.offsetWidth - H_PADDING * 2;
 
     video.style.position       = "absolute";
-    video.style.top            = `${topInSection}px`;
-    video.style.left           = `${leftInSection}px`;
-    video.style.width          = `${Math.round(videoW)}px`;
-    video.style.height         = `${Math.round(videoH)}px`;
+    video.style.top            = `${top}px`;
+    video.style.left           = `${H_PADDING}px`;
+    video.style.width          = `${width}px`;
+    video.style.height         = `${height}px`;
     video.style.objectFit      = resolvedFit;
     video.style.objectPosition = "center center";
     video.style.borderRadius   = "8px";
-
-    const shimmer = shimmerRef.current;
-    if (shimmer) {
-      shimmer.style.top    = `${topInSection}px`;
-      shimmer.style.left   = `${leftInSection}px`;
-      shimmer.style.width  = `${Math.round(videoW)}px`;
-      shimmer.style.height = `${Math.round(videoH)}px`;
-      shimmer.style.right  = "";
-      shimmer.style.bottom = "";
-    }
   }, []);
 
   // ── 初期化 ──
@@ -429,12 +394,7 @@ export default function FeedItem({ item, isFirst, isSecond = false }: Props) {
           onMouseLeave={handleMouseLeaveWithFlag}
           onClick={handlePcClick}
         >
-          <div
-            ref={shimmerRef}
-            className="shimmer"
-            aria-hidden="true"
-            style={{ position: "absolute", top: 0, left: 0, width: 0, height: 0 }}
-          >
+          <div ref={shimmerRef} className="shimmer" aria-hidden="true">
             <div className="shimmer-inner" />
           </div>
 
@@ -450,15 +410,10 @@ export default function FeedItem({ item, isFirst, isSecond = false }: Props) {
             onCanPlay={() => setVideoReady(true)}
             style={{
               position: "absolute",
-              top: 0,
-              left: 0,
-              width: 0,
-              height: 0,
-              objectFit: "cover",
-              objectPosition: "center center",
-              borderRadius: "8px",
               opacity: 0,
               transition: "opacity 0.3s ease",
+              inset: 0, width: "100%", height: "100%",
+              objectFit: "cover", objectPosition: "center center",
             }}
           />
 
@@ -547,13 +502,12 @@ export default function FeedItem({ item, isFirst, isSecond = false }: Props) {
 }
 
 const itemStyle = `
-  .video-bg {
-    position: absolute;
-    inset: 0;
-    overflow: hidden;
-  }
-
   .shimmer {
+    position: absolute;
+    top: ${V_PADDING_TOP}px;
+    left: ${H_PADDING}px;
+    right: ${H_PADDING}px;
+    bottom: 0;
     background: #1a1a1a;
     z-index: 1;
     overflow: hidden;

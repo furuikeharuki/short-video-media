@@ -73,16 +73,23 @@ export default async function MovieDetailPage({ params }: PageProps) {
 
 const styles: Record<string, React.CSSProperties> = {
   main: {
-    minHeight: '100svh' as unknown as string,
+    // bodyはスクロールさせず、mainで閉じ込めることで fixed Header と競合しない
+    position: 'fixed' as const,
+    top: '52px' as unknown as string,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    overflowY: 'auto' as const,
     background: '#0a0a0a',
     color: '#fff',
     fontFamily: "-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif",
-    // sticky header はドキュメントフローに含まれるため paddingTop 不要
+    WebkitOverflowScrolling: 'touch' as unknown as string,
   },
   heroWrap: {
     position: 'relative',
     width: '100%',
-    height: 'calc(100svh - 52px)' as unknown as string,
+    // 85svh → 55svh に縮小
+    height: '55svh' as unknown as string,
     overflow: 'hidden',
     background: '#111',
     display: 'flex',
@@ -102,9 +109,10 @@ const styles: Record<string, React.CSSProperties> = {
   heroImg: {
     position: 'relative',
     zIndex: 1,
-    width: 'calc(100% - 60px)' as unknown as string,
-    height: 'auto',
-    maxHeight: 'calc(100svh - 112px)' as unknown as string,
+    width: 'auto' as unknown as string,
+    height: '100%',
+    maxWidth: 'calc(100% - 60px)' as unknown as string,
+    maxHeight: 'calc(55svh - 32px)' as unknown as string,
     objectFit: 'contain',
     display: 'block',
     borderRadius: '8px',
@@ -149,6 +157,7 @@ const pageCSS = `
   *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
   html, body {
     background: #0a0a0a !important;
+    overflow: hidden !important;
   }
 
   .affiliate-btn {

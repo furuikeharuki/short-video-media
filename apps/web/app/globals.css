@@ -29,11 +29,7 @@ html, body {
 /* ━━━ ヘッダー ━━━━━━━━━━━━━━━━━━━━━━━━━━━━ */
 
 .site-header {
-  /* fixed → sticky に変更:
-     - body スクロールとの競合がなくなりスクロールジャンクが解消
-     - will-change: transform も削除（iOS Safari での fixed ずれバグ回避）
-  */
-  position: sticky;
+  position: fixed;
   top: 0;
   left: 0;
   right: 0;
@@ -44,6 +40,7 @@ html, body {
   justify-content: space-between;
   padding: 0 14px;
   background: var(--header-bg);
+  /* will-change: transform 削除済み: iOS Safari で fixed ずれバグの原因になるため */
 }
 
 .header-logo {

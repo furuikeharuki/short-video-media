@@ -31,7 +31,6 @@ export default async function MovieDetailPage({ params }: PageProps) {
         <main style={styles.main}>
           <DetailViewTracker slug={movie.slug} title={movie.title} />
 
-          {/* サムネイルヘッダー */}
           <div style={styles.heroWrap}>
             <img
               src={movie.thumbnail_url}
@@ -50,9 +49,7 @@ export default async function MovieDetailPage({ params }: PageProps) {
             </Link>
           </div>
 
-          {/* コンテンツエリア */}
           <div style={styles.content}>
-            {/* ジャンルバッジ */}
             <div style={styles.genreList}>
               {movie.genres.map((g) => (
                 <span key={g} style={styles.badge}>{g}</span>
@@ -65,12 +62,10 @@ export default async function MovieDetailPage({ params }: PageProps) {
               <p style={styles.actress}>👤 {movie.actresses.join(" / ")}</p>
             )}
 
-            {/* 説明 */}
             {movie.description && (
               <p style={styles.description}>{movie.description}</p>
             )}
 
-            {/* CTAボタン */}
             <div style={styles.ctaArea}>
               <AffiliateLink
                 href={movie.affiliate_url}
@@ -185,9 +180,12 @@ const styles: Record<string, React.CSSProperties> = {
 
 const pageCSS = `
   .affiliate-btn {
-    display: block;
+    display: flex;
+    align-items: center;
+    justify-content: center;
     width: 100%;
-    padding: 16px;
+    min-height: 52px;
+    padding: 0 16px;
     background: #e91e63;
     color: #fff;
     font-size: 16px;
@@ -195,8 +193,6 @@ const pageCSS = `
     border-radius: 12px;
     text-align: center;
     text-decoration: none;
-    min-height: 52px;
-    line-height: 1.2;
     transition: opacity 0.15s ease, transform 0.15s ease;
   }
   .affiliate-btn:active {

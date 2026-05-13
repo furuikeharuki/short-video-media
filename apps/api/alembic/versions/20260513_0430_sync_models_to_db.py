@@ -40,22 +40,10 @@ def upgrade() -> None:
                     existing_nullable=True,
                     postgresql_using='volume::integer')
 
-    # --- movies: series_id型修正 Integer -> String ---
-    op.alter_column('movies', 'series_id',
-                    existing_type=sa.INTEGER(),
-                    type_=sa.String(),
-                    existing_nullable=True,
-                    postgresql_using='series_id::text')
+    # --- movies: series_id型変更のためFK制約を先に削除 ---
+    op.drop_constraint('fk_movies_series_id', 'movies', type_='foreignkey')
 
-    # --- movies: インデックス追加 ---
-    op.create_index('ix_movies_primary_date', 'movies', ['primary_date'], unique=False)
-    op.create_index('ix_movies_series_id', 'movies', ['series_id'], unique=False)
-
-    # --- movies: 不要カラム削除 ---
-    op.drop_column('movies', '_sample_video_url_old')
-
-    # --- series: id型修正 Integer -> String ---
-    # seriesはまだデータなしなのでテーブルを再作成
+    # --- seriesを先に再作成（seriesはFK参照先なので先に型を変更する）---
     op.drop_index('ix_series_name', table_name='series')
     op.drop_table('series')
     op.create_table(
@@ -68,6 +56,25 @@ def upgrade() -> None:
     )
     op.create_index('ix_series_fanza_id', 'series', ['fanza_id'], unique=True)
     op.create_index('ix_series_slug', 'series', ['slug'], unique=True)
+
+    # --- movies: series_id型修正 Integer -> String ---
+    op.alter_column('movies', 'series_id',
+                    existing_type=sa.INTEGER(),
+                    type_=sa.String(),
+                    existing_nullable=True,
+                    postgresql_using='series_id::text')
+
+    # --- movies: FK制約を新しいseries(id=String)で再作成 ---
+    op.create_foreign_key(
+        'fk_movies_series_id', 'movies', 'series', ['series_id'], ['id'], ondelete='SET NULL'
+    )
+
+    # --- movies: インデックス追加 ---
+    op.create_index('ix_movies_primary_date', 'movies', ['primary_date'], unique=False)
+    op.create_index('ix_movies_series_id', 'movies', ['series_id'], unique=False)
+
+    # --- movies: 不要カラム削除 ---
+    op.drop_column('movies', '_sample_video_url_old')
 
 
 def downgrade() -> None:

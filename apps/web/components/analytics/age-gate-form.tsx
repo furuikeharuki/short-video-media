@@ -10,18 +10,14 @@ type AgeGateFormProps = {
 export default function AgeGateForm({ nextPath }: AgeGateFormProps) {
   const router = useRouter();
 
-  const handleClick = async () => {
-    // 1. クッキーをセット（ブラウザから直接書き込む）
+  const handleClick = () => {
+    // 1. cookieを即座にセット
     document.cookie = "age_verified=true; path=/; max-age=31536000; SameSite=Lax";
 
-    // 2. アナリティクスイベント（失敗してもリダイレクトは進める）
-    try {
-      await trackEvent("age_gate_pass", { next_path: nextPath });
-    } catch {
-      // ignore
-    }
+    // 2. アナリティクスは fire-and-forget（待たない）
+    void trackEvent("age_gate_pass", { next_path: nextPath });
 
-    // 3. リダイレクト
+    // 3. 即座に遷移
     router.push(nextPath || "/");
   };
 

@@ -2,17 +2,25 @@ import { getFeed } from "@/lib/api/feed";
 import FeedClient from "@/app/FeedClient";
 
 export default async function HomePage() {
+  // SSR時は seed なし（サーバー側で sessionStorage は使えないので created_at 順）
+  // クライアントマウント後に seed を生成してランダム化
   let items: Awaited<ReturnType<typeof getFeed>>["items"] = [];
+  let nextCursor: string | null = null;
   try {
-    const feed = await getFeed();
+    const feed = await getFeed(0, 20);
     items = feed.items;
+    nextCursor = feed.next_cursor;
   } catch {
     items = [];
   }
 
   return (
     <>
-      <FeedClient initialItems={items} />
+      <FeedClient
+        initialItems={items}
+        initialNextCursor={nextCursor}
+        initialSeed={0}
+      />
       <style>{feedStyle}</style>
     </>
   );
@@ -24,22 +32,22 @@ const feedStyle = `
 
   .feed-container {
     position: fixed;
-    top: var(--header-h);
+    top: var(--header-h, 52px);
     left: 0; right: 0; bottom: 0;
-    overflow-y: scroll;
-    scroll-snap-type: y mandatory;
-    -webkit-overflow-scrolling: touch;
-    overscroll-behavior-y: contain;
-    scrollbar-width: none;
+    overflow: hidden;
   }
-  .feed-container::-webkit-scrollbar { display: none; }
+
+  .feed-slide {
+    position: absolute;
+    inset: 0;
+    transition: transform 0.32s cubic-bezier(0.4, 0, 0.2, 1);
+    will-change: transform;
+  }
 
   .feed-item {
     position: relative;
     width: 100%;
-    height: calc(100dvh - var(--header-h));
-    scroll-snap-align: start;
-    scroll-snap-stop: always;
+    height: 100%;
     overflow: hidden;
     background: #000;
   }
@@ -48,7 +56,6 @@ const feedStyle = `
   .video-player { width: 100%; height: 100%; object-fit: cover; display: block; }
   .thumbnail-bg { position: absolute; inset: 0; }
   .thumbnail-img { width: 100%; height: 100%; object-fit: cover; display: block; }
-  .thumbnail-overlay { display: none; }
 
   .info-overlay {
     position: absolute;
@@ -96,6 +103,4 @@ const feedStyle = `
   .empty-icon { font-size: 48px; margin-bottom: 16px; }
   .empty-inner h2 { font-size: 20px; margin-bottom: 8px; }
   .empty-inner p { color: rgba(255,255,255,0.5); font-size: 14px; }
-
-  @media (prefers-reduced-motion: reduce) { .scroll-hint { animation: none; } }
 `;

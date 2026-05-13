@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useCallback, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useCallback, useState } from "react";
 import Link from "next/link";
 import type { MovieCard } from "@/lib/api/feed";
 
@@ -51,10 +51,6 @@ export default function FeedItem({ item, isFirst, isSecond = false }: Props) {
   const pcClickTimerRef          = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const [hintVisible, setHintVisible] = useState(isFirst);
-
-  // video-overlay-wrap の位置をStateで管理し、Reactに描画させる。
-  // Refで後から書き込む方式だと wrap が null のまま applyGeometry が
-  // スキップされるケースがあったため、この方式に変更。
   const [wrapStyle, setWrapStyle] = useState<React.CSSProperties>({
     position: "absolute",
     top: 0, left: 0, width: 0, height: 0,
@@ -119,37 +115,45 @@ export default function FeedItem({ item, isFirst, isSecond = false }: Props) {
       requestAnimationFrame(() => calcVideoArea(resolvedFit));
       return;
     }
+
     const ctaTopInSection = ctaRect.top - sectionRect.top;
     const top    = V_PADDING_TOP;
     const height = Math.max(ctaTopInSection - top - V_PADDING_BOTTOM, 0);
     const width  = section.offsetWidth - H_PADDING * 2;
 
-    // video に直接書き込む（既存の動作を維持）
+    // inset/width/heightの初期値なしの状態から書き込むので競合しない
     video.style.position       = "absolute";
     video.style.top            = `${top}px`;
     video.style.left           = `${H_PADDING}px`;
+    video.style.right          = "";
+    video.style.bottom         = "";
     video.style.width          = `${width}px`;
     video.style.height         = `${height}px`;
     video.style.objectFit      = resolvedFit;
     video.style.objectPosition = resolvedFit === "contain" ? "center 30%" : "center center";
     video.style.borderRadius   = "8px";
 
-    // overlay-wrap は State 経由で React に描画させる
-    // → DOM 構築タイミングに関係なく必ず反映される
-    setWrapStyle({
-      position: "absolute",
-      top,
-      left: H_PADDING,
-      width,
-      height,
-      pointerEvents: "none",
-      zIndex: 25,
-      overflow: "hidden",
-      borderRadius: "8px",
+    setWrapStyle(prev => {
+      // 値が同じなら再レンダーしない
+      if (prev.top === top && prev.left === H_PADDING && prev.width === width && prev.height === height) {
+        return prev;
+      }
+      return {
+        position: "absolute",
+        top,
+        left: H_PADDING,
+        width,
+        height,
+        pointerEvents: "none",
+        zIndex: 25,
+        overflow: "hidden",
+        borderRadius: "8px",
+      };
     });
   }, []);
 
-  useEffect(() => {
+  // useLayoutEffect: DOMペイント前に同期的に実行されるので初回レンダーから正しい位置になる
+  useLayoutEffect(() => {
     calcVideoArea();
   }, [calcVideoArea]);
 
@@ -405,6 +409,7 @@ export default function FeedItem({ item, isFirst, isSecond = false }: Props) {
             <div className="shimmer-inner" />
           </div>
 
+          {/* inset/width/heightの初期値なし。calcVideoAreaが全て設定する */}
           <video
             ref={videoRef}
             src={item.sample_movie_url}
@@ -419,17 +424,10 @@ export default function FeedItem({ item, isFirst, isSecond = false }: Props) {
               position: "absolute",
               opacity: 0,
               transition: "opacity 0.3s ease",
-              inset: 0, width: "100%", height: "100%",
-              objectFit: "cover", objectPosition: "center center",
             }}
           />
 
-          {/*
-            wrapStyle は calcVideoArea() で setWrapStyle() により
-            video と全く同じ top/left/width/height が State 経由でセットされる。
-            内包の overlay/pauseBadge は inset:0 + flex center なので
-            常に動画エリアの完全中央に表示される。
-          */}
+          {/* wrapStyleはReact state経由。calcVideoAreaがvideoと全同値をsetWrapStyleする */}
           <div style={wrapStyle}>
             <div ref={overlayRef} className="action-overlay" aria-hidden="true" style={{ display: "none" }}>
               <span className="action-icon action-icon--pause" style={{ display: "none" }}>

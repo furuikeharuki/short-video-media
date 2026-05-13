@@ -18,7 +18,7 @@ const DBL_TAP_MS = 300;
 const LONG_PRESS_MS = 500;
 const TAP_MOVE_THRESHOLD = 10;
 const PLAY_THRESHOLD = 0.85;
-const PRELOAD_THRESHOLD = 0.01;
+// preloadObserverは峠除→FeedClientのfetch()に一本化（隠しvideoのcanceled問題を修正）
 
 const isLandscapeScreen = () => window.innerWidth > window.innerHeight;
 
@@ -30,7 +30,7 @@ function calcRenderedRect(
   containerH: number,
   videoW: number,
   videoH: number,
-  objectPosition: string, // e.g. "center 30%"
+  objectPosition: string,
 ): { top: number; left: number; width: number; height: number } {
   if (videoW === 0 || videoH === 0) {
     return { top: 0, left: 0, width: containerW, height: containerH };
@@ -41,16 +41,13 @@ function calcRenderedRect(
   let renderedW: number;
   let renderedH: number;
   if (videoAspect < containerAspect) {
-    // 縦いっぱい、横に黒帯
     renderedH = containerH;
     renderedW = renderedH * videoAspect;
   } else {
-    // 横いっぱい、縦に黒帯
     renderedW = containerW;
     renderedH = renderedW / videoAspect;
   }
 
-  // object-position のパース（"center 30%" など）
   const parts = objectPosition.split(" ");
   const parsePos = (val: string, total: number, rendered: number) => {
     if (val === "center") return (total - rendered) / 2;
@@ -80,7 +77,6 @@ export default function FeedItem({ item, isFirst, isSecond = false }: Props) {
   const muteBadgeRef  = useRef<HTMLDivElement>(null);
   const overlayRef    = useRef<HTMLDivElement>(null);
 
-  const preloadStartedRef        = useRef(false);
   const objectFitRef             = useRef<"cover" | "contain">("cover");
   const isPlayingRef             = useRef(false);
   const isMutedRef               = useRef(true);
@@ -97,7 +93,6 @@ export default function FeedItem({ item, isFirst, isSecond = false }: Props) {
 
   const [hintVisible, setHintVisible] = useState(isFirst);
 
-  // overlay wrap: 映像の実際の描画領域に合わせた位置・サイズ
   const [wrapStyle, setWrapStyle] = useState<React.CSSProperties>({
     position: "absolute",
     top: 0, left: 0, width: 0, height: 0,
@@ -170,7 +165,6 @@ export default function FeedItem({ item, isFirst, isSecond = false }: Props) {
 
     const objPosition = resolvedFit === "contain" ? "center 30%" : "center center";
 
-    // video 本体のスタイル
     video.style.position       = "absolute";
     video.style.top            = `${videoTop}px`;
     video.style.left           = `${H_PADDING}px`;
@@ -182,8 +176,6 @@ export default function FeedItem({ item, isFirst, isSecond = false }: Props) {
     video.style.objectPosition = objPosition;
     video.style.borderRadius   = "8px";
 
-    // overlay wrap: contain時は映像の実際の描画領域を計算して配置
-    // cover時はコンテナ全体が映像なので videoTop/videoWidth/videoHeight そのまま
     let wrapTop  = videoTop;
     let wrapLeft = H_PADDING;
     let wrapW    = videoWidth;
@@ -251,7 +243,6 @@ export default function FeedItem({ item, isFirst, isSecond = false }: Props) {
       fit = videoAspect <= screenAspect ? "cover" : "contain";
     }
     objectFitRef.current = fit;
-    // メタデータ取得後に再計算（videoWidth/videoHeightが確定する）
     calcVideoArea(fit);
   }, [calcVideoArea]);
 
@@ -282,13 +273,8 @@ export default function FeedItem({ item, isFirst, isSecond = false }: Props) {
     const video = videoRef.current;
     if (!video) return;
 
-    const preloadObserver = new IntersectionObserver(([entry]) => {
-      if (entry.isIntersecting && !preloadStartedRef.current) {
-        preloadStartedRef.current = true;
-        if (video.preload === "none") { video.preload = "auto"; video.load(); }
-      }
-    }, { threshold: PRELOAD_THRESHOLD });
-
+    // preloadObserverを峠除。プリロードはFeedClientのfetch()が担当する。
+    // playObserverのみ残す。
     const playObserver = new IntersectionObserver(([entry]) => {
       if (entry.isIntersecting) {
         playVideo(video, false);
@@ -306,10 +292,9 @@ export default function FeedItem({ item, isFirst, isSecond = false }: Props) {
       }
     }, { threshold: PLAY_THRESHOLD });
 
-    preloadObserver.observe(video);
     playObserver.observe(video);
-    return () => { preloadObserver.disconnect(); playObserver.disconnect(); };
-  }, [playVideo, setVideoReady, setPauseBadge, setFastBadge, setMuteBadge, isFirst, isSecond]);
+    return () => { playObserver.disconnect(); };
+  }, [playVideo, setVideoReady, setPauseBadge, setFastBadge, setMuteBadge]);
 
   useEffect(() => {
     const el = containerRef.current;
@@ -457,7 +442,9 @@ export default function FeedItem({ item, isFirst, isSecond = false }: Props) {
     }
   }, [fireTogglePlay, fireSkip]);
 
-  const preloadAttr = isFirst || isSecond ? "auto" : "none";
+  // isFirst/isSecondは初期ロード時のpreload属性のみに使用。
+  // プリロードはFeedClientのfetch()が担当するため、ここでは"auto"にしておく。
+  const preloadAttr = isFirst || isSecond ? "auto" : "metadata";
 
   return (
     <section ref={sectionRef} className="feed-item" data-movie-id={item.id}>

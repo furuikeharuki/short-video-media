@@ -1,6 +1,7 @@
+from app.db.models.actress import Actress
 from app.db.models.event import Event
 from app.db.models.genre import Genre
-from app.db.models.movie import Movie, MovieGenre, MoviePerformer
-from app.db.models.performer import Performer
+from app.db.models.movie import Movie, MovieActress, MovieGenre
+from app.db.models.series import Series
 
-__all__ = ["Movie", "Genre", "Performer", "MovieGenre", "MoviePerformer", "Event"]
+__all__ = ["Movie", "Genre", "Actress", "Series", "MovieGenre", "MovieActress", "Event"]

@@ -12,9 +12,9 @@ from sqlalchemy import delete
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from app.core.config import settings
+from app.db.models.actress import Actress
 from app.db.models.genre import Genre
-from app.db.models.movie import Movie, MovieGenre, MoviePerformer
-from app.db.models.performer import Performer
+from app.db.models.movie import Movie, MovieGenre, MovieActress
 
 MOCK_PATH = Path(__file__).parent.parent / "app" / "mock_data" / "movies.json"
 
@@ -22,10 +22,10 @@ MOCK_PATH = Path(__file__).parent.parent / "app" / "mock_data" / "movies.json"
 async def seed(session: AsyncSession) -> None:
     # 既存データを全削除（中間テーブルから先に削除）
     await session.execute(delete(MovieGenre))
-    await session.execute(delete(MoviePerformer))
+    await session.execute(delete(MovieActress))
     await session.execute(delete(Movie))
     await session.execute(delete(Genre))
-    await session.execute(delete(Performer))
+    await session.execute(delete(Actress))
     await session.commit()
     print("🗑️  既存データを削除しました")
 
@@ -33,20 +33,36 @@ async def seed(session: AsyncSession) -> None:
         movies_data: list[dict] = json.load(f)
 
     genre_cache: dict[str, Genre] = {}
-    performer_cache: dict[str, Performer] = {}
+    actress_cache: dict[str, Actress] = {}
 
     for data in movies_data:
         # メインレコード作成
         movie = Movie(
             id=data["id"],
-            fanza_id=data.get("fanza_id"),
+            content_id=data.get("content_id"),
+            product_id=data.get("product_id"),
+            maker_product=data.get("maker_product"),
             title=data["title"],
             slug=data["slug"],
             description=data.get("description", ""),
-            thumbnail_url=data.get("thumbnail_url", ""),
-            sample_video_url=data.get("sample_video_url"),
+            volume=data.get("volume"),
+            image_url_list=data.get("image_url_list", ""),
+            image_url_large=data.get("image_url_large", ""),
+            sample_movie_url=data.get("sample_movie_url"),
             sample_embed_url=data.get("sample_embed_url", ""),
             affiliate_url=data.get("affiliate_url", ""),
+            price_list=data.get("price_list"),
+            price_min=data.get("price_min"),
+            release_date=data.get("release_date"),
+            delivery_date=data.get("delivery_date"),
+            rental_start_date=data.get("rental_start_date"),
+            primary_date=data.get("primary_date"),
+            review_count=data.get("review_count", 0),
+            review_average=data.get("review_average"),
+            director_name=data.get("director_name"),
+            label_name=data.get("label_name"),
+            maker_name=data.get("maker_name"),
+            affiliate_url_en=data.get("affiliate_url_en"),
         )
         session.add(movie)
 
@@ -62,13 +78,13 @@ async def seed(session: AsyncSession) -> None:
 
         # 女優
         for actress_name in data.get("actresses", []):
-            if actress_name not in performer_cache:
-                performer = Performer(name=actress_name)
-                session.add(performer)
-                performer_cache[actress_name] = performer
-            performer = performer_cache[actress_name]
+            if actress_name not in actress_cache:
+                actress = Actress(name=actress_name)
+                session.add(actress)
+                actress_cache[actress_name] = actress
+            actress = actress_cache[actress_name]
             await session.flush()
-            session.add(MoviePerformer(movie_id=movie.id, performer_id=performer.id))
+            session.add(MovieActress(movie_id=movie.id, actress_id=actress.id))
 
     await session.commit()
     print(f"✅ {len(movies_data)}件のデータをシードしました")

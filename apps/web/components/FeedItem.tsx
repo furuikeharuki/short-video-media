@@ -51,7 +51,6 @@ export default function FeedItem({ item, isFirst, isSecond = false }: Props) {
   const pcClickCountRef          = useRef(0);
   const pcClickTimerRef          = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  // scroll-hint 表示制御
   const [hintVisible, setHintVisible] = useState(isFirst);
 
   useEffect(() => {
@@ -62,8 +61,6 @@ export default function FeedItem({ item, isFirst, isSecond = false }: Props) {
     container.addEventListener("scroll", hide, { once: true, passive: true });
     return () => container.removeEventListener("scroll", hide);
   }, [isFirst]);
-
-  // ── DOM直接操作ヘルパー ──
 
   const setVideoReady = useCallback((ready: boolean) => {
     const video   = videoRef.current;
@@ -98,8 +95,6 @@ export default function FeedItem({ item, isFirst, isSecond = false }: Props) {
     if (el) el.style.display = visible ? "flex" : "none";
   }, []);
 
-  // ── 動画エリア計算 ──
-
   const calcVideoArea = useCallback((fit?: "cover" | "contain") => {
     const resolvedFit = fit ?? objectFitRef.current;
     const cta     = ctaRef.current;
@@ -128,13 +123,9 @@ export default function FeedItem({ item, isFirst, isSecond = false }: Props) {
     video.style.borderRadius   = "8px";
   }, []);
 
-  // ── 初期化 ──
-
   useEffect(() => {
     calcVideoArea();
   }, [calcVideoArea]);
-
-  // ── ResizeObserver ──
 
   useEffect(() => {
     const cta = ctaRef.current;
@@ -143,8 +134,6 @@ export default function FeedItem({ item, isFirst, isSecond = false }: Props) {
     ro.observe(cta);
     return () => ro.disconnect();
   }, [calcVideoArea]);
-
-  // ── ハッシュによる初期スクロール ──
 
   useEffect(() => {
     const hash = window.location.hash.slice(1);
@@ -157,8 +146,6 @@ export default function FeedItem({ item, isFirst, isSecond = false }: Props) {
     });
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
-
-  // ── メタデータ取得後に object-fit 決定 ──
 
   const handleMetadata = useCallback(() => {
     const video   = videoRef.current;
@@ -175,8 +162,6 @@ export default function FeedItem({ item, isFirst, isSecond = false }: Props) {
     objectFitRef.current = fit;
     calcVideoArea(fit);
   }, [calcVideoArea]);
-
-  // ── 再生 ──
 
   const playVideo = useCallback(async (video: HTMLVideoElement, withGesture = false) => {
     if (withGesture) globalUserGestured = true;
@@ -200,8 +185,6 @@ export default function FeedItem({ item, isFirst, isSecond = false }: Props) {
       setMuteBadge(true);
     } catch { /* ignore */ }
   }, [setMuteBadge, setPauseBadge]);
-
-  // ── IntersectionObserver ──
 
   useEffect(() => {
     const video = videoRef.current;
@@ -236,8 +219,6 @@ export default function FeedItem({ item, isFirst, isSecond = false }: Props) {
     return () => { preloadObserver.disconnect(); playObserver.disconnect(); };
   }, [playVideo, setVideoReady, setPauseBadge, setFastBadge, setMuteBadge, isFirst, isSecond]);
 
-  // ── contextmenu 抑制 ──
-
   useEffect(() => {
     const el = containerRef.current;
     if (!el) return;
@@ -245,8 +226,6 @@ export default function FeedItem({ item, isFirst, isSecond = false }: Props) {
     el.addEventListener("contextmenu", prevent);
     return () => el.removeEventListener("contextmenu", prevent);
   }, []);
-
-  // ── インタラクション ──
 
   const handleDetailClick = () => { history.replaceState(null, "", `#${item.slug}`); };
 
@@ -391,7 +370,7 @@ export default function FeedItem({ item, isFirst, isSecond = false }: Props) {
   const preloadAttr = isFirst || isSecond ? "auto" : "none";
 
   return (
-    <section ref={sectionRef} className="feed-item">
+    <section ref={sectionRef} className="feed-item" data-movie-id={item.id}>
       {item.sample_video_url ? (
         <div
           ref={containerRef}

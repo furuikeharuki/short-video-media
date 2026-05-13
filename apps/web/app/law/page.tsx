@@ -2,8 +2,8 @@ import Link from "next/link";
 import type { Metadata } from "next";
 
 export const metadata: Metadata = {
-  title: "特定商取引法に基づく表記 | Short Video Media",
-  description: "Short Video Media の特定商取引法に基づく表記ページです。",
+  title: "特定商取引法に基づく表記 | AVShorts",
+  description: "AVShorts の特定商取引法に基づく表記ページです。",
 };
 
 export default function LawPage() {
@@ -15,18 +15,18 @@ export default function LawPage() {
         </nav>
 
         <h1 style={styles.h1}>特定商取引法に基づく表記</h1>
-        <p style={styles.updated}>最終更新日：2026年5月12日</p>
+        <p style={styles.updated}>最終更新日：2026年5月13日</p>
 
         <table style={styles.table}>
           <tbody>
             <Row label="販売業者">
-              <p>Short Video Media 運営者</p>
+              <p>各販売事業者（FANZA等）</p>
             </Row>
             <Row label="所在地">
               <p>東京都</p>
             </Row>
             <Row label="メールアドレス">
-              <p>お問い合わせフォームよりご連絡ください。</p>
+              <a href="mailto:avshorts0512@gmail.com" style={styles.link}>avshorts0512@gmail.com</a>
             </Row>
             <Row label="運営責任者">
               <p>サイト運営者</p>

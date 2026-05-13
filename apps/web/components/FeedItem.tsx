@@ -12,6 +12,7 @@ interface Props {
 
 const H_PADDING = 4;
 const V_PADDING_TOP = 4;
+const V_PADDING_BOTTOM = 16;
 const SKIP_SEC = 5;
 const DBL_TAP_MS = 300;
 const LONG_PRESS_MS = 500;
@@ -24,15 +25,15 @@ const isLandscapeScreen = () => window.innerWidth > window.innerHeight;
 let globalUserGestured = false;
 
 export default function FeedItem({ item, isFirst, isSecond = false }: Props) {
-  const videoRef        = useRef<HTMLVideoElement>(null);
-  const sectionRef      = useRef<HTMLElement>(null);
-  const containerRef    = useRef<HTMLDivElement>(null);
-  const infoOverlayRef  = useRef<HTMLDivElement>(null);
-  const shimmerRef      = useRef<HTMLDivElement>(null);
-  const pauseBadgeRef   = useRef<HTMLDivElement>(null);
-  const fastBadgeRef    = useRef<HTMLDivElement>(null);
-  const muteBadgeRef    = useRef<HTMLDivElement>(null);
-  const overlayRef      = useRef<HTMLDivElement>(null);
+  const videoRef       = useRef<HTMLVideoElement>(null);
+  const ctaRef         = useRef<HTMLDivElement>(null);
+  const sectionRef     = useRef<HTMLElement>(null);
+  const containerRef   = useRef<HTMLDivElement>(null);
+  const shimmerRef     = useRef<HTMLDivElement>(null);
+  const pauseBadgeRef  = useRef<HTMLDivElement>(null);
+  const fastBadgeRef   = useRef<HTMLDivElement>(null);
+  const muteBadgeRef   = useRef<HTMLDivElement>(null);
+  const overlayRef     = useRef<HTMLDivElement>(null);
 
   const preloadStartedRef        = useRef(false);
   const objectFitRef             = useRef<"cover" | "contain">("cover");
@@ -51,20 +52,6 @@ export default function FeedItem({ item, isFirst, isSecond = false }: Props) {
   const pcClickTimerRef          = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const [hintVisible, setHintVisible] = useState(isFirst);
-
-  // info-overlay の高さを --info-h として section に書き込む
-  useEffect(() => {
-    const info = infoOverlayRef.current;
-    const section = sectionRef.current;
-    if (!info || !section) return;
-    const update = () => {
-      section.style.setProperty("--info-h", `${info.offsetHeight}px`);
-    };
-    update();
-    const ro = new ResizeObserver(update);
-    ro.observe(info);
-    return () => ro.disconnect();
-  }, []);
 
   useEffect(() => {
     if (!isFirst) return;
@@ -108,13 +95,45 @@ export default function FeedItem({ item, isFirst, isSecond = false }: Props) {
     if (el) el.style.display = visible ? "flex" : "none";
   }, []);
 
-  const applyObjectFit = useCallback((fit: "cover" | "contain") => {
-    objectFitRef.current = fit;
-    const video = videoRef.current;
-    if (!video) return;
-    video.style.objectFit = fit;
-    video.style.objectPosition = fit === "contain" ? "center 30%" : "center center";
+  const calcVideoArea = useCallback((fit?: "cover" | "contain") => {
+    const resolvedFit = fit ?? objectFitRef.current;
+    const cta     = ctaRef.current;
+    const section = sectionRef.current;
+    const video   = videoRef.current;
+    if (!cta || !section || !video) return;
+
+    const sectionRect = section.getBoundingClientRect();
+    const ctaRect     = cta.getBoundingClientRect();
+    if (ctaRect.top === 0 && ctaRect.height === 0) {
+      requestAnimationFrame(() => calcVideoArea(resolvedFit));
+      return;
+    }
+    const ctaTopInSection = ctaRect.top - sectionRect.top;
+    const top    = V_PADDING_TOP;
+    const height = Math.max(ctaTopInSection - top - V_PADDING_BOTTOM, 0);
+    const width  = section.offsetWidth - H_PADDING * 2;
+
+    video.style.position       = "absolute";
+    video.style.top            = `${top}px`;
+    video.style.left           = `${H_PADDING}px`;
+    video.style.width          = `${width}px`;
+    video.style.height         = `${height}px`;
+    video.style.objectFit      = resolvedFit;
+    video.style.objectPosition = resolvedFit === "contain" ? "center 30%" : "center center";
+    video.style.borderRadius   = "8px";
   }, []);
+
+  useEffect(() => {
+    calcVideoArea();
+  }, [calcVideoArea]);
+
+  useEffect(() => {
+    const cta = ctaRef.current;
+    if (!cta) return;
+    const ro = new ResizeObserver(() => calcVideoArea());
+    ro.observe(cta);
+    return () => ro.disconnect();
+  }, [calcVideoArea]);
 
   const handleMetadata = useCallback(() => {
     const video   = videoRef.current;
@@ -128,8 +147,9 @@ export default function FeedItem({ item, isFirst, isSecond = false }: Props) {
       const screenAspect = section.offsetWidth / section.offsetHeight;
       fit = videoAspect <= screenAspect ? "cover" : "contain";
     }
-    applyObjectFit(fit);
-  }, [applyObjectFit]);
+    objectFitRef.current = fit;
+    calcVideoArea(fit);
+  }, [calcVideoArea]);
 
   const playVideo = useCallback(async (video: HTMLVideoElement, withGesture = false) => {
     if (withGesture) globalUserGestured = true;
@@ -208,7 +228,7 @@ export default function FeedItem({ item, isFirst, isSecond = false }: Props) {
     ripple.className = "skip-ripple";
     ripple.style.left = `${clientX - rect.left}px`;
     ripple.style.top  = `${clientY - rect.top}px`;
-    ripple.innerHTML  = `<span class="skip-icon">${isLeft ? "« -5s" : "+5s »"}</span>`;
+    ripple.innerHTML  = `<span class="skip-icon">${isLeft ? "\u00ab -5s" : "+5s \u00bb"}</span>`;
     containerRef.current?.appendChild(ripple);
     setTimeout(() => ripple.remove(), 700);
   }, []);
@@ -363,31 +383,34 @@ export default function FeedItem({ item, isFirst, isSecond = false }: Props) {
             onLoadedMetadata={handleMetadata}
             onLoadedData={() => setVideoReady(true)}
             onCanPlay={() => setVideoReady(true)}
-            className="feed-video"
-            style={{ opacity: 0 }}
+            style={{
+              position: "absolute",
+              opacity: 0,
+              transition: "opacity 0.3s ease",
+              inset: 0, width: "100%", height: "100%",
+              objectFit: "cover", objectPosition: "center center",
+            }}
           />
 
-          <div className="video-area-overlay">
-            <div ref={overlayRef} className="action-overlay" aria-hidden="true" style={{ display: "none" }}>
-              <span className="action-icon action-icon--pause" style={{ display: "none" }}>
-                <svg width="48" height="48" viewBox="0 0 48 48" fill="none">
-                  <rect x="12" y="8" width="10" height="32" rx="2" fill="white"/>
-                  <rect x="26" y="8" width="10" height="32" rx="2" fill="white"/>
-                </svg>
-              </span>
-              <span className="action-icon action-icon--play" style={{ display: "none" }}>
-                <svg width="48" height="48" viewBox="0 0 48 48" fill="none">
-                  <path d="M14 8L40 24L14 40V8Z" fill="white"/>
-                </svg>
-              </span>
-            </div>
-
-            <div ref={pauseBadgeRef} className="pause-badge" aria-hidden="true" style={{ display: "none" }}>
-              <svg width="40" height="40" viewBox="0 0 48 48" fill="none">
+          <div ref={overlayRef} className="action-overlay" aria-hidden="true" style={{ display: "none" }}>
+            <span className="action-icon action-icon--pause" style={{ display: "none" }}>
+              <svg width="48" height="48" viewBox="0 0 48 48" fill="none">
                 <rect x="12" y="8" width="10" height="32" rx="2" fill="white"/>
                 <rect x="26" y="8" width="10" height="32" rx="2" fill="white"/>
               </svg>
-            </div>
+            </span>
+            <span className="action-icon action-icon--play" style={{ display: "none" }}>
+              <svg width="48" height="48" viewBox="0 0 48 48" fill="none">
+                <path d="M14 8L40 24L14 40V8Z" fill="white"/>
+              </svg>
+            </span>
+          </div>
+
+          <div ref={pauseBadgeRef} className="pause-badge" aria-hidden="true" style={{ display: "none" }}>
+            <svg width="40" height="40" viewBox="0 0 48 48" fill="none">
+              <rect x="12" y="8" width="10" height="32" rx="2" fill="white"/>
+              <rect x="26" y="8" width="10" height="32" rx="2" fill="white"/>
+            </svg>
           </div>
 
           <div ref={fastBadgeRef} className="fast-badge" aria-hidden="true" style={{ display: "none" }}>2×</div>
@@ -395,7 +418,7 @@ export default function FeedItem({ item, isFirst, isSecond = false }: Props) {
           <div
             ref={muteBadgeRef}
             className="mute-badge"
-            aria-label="タップしてミュート解除"
+            aria-label="\u30bf\u30c3\u30d7\u3057\u3066\u30df\u30e5\u30fc\u30c8\u89e3\u9664"
             role="button"
             style={{ display: "none" }}
             onTouchStart={(e) => e.stopPropagation()}
@@ -407,7 +430,7 @@ export default function FeedItem({ item, isFirst, isSecond = false }: Props) {
               <line x1="23" y1="9" x2="17" y2="15" stroke="white" strokeWidth="2.2" strokeLinecap="round"/>
               <line x1="17" y1="9" x2="23" y2="15" stroke="white" strokeWidth="2.2" strokeLinecap="round"/>
             </svg>
-            <span className="mute-label">タップで音声ON</span>
+            <span className="mute-label">\u30bf\u30c3\u30d7\u3067\u97f3\u58f0ON</span>
           </div>
         </div>
       ) : (
@@ -423,28 +446,28 @@ export default function FeedItem({ item, isFirst, isSecond = false }: Props) {
         </div>
       )}
 
-      <div ref={infoOverlayRef} className="info-overlay">
+      <div className="info-overlay">
         <div className="genre-list">
           {item.genres.map((g) => <span key={g} className="genre-badge">{g}</span>)}
         </div>
         <h2 className="item-title">{item.title}</h2>
         {item.actresses.length > 0 && (
-          <p className="item-actress">👤 {item.actresses.join(" / ")}</p>
+          <p className="item-actress">\ud83d\udc64 {item.actresses.join(" / ")}</p>
         )}
-        <div className="cta-buttons">
+        <div ref={ctaRef} className="cta-buttons">
           <Link href={`/movies/${item.slug}`} className="btn-detail" prefetch={false}>
-            詳細を見る
+            \u8a73\u7d30\u3092\u898b\u308b
           </Link>
           <a href={item.affiliate_url} target="_blank" rel="noopener noreferrer" className="btn-buy">
-            購入する →
+            \u8cfc\u5165\u3059\u308b \u2192
           </a>
         </div>
       </div>
 
       {isFirst && (
         <div className={`scroll-hint${hintVisible ? "" : " scroll-hint--hidden"}`} aria-hidden="true">
-          <span>スワイプ</span>
-          <span className="scroll-arrow">↓</span>
+          <span>\u30b9\u30ef\u30a4\u30d7</span>
+          <span className="scroll-arrow">\u2193</span>
         </div>
       )}
 
@@ -454,29 +477,12 @@ export default function FeedItem({ item, isFirst, isSecond = false }: Props) {
 }
 
 const itemStyle = `
-  /*
-   * .feed-video は position:absolute + top/left/right/bottom で領域を確定。
-   * width/height/min-width は一切指定しない（指定すると left/right と競合してはみ出す）。
-   * object-fit: cover で領域を満たす。
-   */
-  .feed-video {
-    position: absolute;
-    top: ${V_PADDING_TOP}px;
-    left: ${H_PADDING}px;
-    right: ${H_PADDING}px;
-    bottom: calc(var(--info-h, 160px) + 8px);
-    object-fit: cover;
-    object-position: center center;
-    border-radius: 8px;
-    transition: opacity 0.3s ease;
-  }
-
   .shimmer {
     position: absolute;
     top: ${V_PADDING_TOP}px;
     left: ${H_PADDING}px;
     right: ${H_PADDING}px;
-    bottom: calc(var(--info-h, 160px) + 8px);
+    bottom: 0;
     background: #1a1a1a;
     z-index: 1;
     overflow: hidden;
@@ -508,25 +514,12 @@ const itemStyle = `
     touch-action: pan-y;
   }
 
-  .video-area-overlay {
-    position: absolute;
-    top: ${V_PADDING_TOP}px;
-    left: ${H_PADDING}px;
-    right: ${H_PADDING}px;
-    bottom: calc(var(--info-h, 160px) + 8px);
-    pointer-events: none;
-    z-index: 25;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-  }
-
   .action-overlay {
     position: absolute;
     inset: 0;
-    display: flex;
     align-items: center;
     justify-content: center;
+    z-index: 25;
     pointer-events: none;
     animation: overlay-pop 0.65s ease-out forwards;
   }
@@ -546,13 +539,15 @@ const itemStyle = `
 
   .pause-badge {
     position: absolute;
-    inset: 0;
-    display: flex;
-    align-items: center;
-    justify-content: center;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
     opacity: 0.7;
     pointer-events: none;
+    z-index: 20;
     filter: drop-shadow(0 2px 6px rgba(0,0,0,0.6));
+    align-items: center;
+    justify-content: center;
   }
 
   .fast-badge {
@@ -582,7 +577,6 @@ const itemStyle = `
     padding: 8px 14px 8px 10px;
     z-index: 20;
     cursor: pointer;
-    display: flex;
     align-items: center;
     gap: 6px;
     backdrop-filter: blur(8px);

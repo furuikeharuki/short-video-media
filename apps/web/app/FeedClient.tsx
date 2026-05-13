@@ -8,6 +8,7 @@ import type { MovieCard } from "@/lib/api/feed";
 
 const WINDOW_SIZE    = 2;
 const PREFETCH_AHEAD = 8;
+const PRELOAD_AHEAD  = 2; // 現在地より先に隠しvideoでプリロードする枚数
 
 export default function FeedClient() {
   const allItemsRef    = useRef<MovieCard[]>([]);
@@ -22,12 +23,23 @@ export default function FeedClient() {
   const [windowItems, setWindowItems]   = useState<MovieCard[]>([]);
   const windowStartRef = useRef(0);
 
+  // 2枚先までのプリロード用URL一覧
+  const [preloadUrls, setPreloadUrls] = useState<string[]>([]);
+
   const updateWindow = useCallback((idx: number) => {
     const all   = allItemsRef.current;
     const start = Math.max(0, idx - WINDOW_SIZE);
     const end   = Math.min(all.length, idx + WINDOW_SIZE + 1);
     windowStartRef.current = start;
     setWindowItems(all.slice(start, end));
+
+    // 2枚先までのURLをプリロード対象に設定
+    const urls: string[] = [];
+    for (let i = 1; i <= PRELOAD_AHEAD; i++) {
+      const ahead = all[idx + i];
+      if (ahead?.sample_movie_url) urls.push(ahead.sample_movie_url);
+    }
+    setPreloadUrls(urls);
   }, []);
 
   const fetchMore = useCallback(async (overrideCursor?: string, overrideSeed?: number) => {
@@ -153,6 +165,20 @@ export default function FeedClient() {
           );
         })
       )}
+
+      {/* 2枚先まで隠しvideoでプリロード。display:noneだとブラウザが無視するためvisibility:hiddenで */}
+      {preloadUrls.map((url) => (
+        <video
+          key={url}
+          src={url}
+          preload="auto"
+          muted
+          playsInline
+          style={{ position: "absolute", width: 1, height: 1, opacity: 0, pointerEvents: "none", zIndex: -1 }}
+          aria-hidden="true"
+        />
+      ))}
+
       <style>{spinnerStyle}</style>
     </div>
   );

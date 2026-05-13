@@ -83,9 +83,7 @@ export default function HamburgerMenu() {
         aria-modal="true"
         style={{
           position: "fixed",
-          top: 0,
-          right: 0,
-          bottom: 0,
+          top: 0, right: 0, bottom: 0,
           width: "min(280px, 80vw)",
           background: "#111",
           zIndex: 100,
@@ -97,14 +95,14 @@ export default function HamburgerMenu() {
           borderLeft: "1px solid rgba(255,255,255,0.08)",
         }}
       >
-        {/* ドロワー内ロゴ */}
+        {/* ドロワー内ロゴ：var(--accent)で購入ボタンと同色に展開 */}
         <div style={{
           padding: "20px 24px 8px",
           borderBottom: "1px solid rgba(255,255,255,0.08)",
           marginBottom: "4px",
         }}>
           <span style={{ fontSize: "18px", fontWeight: 800, letterSpacing: "-0.02em" }}>
-            <span style={{ color: "#e91e63" }}>AV</span>
+            <span style={{ color: "var(--accent)" }}>AV</span>
             <span style={{ color: "#fff" }}> Shorts</span>
           </span>
         </div>

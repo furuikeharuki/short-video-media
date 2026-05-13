@@ -10,6 +10,22 @@ export default function MovieModal({ movie }: { movie: MovieDetail }) {
   const router = useRouter();
   const scrollRef = useRef<HTMLDivElement>(null);
 
+  // モーダル開く時にフィード動画を一時停止、閉じる時に再生
+  useEffect(() => {
+    const videos = Array.from(
+      document.querySelectorAll<HTMLVideoElement>(".feed-item video")
+    );
+    const wasPlaying = videos.map((v) => !v.paused);
+
+    videos.forEach((v) => v.pause());
+
+    return () => {
+      videos.forEach((v, i) => {
+        if (wasPlaying[i]) v.play().catch(() => {});
+      });
+    };
+  }, []);
+
   // body スクロールロック（モーダル表示中）
   useEffect(() => {
     const prev = document.body.style.overflow;
@@ -109,7 +125,7 @@ const backdropStyle: React.CSSProperties = {
 
 const modalStyle: React.CSSProperties = {
   position: "fixed",
-  top: "52px",   // --header-h と合わせる
+  top: "52px",
   left: 0,
   right: 0,
   bottom: 0,

@@ -25,16 +25,17 @@ const isLandscapeScreen = () => window.innerWidth > window.innerHeight;
 let globalUserGestured = false;
 
 export default function FeedItem({ item, isFirst, isSecond = false }: Props) {
-  const videoRef          = useRef<HTMLVideoElement>(null);
-  const ctaRef            = useRef<HTMLDivElement>(null);
-  const sectionRef        = useRef<HTMLElement>(null);
-  const containerRef      = useRef<HTMLDivElement>(null);
-  const shimmerRef        = useRef<HTMLDivElement>(null);
-  const pauseBadgeRef     = useRef<HTMLDivElement>(null);
-  const fastBadgeRef      = useRef<HTMLDivElement>(null);
-  const muteBadgeRef      = useRef<HTMLDivElement>(null);
-  const overlayRef        = useRef<HTMLDivElement>(null);
-  const videoOverlayRef   = useRef<HTMLDivElement>(null);
+  const videoRef       = useRef<HTMLVideoElement>(null);
+  const ctaRef         = useRef<HTMLDivElement>(null);
+  const sectionRef     = useRef<HTMLElement>(null);
+  const containerRef   = useRef<HTMLDivElement>(null);
+  const shimmerRef     = useRef<HTMLDivElement>(null);
+  const pauseBadgeRef  = useRef<HTMLDivElement>(null);
+  const fastBadgeRef   = useRef<HTMLDivElement>(null);
+  const muteBadgeRef   = useRef<HTMLDivElement>(null);
+  const overlayRef     = useRef<HTMLDivElement>(null);
+  // videoと山のコンテナ。動画エリアと完全に同じサイズになるようJSで同時書き込む
+  const videoWrapRef   = useRef<HTMLDivElement>(null);
 
   const preloadStartedRef        = useRef(false);
   const objectFitRef             = useRef<"cover" | "contain">("cover");
@@ -96,12 +97,17 @@ export default function FeedItem({ item, isFirst, isSecond = false }: Props) {
     if (el) el.style.display = visible ? "flex" : "none";
   }, []);
 
+  /**
+   * videoと videoWrap(オーバーレイコンテナ)に全く同じ値を書き込む。
+   * オーバーレイの中身は inset:0 + flexセンタリングなので、
+   * 親サイズが動画と一致すれば常に完全中央になる。
+   */
   const calcVideoArea = useCallback((fit?: "cover" | "contain") => {
     const resolvedFit = fit ?? objectFitRef.current;
     const cta     = ctaRef.current;
     const section = sectionRef.current;
     const video   = videoRef.current;
-    const overlay = videoOverlayRef.current;
+    const wrap    = videoWrapRef.current;
     if (!cta || !section || !video) return;
 
     const sectionRect = section.getBoundingClientRect();
@@ -115,24 +121,20 @@ export default function FeedItem({ item, isFirst, isSecond = false }: Props) {
     const height = Math.max(ctaTopInSection - top - V_PADDING_BOTTOM, 0);
     const width  = section.offsetWidth - H_PADDING * 2;
 
-    // videoのスタイルを設定
-    video.style.position       = "absolute";
-    video.style.top            = `${top}px`;
-    video.style.left           = `${H_PADDING}px`;
-    video.style.width          = `${width}px`;
-    video.style.height         = `${height}px`;
+    const applyGeometry = (el: HTMLElement) => {
+      el.style.position     = "absolute";
+      el.style.top          = `${top}px`;
+      el.style.left         = `${H_PADDING}px`;
+      el.style.width        = `${width}px`;
+      el.style.height       = `${height}px`;
+      el.style.borderRadius = "8px";
+    };
+
+    applyGeometry(video);
     video.style.objectFit      = resolvedFit;
     video.style.objectPosition = resolvedFit === "contain" ? "center 30%" : "center center";
-    video.style.borderRadius   = "8px";
 
-    // video-area-overlayにも全く同じtop/left/width/heightを直接JSで設定。
-    // CSS変数経由にしないのでブラウザのレイアウトタイミングに左右されず常に絶対一致する。
-    if (overlay) {
-      overlay.style.top    = `${top}px`;
-      overlay.style.left   = `${H_PADDING}px`;
-      overlay.style.width  = `${width}px`;
-      overlay.style.height = `${height}px`;
-    }
+    if (wrap) applyGeometry(wrap);
   }, []);
 
   useEffect(() => {
@@ -411,15 +413,12 @@ export default function FeedItem({ item, isFirst, isSecond = false }: Props) {
           />
 
           {/*
-            video-area-overlay: videoと全く同じtop/left/width/heightを
-            calcVideoArea()からJSで直接設定する。
-            初期値は非表示なので位置ズレは発生しない。
+            videoWrap: videoと全く同じ top/left/width/height を
+            calcVideoArea()でJSから同時書き込む。
+            内包の overlay/pauseBadge は inset:0 + flexセンタリングなので
+            親サイズ内で常に完全中央になる。
           */}
-          <div
-            ref={videoOverlayRef}
-            className="video-area-overlay"
-            style={{ position: "absolute", top: 0, left: 0, width: 0, height: 0 }}
-          >
+          <div ref={videoWrapRef} className="video-overlay-wrap">
             <div ref={overlayRef} className="action-overlay" aria-hidden="true" style={{ display: "none" }}>
               <span className="action-icon action-icon--pause" style={{ display: "none" }}>
                 <svg width="48" height="48" viewBox="0 0 48 48" fill="none">
@@ -543,15 +542,18 @@ const itemStyle = `
     touch-action: pan-y;
   }
 
-  /* video-area-overlay: top/left/width/heightはJSから直接設定。
-     内包要素は inset:0 の flexセンタリングに依存する */
-  .video-area-overlay {
+  /*
+    video-overlay-wrap:
+    calcVideoArea() で video と全く同じ top/left/width/height をJSから書き込む。
+    内包の action-overlay / pause-badge は
+    position:absolute + inset:0 + flexセンタリングで必ず親の中央に来る。
+  */
+  .video-overlay-wrap {
     position: absolute;
     pointer-events: none;
     z-index: 25;
-    display: flex;
-    align-items: center;
-    justify-content: center;
+    overflow: hidden;
+    border-radius: 8px;
   }
 
   .action-overlay {

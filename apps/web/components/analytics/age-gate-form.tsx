@@ -10,14 +10,23 @@ type AgeGateFormProps = {
 export default function AgeGateForm({ nextPath }: AgeGateFormProps) {
   const router = useRouter();
 
-  const handleClick = () => {
-    // 1. cookieを即座にセット
-    document.cookie = "age_verified=true; path=/; max-age=31536000; SameSite=Lax";
+  const handleClick = async () => {
+    // 1. APIルート経由で httpOnly cookie をセットする
+    //    → 次のリクエストから middleware が認証済みと判定できる
+    try {
+      await fetch("/api/age-gate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ nextPath }),
+      });
+    } catch {
+      // ネットワークエラーでも遷移させる
+    }
 
-    // 2. アナリティクスは fire-and-forget（待たない）
+    // 2. アナリティクス fire-and-forget
     void trackEvent("age_gate_pass", { next_path: nextPath });
 
-    // 3. 即座に遷移
+    // 3. 遷移
     router.push(nextPath || "/");
   };
 

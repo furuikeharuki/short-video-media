@@ -18,7 +18,7 @@ const DBL_TAP_MS = 300;
 const LONG_PRESS_MS = 500;
 const TAP_MOVE_THRESHOLD = 10;
 const PLAY_THRESHOLD = 0.85;
-// preloadObserverは峠除→FeedClientのfetch()に一本化（隠しvideoのcanceled問題を修正）
+// preloadObserverは廃除→FeedClientのfetch()に一本化（隠しvideoのcanceled問題を修正）
 
 const isLandscapeScreen = () => window.innerWidth > window.innerHeight;
 
@@ -273,8 +273,6 @@ export default function FeedItem({ item, isFirst, isSecond = false }: Props) {
     const video = videoRef.current;
     if (!video) return;
 
-    // preloadObserverを峠除。プリロードはFeedClientのfetch()が担当する。
-    // playObserverのみ残す。
     const playObserver = new IntersectionObserver(([entry]) => {
       if (entry.isIntersecting) {
         playVideo(video, false);
@@ -442,8 +440,6 @@ export default function FeedItem({ item, isFirst, isSecond = false }: Props) {
     }
   }, [fireTogglePlay, fireSkip]);
 
-  // isFirst/isSecondは初期ロード時のpreload属性のみに使用。
-  // プリロードはFeedClientのfetch()が担当するため、ここでは"auto"にしておく。
   const preloadAttr = isFirst || isSecond ? "auto" : "metadata";
 
   return (
@@ -546,7 +542,7 @@ export default function FeedItem({ item, isFirst, isSecond = false }: Props) {
           <p className="item-actress">👤 {item.actresses.join(" / ")}</p>
         )}
         <div ref={ctaRef} className="cta-buttons">
-          <Link href={`/movies/${item.slug}`} className="btn-detail" prefetch={false}>
+          <Link href={`/movies/${item.slug}`} className="btn-detail">
             詳細を見る
           </Link>
           <a href={item.affiliate_url} target="_blank" rel="noopener noreferrer" className="btn-buy">

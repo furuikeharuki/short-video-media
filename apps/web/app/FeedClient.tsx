@@ -8,7 +8,27 @@ import type { MovieCard } from "@/lib/api/feed";
 
 const WINDOW_SIZE    = 2;
 const PREFETCH_AHEAD = 8;
-const PRELOAD_AHEAD  = 2; // 現在地より先に隠しvideoでプリロードする枚数
+const PRELOAD_AHEAD  = 2;   // 先読み枚数
+const PRELOAD_BYTES  = 2 * 1024 * 1024; // 最初の2MBのみRange取得
+
+// ブラウザのHTTPキャッシュに載せるためfetchでプリロード
+// AbortControllerでキャンセルできるが、キャッシュは残るので次回再生時に即返り
+// CORSngの場合はno-corsでキャッシュに載せる（レスポンスは読めないがキャッシュは有効）
+const preloadCache = new Set<string>();
+
+function prefetchVideo(url: string, abortSignal: AbortSignal) {
+  if (preloadCache.has(url)) return;
+  preloadCache.add(url);
+  fetch(url, {
+    method: "GET",
+    headers: { Range: `bytes=0-${PRELOAD_BYTES - 1}` },
+    signal: abortSignal,
+    // credentialsなし・CORSエラーでも無視
+  }).catch(() => {
+    // CORSやキャンセルは無視。キャッシュへの書き込みはブラウザが行う
+    preloadCache.delete(url);
+  });
+}
 
 export default function FeedClient() {
   const allItemsRef    = useRef<MovieCard[]>([]);
@@ -18,13 +38,11 @@ export default function FeedClient() {
   const currentIdxRef  = useRef(0);
   const wheelLockRef   = useRef(false);
   const containerRef   = useRef<HTMLDivElement>(null);
+  const preloadAbortRef = useRef<AbortController | null>(null);
 
   const [currentIndex, setCurrentIndex] = useState(0);
   const [windowItems, setWindowItems]   = useState<MovieCard[]>([]);
   const windowStartRef = useRef(0);
-
-  // 2枚先までのプリロード用URL一覧
-  const [preloadUrls, setPreloadUrls] = useState<string[]>([]);
 
   const updateWindow = useCallback((idx: number) => {
     const all   = allItemsRef.current;
@@ -33,13 +51,17 @@ export default function FeedClient() {
     windowStartRef.current = start;
     setWindowItems(all.slice(start, end));
 
-    // 2枚先までのURLをプリロード対象に設定
-    const urls: string[] = [];
+    // 前のプリロードをキャンセルして新しいセットを開始
+    preloadAbortRef.current?.abort();
+    const controller = new AbortController();
+    preloadAbortRef.current = controller;
+
     for (let i = 1; i <= PRELOAD_AHEAD; i++) {
       const ahead = all[idx + i];
-      if (ahead?.sample_movie_url) urls.push(ahead.sample_movie_url);
+      if (ahead?.sample_movie_url) {
+        prefetchVideo(ahead.sample_movie_url, controller.signal);
+      }
     }
-    setPreloadUrls(urls);
   }, []);
 
   const fetchMore = useCallback(async (overrideCursor?: string, overrideSeed?: number) => {
@@ -165,20 +187,6 @@ export default function FeedClient() {
           );
         })
       )}
-
-      {/* 2枚先まで隠しvideoでプリロード。display:noneだとブラウザが無視するためvisibility:hiddenで */}
-      {preloadUrls.map((url) => (
-        <video
-          key={url}
-          src={url}
-          preload="auto"
-          muted
-          playsInline
-          style={{ position: "absolute", width: 1, height: 1, opacity: 0, pointerEvents: "none", zIndex: -1 }}
-          aria-hidden="true"
-        />
-      ))}
-
       <style>{spinnerStyle}</style>
     </div>
   );

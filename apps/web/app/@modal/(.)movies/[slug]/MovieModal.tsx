@@ -168,7 +168,7 @@ const modalStyle: React.CSSProperties = {
   display: "flex",
   flexDirection: "column",
   fontFamily: "-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif",
-  animation: "modal-slide-up 0.28s cubic-bezier(0.4,0,0.2,1) both",
+  // animation を削除: loading.tsx のスライドを引き継ぐため再アニメーション不要
 };
 
 const scrollStyle: React.CSSProperties = {
@@ -339,10 +339,6 @@ const ctaStyle: React.CSSProperties = {
 };
 
 const modalCSS = `
-  @keyframes modal-slide-up {
-    from { transform: translateY(100%); opacity: 0.6; }
-    to   { transform: translateY(0);    opacity: 1; }
-  }
   .affiliate-btn {
     display: flex;
     align-items: center;

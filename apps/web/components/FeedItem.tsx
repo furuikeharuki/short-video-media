@@ -25,15 +25,16 @@ const isLandscapeScreen = () => window.innerWidth > window.innerHeight;
 let globalUserGestured = false;
 
 export default function FeedItem({ item, isFirst, isSecond = false }: Props) {
-  const videoRef       = useRef<HTMLVideoElement>(null);
-  const ctaRef         = useRef<HTMLDivElement>(null);
-  const sectionRef     = useRef<HTMLElement>(null);
-  const containerRef   = useRef<HTMLDivElement>(null);
-  const shimmerRef     = useRef<HTMLDivElement>(null);
-  const pauseBadgeRef  = useRef<HTMLDivElement>(null);
-  const fastBadgeRef   = useRef<HTMLDivElement>(null);
-  const muteBadgeRef   = useRef<HTMLDivElement>(null);
-  const overlayRef     = useRef<HTMLDivElement>(null);
+  const videoRef          = useRef<HTMLVideoElement>(null);
+  const ctaRef            = useRef<HTMLDivElement>(null);
+  const sectionRef        = useRef<HTMLElement>(null);
+  const containerRef      = useRef<HTMLDivElement>(null);
+  const shimmerRef        = useRef<HTMLDivElement>(null);
+  const pauseBadgeRef     = useRef<HTMLDivElement>(null);
+  const fastBadgeRef      = useRef<HTMLDivElement>(null);
+  const muteBadgeRef      = useRef<HTMLDivElement>(null);
+  const overlayRef        = useRef<HTMLDivElement>(null);
+  const videoOverlayRef   = useRef<HTMLDivElement>(null);
 
   const preloadStartedRef        = useRef(false);
   const objectFitRef             = useRef<"cover" | "contain">("cover");
@@ -95,29 +96,12 @@ export default function FeedItem({ item, isFirst, isSecond = false }: Props) {
     if (el) el.style.display = visible ? "flex" : "none";
   }, []);
 
-  /**
-   * video要素の getBoundingClientRect を基準に
-   * --video-top / --video-height を書き込む。
-   * containerRef(親) の座標系に変換して設定するため、
-   * info-overlayの高さやページ構成の変化に一切影響されない。
-   */
-  const applyVideoAreaVars = useCallback(() => {
-    const video     = videoRef.current;
-    const container = containerRef.current;
-    if (!video || !container) return;
-    const videoRect     = video.getBoundingClientRect();
-    const containerRect = container.getBoundingClientRect();
-    const top    = videoRect.top    - containerRect.top;
-    const height = videoRect.height;
-    container.style.setProperty("--video-top",    `${top}px`);
-    container.style.setProperty("--video-height", `${height}px`);
-  }, []);
-
   const calcVideoArea = useCallback((fit?: "cover" | "contain") => {
     const resolvedFit = fit ?? objectFitRef.current;
     const cta     = ctaRef.current;
     const section = sectionRef.current;
     const video   = videoRef.current;
+    const overlay = videoOverlayRef.current;
     if (!cta || !section || !video) return;
 
     const sectionRect = section.getBoundingClientRect();
@@ -131,6 +115,7 @@ export default function FeedItem({ item, isFirst, isSecond = false }: Props) {
     const height = Math.max(ctaTopInSection - top - V_PADDING_BOTTOM, 0);
     const width  = section.offsetWidth - H_PADDING * 2;
 
+    // videoのスタイルを設定
     video.style.position       = "absolute";
     video.style.top            = `${top}px`;
     video.style.left           = `${H_PADDING}px`;
@@ -140,15 +125,20 @@ export default function FeedItem({ item, isFirst, isSecond = false }: Props) {
     video.style.objectPosition = resolvedFit === "contain" ? "center 30%" : "center center";
     video.style.borderRadius   = "8px";
 
-    // videoの実際のRectからCSS変数を書き込む（次のrAFでレイアウト反映後に読む）
-    requestAnimationFrame(() => applyVideoAreaVars());
-  }, [applyVideoAreaVars]);
+    // video-area-overlayにも全く同じtop/left/width/heightを直接JSで設定。
+    // CSS変数経由にしないのでブラウザのレイアウトタイミングに左右されず常に絶対一致する。
+    if (overlay) {
+      overlay.style.top    = `${top}px`;
+      overlay.style.left   = `${H_PADDING}px`;
+      overlay.style.width  = `${width}px`;
+      overlay.style.height = `${height}px`;
+    }
+  }, []);
 
   useEffect(() => {
     calcVideoArea();
   }, [calcVideoArea]);
 
-  // CTAの高さ変化を監視
   useEffect(() => {
     const cta = ctaRef.current;
     if (!cta) return;
@@ -157,7 +147,6 @@ export default function FeedItem({ item, isFirst, isSecond = false }: Props) {
     return () => ro.disconnect();
   }, [calcVideoArea]);
 
-  // ウィンドウリサイズ時（スマホのアドレスバー表示/非表示・画面回転）に再計算
   useEffect(() => {
     const onResize = () => calcVideoArea();
     window.addEventListener("resize", onResize, { passive: true });
@@ -410,7 +399,7 @@ export default function FeedItem({ item, isFirst, isSecond = false }: Props) {
             playsInline
             preload={preloadAttr}
             onLoadedMetadata={handleMetadata}
-            onLoadedData={() => { setVideoReady(true); requestAnimationFrame(() => applyVideoAreaVars()); }}
+            onLoadedData={() => setVideoReady(true)}
             onCanPlay={() => setVideoReady(true)}
             style={{
               position: "absolute",
@@ -421,8 +410,16 @@ export default function FeedItem({ item, isFirst, isSecond = false }: Props) {
             }}
           />
 
-          {/* オーバーレイ群はすべて video-area-overlay でラップし、動画エリア中央に配置 */}
-          <div className="video-area-overlay">
+          {/*
+            video-area-overlay: videoと全く同じtop/left/width/heightを
+            calcVideoArea()からJSで直接設定する。
+            初期値は非表示なので位置ズレは発生しない。
+          */}
+          <div
+            ref={videoOverlayRef}
+            className="video-area-overlay"
+            style={{ position: "absolute", top: 0, left: 0, width: 0, height: 0 }}
+          >
             <div ref={overlayRef} className="action-overlay" aria-hidden="true" style={{ display: "none" }}>
               <span className="action-icon action-icon--pause" style={{ display: "none" }}>
                 <svg width="48" height="48" viewBox="0 0 48 48" fill="none">
@@ -546,16 +543,10 @@ const itemStyle = `
     touch-action: pan-y;
   }
 
-  /* 動画エリアに重なる共通ラッパー。
-     CSS変数 --video-top / --video-height は applyVideoAreaVars() で
-     video要素の getBoundingClientRect から直接計算し注入する。
-     info-overlayの高さ・DVHの変動に依存しない。 */
+  /* video-area-overlay: top/left/width/heightはJSから直接設定。
+     内包要素は inset:0 の flexセンタリングに依存する */
   .video-area-overlay {
     position: absolute;
-    left: ${H_PADDING}px;
-    right: ${H_PADDING}px;
-    top: var(--video-top, ${V_PADDING_TOP}px);
-    height: var(--video-height, 60%);
     pointer-events: none;
     z-index: 25;
     display: flex;

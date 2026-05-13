@@ -119,7 +119,7 @@ export default function FeedItem({ item, isFirst, isSecond = false }: Props) {
     video.style.width          = `${width}px`;
     video.style.height         = `${height}px`;
     video.style.objectFit      = resolvedFit;
-    video.style.objectPosition = resolvedFit === "contain" ? "center 40%" : "center center";
+    video.style.objectPosition = resolvedFit === "contain" ? "center 30%" : "center center";
     video.style.borderRadius   = "8px";
   }, []);
 

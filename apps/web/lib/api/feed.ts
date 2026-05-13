@@ -1,13 +1,26 @@
+export type PriceList = {
+  list_price: number | null;
+  sale_price: number | null;
+  rental_price: number | null;
+  delivery_price: number | null;
+};
+
 export type MovieCard = {
   id: string;
+  content_id: string | null;
   title: string;
   slug: string;
-  thumbnail_url: string;
-  sample_video_url?: string | null;
-  sample_embed_url: string;
+  image_url_list: string | null;
+  image_url_large: string | null;
+  sample_movie_url: string | null;
+  affiliate_url: string;
+  price_list: PriceList | null;
+  price_min: number | null;
+  review_count: number;
+  review_average: number | null;
   actresses: string[];
   genres: string[];
-  affiliate_url: string;
+  series_name: string | null;
 };
 
 export type FeedResponse = {

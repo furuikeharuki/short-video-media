@@ -82,7 +82,7 @@ async def seed(session: AsyncSession) -> None:
         session.add(movie)
 
         # ジャンル
-        for genre_name in data.get("genres", []):
+        for genre_name in (data.get("genres") or []):
             if genre_name not in genre_cache:
                 genre = Genre(name=genre_name)
                 session.add(genre)
@@ -92,7 +92,7 @@ async def seed(session: AsyncSession) -> None:
             session.add(MovieGenre(movie_id=movie.id, genre_id=genre.id))
 
         # 女優
-        for actress_name in data.get("actresses", []):
+        for actress_name in (data.get("actresses") or []):
             if actress_name not in actress_cache:
                 actress = Actress(name=actress_name)
                 session.add(actress)

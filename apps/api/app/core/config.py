@@ -9,7 +9,17 @@ class Settings(BaseSettings):
     )
 
     DATABASE_URL: str = "postgresql+asyncpg://postgres:postgres@localhost:5432/short_video_media"
-    REDIS_URL: str | None = None  # 未設定時は Redis なしでフォールバック
+    REDIS_URL: str | None = None
+
+    @property
+    def async_database_url(self) -> str:
+        """Railway 等が返す postgresql:// を強制的に asyncpg ダイアレクトに変換"""
+        url = self.DATABASE_URL
+        if url.startswith("postgres://"):
+            url = url.replace("postgres://", "postgresql+asyncpg://", 1)
+        elif url.startswith("postgresql://"):
+            url = url.replace("postgresql://", "postgresql+asyncpg://", 1)
+        return url
 
 
 settings = Settings()

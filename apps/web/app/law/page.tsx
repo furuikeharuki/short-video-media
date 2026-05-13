@@ -23,10 +23,7 @@ export default function LawPage() {
               <p>Short Video Media 運営者</p>
             </Row>
             <Row label="所在地">
-              <p>お問い合わせいただいた方に遅滞なく開示します。</p>
-            </Row>
-            <Row label="電話番号">
-              <p>お問い合わせいただいた方に遅滞なく開示します。</p>
+              <p>東京都</p>
             </Row>
             <Row label="メールアドレス">
               <p>お問い合わせフォームよりご連絡ください。</p>

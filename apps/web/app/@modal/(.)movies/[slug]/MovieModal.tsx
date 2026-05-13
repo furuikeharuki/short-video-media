@@ -6,6 +6,15 @@ import AffiliateLink from "@/components/analytics/affiliate-link";
 import DetailViewTracker from "@/components/analytics/detail-view-tracker";
 import type { MovieDetail } from "@/lib/api/movies";
 
+const NA = "----";
+
+function formatDate(dateStr: string | null): string {
+  if (!dateStr) return NA;
+  const d = new Date(dateStr);
+  if (isNaN(d.getTime())) return NA;
+  return `${d.getFullYear()}年${d.getMonth() + 1}月${d.getDate()}日`;
+}
+
 export default function MovieModal({ movie }: { movie: MovieDetail }) {
   const router = useRouter();
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -40,6 +49,18 @@ export default function MovieModal({ movie }: { movie: MovieDetail }) {
   const imgSrc = movie.image_url_large ?? movie.image_url_list ?? "";
   const price = movie.price_list?.sale_price ?? movie.price_list?.list_price ?? movie.price_min;
   const hasReview = movie.review_count > 0 && movie.review_average != null;
+
+  const metaRows: { label: string; value: React.ReactNode }[] = [
+    { label: "出演",      value: movie.actresses.length > 0 ? movie.actresses.join(" / ") : NA },
+    { label: "シリーズ",  value: movie.series_name ?? NA },
+    { label: "監督",      value: movie.director ?? NA },
+    { label: "メーカー",  value: movie.maker ?? NA },
+    { label: "レーベル",  value: movie.label ?? NA },
+    { label: "収録時間",  value: movie.duration != null ? `${movie.duration}分` : NA },
+    { label: "配信開始日", value: formatDate(movie.delivery_date) },
+    { label: "商品発売日", value: formatDate(movie.release_date) },
+    { label: "品番",      value: movie.content_id ?? NA },
+  ];
 
   return (
     <>
@@ -85,49 +106,32 @@ export default function MovieModal({ movie }: { movie: MovieDetail }) {
             {/* タイトル */}
             <h1 style={titleStyle}>{movie.title}</h1>
 
-            {/* メタ情報エリア */}
-            <div style={metaAreaStyle}>
-              {/* 女優 */}
-              {movie.actresses.length > 0 && (
-                <div style={metaRowStyle}>
-                  <span style={metaLabelStyle}>出演</span>
-                  <span style={metaValueStyle}>{movie.actresses.join(" / ")}</span>
-                </div>
-              )}
-
-              {/* シリーズ */}
-              {movie.series_name && (
-                <div style={metaRowStyle}>
-                  <span style={metaLabelStyle}>シリーズ</span>
-                  <span style={metaValueStyle}>{movie.series_name}</span>
-                </div>
-              )}
-
-              {/* レビュー */}
+            {/* 評価・価格 */}
+            <div style={scoreAreaStyle}>
               {hasReview && (
-                <div style={metaRowStyle}>
-                  <span style={metaLabelStyle}>評価</span>
-                  <span style={metaValueStyle}>
-                    <span style={starsStyle}>
-                      {"★".repeat(Math.round(movie.review_average!))}
-                      {"☆".repeat(5 - Math.round(movie.review_average!))}
-                    </span>
-                    <span style={reviewNumStyle}>
-                      {movie.review_average!.toFixed(1)} ({movie.review_count}件)
-                    </span>
+                <div style={scoreItemStyle}>
+                  <span style={starsStyle}>
+                    {"★".repeat(Math.round(movie.review_average!))}
+                    {"☆".repeat(5 - Math.round(movie.review_average!))}
+                  </span>
+                  <span style={reviewNumStyle}>
+                    {movie.review_average!.toFixed(1)} ({movie.review_count}件)
                   </span>
                 </div>
               )}
-
-              {/* 価格 */}
               {price != null && (
-                <div style={metaRowStyle}>
-                  <span style={metaLabelStyle}>価格</span>
-                  <span style={{ ...metaValueStyle, color: "#e91e63", fontWeight: 700 }}>
-                    ¥{price.toLocaleString()}
-                  </span>
-                </div>
+                <div style={priceStyle}>¥{price.toLocaleString()}</div>
               )}
+            </div>
+
+            {/* メタ情報テーブル */}
+            <div style={metaTableStyle}>
+              {metaRows.map(({ label, value }) => (
+                <div key={label} style={metaRowStyle}>
+                  <span style={metaLabelStyle}>{label}</span>
+                  <span style={metaValueStyle}>{value}</span>
+                </div>
+              ))}
             </div>
 
             {/* 説明文 */}
@@ -264,43 +268,21 @@ const titleStyle: React.CSSProperties = {
   fontSize: "clamp(18px, 5vw, 26px)",
   fontWeight: 700,
   lineHeight: 1.35,
-  marginBottom: "16px",
+  marginBottom: "12px",
   color: "#fff",
 };
 
-const metaAreaStyle: React.CSSProperties = {
+const scoreAreaStyle: React.CSSProperties = {
   display: "flex",
-  flexDirection: "column",
-  gap: "10px",
+  alignItems: "center",
+  gap: "16px",
   marginBottom: "20px",
-  paddingBottom: "20px",
-  borderBottom: "1px solid rgba(255,255,255,0.08)",
 };
 
-const metaRowStyle: React.CSSProperties = {
-  display: "flex",
-  alignItems: "flex-start",
-  gap: "10px",
-};
-
-const metaLabelStyle: React.CSSProperties = {
-  fontSize: "11px",
-  fontWeight: 600,
-  color: "rgba(255,255,255,0.35)",
-  letterSpacing: "0.06em",
-  minWidth: "52px",
-  paddingTop: "2px",
-  flexShrink: 0,
-};
-
-const metaValueStyle: React.CSSProperties = {
-  fontSize: "13px",
-  color: "rgba(255,255,255,0.75)",
-  lineHeight: 1.5,
+const scoreItemStyle: React.CSSProperties = {
   display: "flex",
   alignItems: "center",
   gap: "6px",
-  flexWrap: "wrap",
 };
 
 const starsStyle: React.CSSProperties = {
@@ -312,6 +294,45 @@ const starsStyle: React.CSSProperties = {
 const reviewNumStyle: React.CSSProperties = {
   fontSize: "12px",
   color: "rgba(255,255,255,0.45)",
+};
+
+const priceStyle: React.CSSProperties = {
+  fontSize: "16px",
+  fontWeight: 700,
+  color: "#e91e63",
+};
+
+const metaTableStyle: React.CSSProperties = {
+  display: "flex",
+  flexDirection: "column",
+  gap: "0",
+  marginBottom: "24px",
+  borderTop: "1px solid rgba(255,255,255,0.08)",
+};
+
+const metaRowStyle: React.CSSProperties = {
+  display: "flex",
+  alignItems: "flex-start",
+  gap: "12px",
+  padding: "10px 0",
+  borderBottom: "1px solid rgba(255,255,255,0.06)",
+};
+
+const metaLabelStyle: React.CSSProperties = {
+  fontSize: "11px",
+  fontWeight: 600,
+  color: "rgba(255,255,255,0.35)",
+  letterSpacing: "0.06em",
+  minWidth: "64px",
+  paddingTop: "1px",
+  flexShrink: 0,
+};
+
+const metaValueStyle: React.CSSProperties = {
+  fontSize: "13px",
+  color: "rgba(255,255,255,0.75)",
+  lineHeight: 1.6,
+  wordBreak: "break-all",
 };
 
 const descStyle: React.CSSProperties = {

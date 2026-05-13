@@ -18,10 +18,17 @@ if config.config_file_name is not None:
 target_metadata = Base.metadata
 
 
-def run_migrations_offline() -> None:
+def _get_async_url() -> str:
+    """postgresql:// を postgresql+asyncpg:// に正規化する。"""
     url = settings.DATABASE_URL
+    if url.startswith("postgresql://"):
+        url = url.replace("postgresql://", "postgresql+asyncpg://", 1)
+    return url
+
+
+def run_migrations_offline() -> None:
     context.configure(
-        url=url,
+        url=_get_async_url(),
         target_metadata=target_metadata,
         literal_binds=True,
         dialect_opts={"paramstyle": "named"},
@@ -37,7 +44,7 @@ def do_run_migrations(connection):
 
 
 async def run_migrations_online() -> None:
-    connectable = create_async_engine(settings.DATABASE_URL)
+    connectable = create_async_engine(_get_async_url())
     async with connectable.connect() as connection:
         await connection.run_sync(do_run_migrations)
     await connectable.dispose()

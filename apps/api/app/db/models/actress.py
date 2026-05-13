@@ -8,7 +8,7 @@ class Actress(Base):
     __tablename__ = "actresses"
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
-    fanza_id: Mapped[str | None] = mapped_column(String, unique=True, index=True)  # FANZAのactress_id
+    content_id: Mapped[str | None] = mapped_column(String, unique=True, index=True)  # FANZAのactress_id
     name: Mapped[str] = mapped_column(String, nullable=False, index=True)
     slug: Mapped[str | None] = mapped_column(String, unique=True, index=True)
     thumbnail_url: Mapped[str | None] = mapped_column(String)

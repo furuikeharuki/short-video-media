@@ -95,11 +95,21 @@ export default function FeedItem({ item, isFirst, isSecond = false }: Props) {
     if (el) el.style.display = visible ? "flex" : "none";
   }, []);
 
-  // 動画エリアのtop/heightをCSS変数として親コンテナに書き込む
-  const applyVideoAreaVars = useCallback((top: number, height: number) => {
+  /**
+   * video要素の getBoundingClientRect を基準に
+   * --video-top / --video-height を書き込む。
+   * containerRef(親) の座標系に変換して設定するため、
+   * info-overlayの高さやページ構成の変化に一切影響されない。
+   */
+  const applyVideoAreaVars = useCallback(() => {
+    const video     = videoRef.current;
     const container = containerRef.current;
-    if (!container) return;
-    container.style.setProperty("--video-top", `${top}px`);
+    if (!video || !container) return;
+    const videoRect     = video.getBoundingClientRect();
+    const containerRect = container.getBoundingClientRect();
+    const top    = videoRect.top    - containerRect.top;
+    const height = videoRect.height;
+    container.style.setProperty("--video-top",    `${top}px`);
     container.style.setProperty("--video-height", `${height}px`);
   }, []);
 
@@ -130,15 +140,15 @@ export default function FeedItem({ item, isFirst, isSecond = false }: Props) {
     video.style.objectPosition = resolvedFit === "contain" ? "center 30%" : "center center";
     video.style.borderRadius   = "8px";
 
-    // オーバーレイ位置をCSS変数で同期
-    applyVideoAreaVars(top, height);
+    // videoの実際のRectからCSS変数を書き込む（次のrAFでレイアウト反映後に読む）
+    requestAnimationFrame(() => applyVideoAreaVars());
   }, [applyVideoAreaVars]);
 
   useEffect(() => {
     calcVideoArea();
   }, [calcVideoArea]);
 
-  // CTAの高さ変化を監視（既存）
+  // CTAの高さ変化を監視
   useEffect(() => {
     const cta = ctaRef.current;
     if (!cta) return;
@@ -148,7 +158,6 @@ export default function FeedItem({ item, isFirst, isSecond = false }: Props) {
   }, [calcVideoArea]);
 
   // ウィンドウリサイズ時（スマホのアドレスバー表示/非表示・画面回転）に再計算
-  // 動画スタイルには触れず、--video-top / --video-height のCSS変数のみ更新する
   useEffect(() => {
     const onResize = () => calcVideoArea();
     window.addEventListener("resize", onResize, { passive: true });
@@ -401,7 +410,7 @@ export default function FeedItem({ item, isFirst, isSecond = false }: Props) {
             playsInline
             preload={preloadAttr}
             onLoadedMetadata={handleMetadata}
-            onLoadedData={() => setVideoReady(true)}
+            onLoadedData={() => { setVideoReady(true); requestAnimationFrame(() => applyVideoAreaVars()); }}
             onCanPlay={() => setVideoReady(true)}
             style={{
               position: "absolute",
@@ -538,7 +547,9 @@ const itemStyle = `
   }
 
   /* 動画エリアに重なる共通ラッパー。
-     CSS変数 --video-top / --video-height は calcVideoArea() でJSから注入される */
+     CSS変数 --video-top / --video-height は applyVideoAreaVars() で
+     video要素の getBoundingClientRect から直接計算し注入する。
+     info-overlayの高さ・DVHの変動に依存しない。 */
   .video-area-overlay {
     position: absolute;
     left: ${H_PADDING}px;

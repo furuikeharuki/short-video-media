@@ -15,8 +15,8 @@ export default function ContactPage() {
 
         <div style={styles.card}>
           <p style={styles.cardLabel}>メールアドレス</p>
-          <a href="mailto:contact@shortvid.example.com" style={styles.email}>
-            contact@shortvid.example.com
+          <a href="mailto:avshorts0512@gmail.com" style={styles.email}>
+            avshorts0512@gmail.com
           </a>
         </div>
 

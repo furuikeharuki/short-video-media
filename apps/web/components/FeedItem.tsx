@@ -25,23 +25,20 @@ const isLandscapeScreen = () => window.innerWidth > window.innerHeight;
 let globalUserGestured = false;
 
 export default function FeedItem({ item, isFirst, isSecond = false }: Props) {
-  const videoRef       = useRef<HTMLVideoElement>(null);
-  const ctaRef         = useRef<HTMLDivElement>(null);
-  const sectionRef     = useRef<HTMLElement>(null);
-  const containerRef   = useRef<HTMLDivElement>(null);
-  const shimmerRef     = useRef<HTMLDivElement>(null);
-  const pauseBadgeRef  = useRef<HTMLDivElement>(null);
-  const fastBadgeRef   = useRef<HTMLDivElement>(null);
-  const muteBadgeRef   = useRef<HTMLDivElement>(null);
-  const overlayRef     = useRef<HTMLDivElement>(null);
-  // videoと山のコンテナ。動画エリアと完全に同じサイズになるようJSで同時書き込む
-  const videoWrapRef   = useRef<HTMLDivElement>(null);
+  const videoRef      = useRef<HTMLVideoElement>(null);
+  const ctaRef        = useRef<HTMLDivElement>(null);
+  const sectionRef    = useRef<HTMLElement>(null);
+  const containerRef  = useRef<HTMLDivElement>(null);
+  const shimmerRef    = useRef<HTMLDivElement>(null);
+  const pauseBadgeRef = useRef<HTMLDivElement>(null);
+  const fastBadgeRef  = useRef<HTMLDivElement>(null);
+  const muteBadgeRef  = useRef<HTMLDivElement>(null);
+  const overlayRef    = useRef<HTMLDivElement>(null);
 
   const preloadStartedRef        = useRef(false);
   const objectFitRef             = useRef<"cover" | "contain">("cover");
   const isPlayingRef             = useRef(false);
   const isMutedRef               = useRef(true);
-
   const tapTimerRef              = useRef<ReturnType<typeof setTimeout> | null>(null);
   const tapCountRef              = useRef(0);
   const tapStartPosRef           = useRef<{ x: number; y: number }>({ x: 0, y: 0 });
@@ -54,6 +51,18 @@ export default function FeedItem({ item, isFirst, isSecond = false }: Props) {
   const pcClickTimerRef          = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const [hintVisible, setHintVisible] = useState(isFirst);
+
+  // video-overlay-wrap の位置をStateで管理し、Reactに描画させる。
+  // Refで後から書き込む方式だと wrap が null のまま applyGeometry が
+  // スキップされるケースがあったため、この方式に変更。
+  const [wrapStyle, setWrapStyle] = useState<React.CSSProperties>({
+    position: "absolute",
+    top: 0, left: 0, width: 0, height: 0,
+    pointerEvents: "none",
+    zIndex: 25,
+    overflow: "hidden",
+    borderRadius: "8px",
+  });
 
   useEffect(() => {
     if (!isFirst) return;
@@ -97,17 +106,11 @@ export default function FeedItem({ item, isFirst, isSecond = false }: Props) {
     if (el) el.style.display = visible ? "flex" : "none";
   }, []);
 
-  /**
-   * videoと videoWrap(オーバーレイコンテナ)に全く同じ値を書き込む。
-   * オーバーレイの中身は inset:0 + flexセンタリングなので、
-   * 親サイズが動画と一致すれば常に完全中央になる。
-   */
   const calcVideoArea = useCallback((fit?: "cover" | "contain") => {
     const resolvedFit = fit ?? objectFitRef.current;
     const cta     = ctaRef.current;
     const section = sectionRef.current;
     const video   = videoRef.current;
-    const wrap    = videoWrapRef.current;
     if (!cta || !section || !video) return;
 
     const sectionRect = section.getBoundingClientRect();
@@ -121,20 +124,29 @@ export default function FeedItem({ item, isFirst, isSecond = false }: Props) {
     const height = Math.max(ctaTopInSection - top - V_PADDING_BOTTOM, 0);
     const width  = section.offsetWidth - H_PADDING * 2;
 
-    const applyGeometry = (el: HTMLElement) => {
-      el.style.position     = "absolute";
-      el.style.top          = `${top}px`;
-      el.style.left         = `${H_PADDING}px`;
-      el.style.width        = `${width}px`;
-      el.style.height       = `${height}px`;
-      el.style.borderRadius = "8px";
-    };
-
-    applyGeometry(video);
+    // video に直接書き込む（既存の動作を維持）
+    video.style.position       = "absolute";
+    video.style.top            = `${top}px`;
+    video.style.left           = `${H_PADDING}px`;
+    video.style.width          = `${width}px`;
+    video.style.height         = `${height}px`;
     video.style.objectFit      = resolvedFit;
     video.style.objectPosition = resolvedFit === "contain" ? "center 30%" : "center center";
+    video.style.borderRadius   = "8px";
 
-    if (wrap) applyGeometry(wrap);
+    // overlay-wrap は State 経由で React に描画させる
+    // → DOM 構築タイミングに関係なく必ず反映される
+    setWrapStyle({
+      position: "absolute",
+      top,
+      left: H_PADDING,
+      width,
+      height,
+      pointerEvents: "none",
+      zIndex: 25,
+      overflow: "hidden",
+      borderRadius: "8px",
+    });
   }, []);
 
   useEffect(() => {
@@ -413,12 +425,12 @@ export default function FeedItem({ item, isFirst, isSecond = false }: Props) {
           />
 
           {/*
-            videoWrap: videoと全く同じ top/left/width/height を
-            calcVideoArea()でJSから同時書き込む。
-            内包の overlay/pauseBadge は inset:0 + flexセンタリングなので
-            親サイズ内で常に完全中央になる。
+            wrapStyle は calcVideoArea() で setWrapStyle() により
+            video と全く同じ top/left/width/height が State 経由でセットされる。
+            内包の overlay/pauseBadge は inset:0 + flex center なので
+            常に動画エリアの完全中央に表示される。
           */}
-          <div ref={videoWrapRef} className="video-overlay-wrap">
+          <div style={wrapStyle}>
             <div ref={overlayRef} className="action-overlay" aria-hidden="true" style={{ display: "none" }}>
               <span className="action-icon action-icon--pause" style={{ display: "none" }}>
                 <svg width="48" height="48" viewBox="0 0 48 48" fill="none">
@@ -540,20 +552,6 @@ const itemStyle = `
     -webkit-touch-callout: none;
     user-select: none;
     touch-action: pan-y;
-  }
-
-  /*
-    video-overlay-wrap:
-    calcVideoArea() で video と全く同じ top/left/width/height をJSから書き込む。
-    内包の action-overlay / pause-badge は
-    position:absolute + inset:0 + flexセンタリングで必ず親の中央に来る。
-  */
-  .video-overlay-wrap {
-    position: absolute;
-    pointer-events: none;
-    z-index: 25;
-    overflow: hidden;
-    border-radius: 8px;
   }
 
   .action-overlay {

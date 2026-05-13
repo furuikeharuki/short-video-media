@@ -4,7 +4,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.cache import get_redis
 from app.repositories.movie_repository import (
-    get_all_movies,
     get_all_movie_ids,
     get_movies_by_ids,
     get_movies_paginated,
@@ -17,7 +16,6 @@ SHUFFLE_KEY_PREFIX = "feed:shuffle:"
 
 
 def _to_card(movie) -> MovieCard:
-    # price_list: JSONBからPriceListに変換（None安全）
     price_list = None
     if movie.price_list:
         price_list = PriceList.model_validate(movie.price_list)
@@ -47,7 +45,7 @@ async def _get_shuffled_ids(
 ) -> list[str]:
     """
     seed に対応するシャッフル済み ID リストを Redis から取得。
-    キャッシュときは DB から全 ID を取得しシャッフルして保存。
+    キャッシュなし時は DB から全 ID を取得しシャッフルして保存。
     """
     redis = get_redis()
     key = f"{SHUFFLE_KEY_PREFIX}{seed}"
@@ -67,12 +65,6 @@ async def _get_shuffled_ids(
     return ids
 
 
-async def get_feed(db: AsyncSession) -> FeedResponse:
-    movies = await get_all_movies(db)
-    items = [_to_card(m) for m in movies]
-    return FeedResponse(items=items, next_cursor=None)
-
-
 async def get_feed_paginated(
     db: AsyncSession,
     offset: int = 0,
@@ -81,7 +73,10 @@ async def get_feed_paginated(
 ) -> FeedResponse:
     """
     seed あり: Redis キャッシュのシャッフル済み ID リストから offset/limit で切り出し。
-    seed なし: フォールバックﾈﾈID 順）。
+    seed なし: フォールバック（ID 順）。
+
+    NOTE: get_all_movies（全件取得）は意図的に削除済み。
+          大量データでのメモリ枯渇を防ぐため、必ずページネーションを使うこと。
     """
     if seed is not None:
         shuffled_ids = await _get_shuffled_ids(db, seed)
@@ -98,6 +93,7 @@ async def get_feed_paginated(
         next_cursor = str(next_offset) if next_offset < total else None
         return FeedResponse(items=items, next_cursor=next_cursor)
 
+    # seed なしフォールバック: ID順ページネーション
     movies, total = await get_movies_paginated(db, offset=offset, limit=limit)
     items = [_to_card(m) for m in movies]
     next_offset = offset + limit

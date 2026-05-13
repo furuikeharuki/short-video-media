@@ -31,7 +31,7 @@ export default function SearchGrid({ items }: Props) {
         >
           <div style={thumbWrapStyle}>
             <img
-              src={item.image_url_large ?? item.image_url_list ?? ""}
+              src={item.image_url_list ?? item.image_url_large ?? ""}
               alt={item.title}
               style={thumbStyle}
               loading={index < 6 ? "eager" : "lazy"}

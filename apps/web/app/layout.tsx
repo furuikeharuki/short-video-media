@@ -1,9 +1,11 @@
 import type { Metadata } from "next";
+import Header from "@/components/Header";
+import AffiliateNotice from "@/components/AffiliateNotice";
 import "./globals.css";
 
 export const metadata: Metadata = {
   title: "AV Shorts",
-  description: "縦型ショート動画でAV作品を探す",
+  description: "AVのショート動画メディア",
 };
 
 export default function RootLayout({
@@ -22,6 +24,8 @@ export default function RootLayout({
         <link rel="dns-prefetch" href="https://cc3001.dmm.co.jp" />
       </head>
       <body>
+        <Header />
+        <AffiliateNotice />
         {children}
         {modal}
       </body>

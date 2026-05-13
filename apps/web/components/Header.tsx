@@ -53,7 +53,6 @@ export default function Header() {
   return (
     <header className="site-header">
       <Link href="/" className="header-logo" aria-label="トップへ戻る">
-        {/* AV Shorts テキストロゴ */}
         <span className="header-logo-text">
           <span className="logo-av">AV</span>
           <span className="logo-shorts"> Shorts</span>
@@ -61,7 +60,6 @@ export default function Header() {
       </Link>
 
       <div className="header-actions">
-        {/* 検索ボタン */}
         <button
           ref={btnRef}
           className={`header-icon-btn${open ? " is-active" : ""}`}
@@ -85,12 +83,9 @@ export default function Header() {
             </svg>
           )}
         </button>
-
-        {/* ハンバーガーメニュー */}
         <HamburgerMenu />
       </div>
 
-      {/* 検索プルダウン */}
       <div
         id="search-dropdown"
         ref={dropdownRef}
@@ -161,6 +156,7 @@ export default function Header() {
   );
 }
 
+// globals.css の --accent を参照することで購入ボタンと完全に同一色になる
 const logoStyle = `
   .header-logo-text {
     font-size: 20px;
@@ -169,7 +165,7 @@ const logoStyle = `
     line-height: 1;
   }
   .logo-av {
-    color: #e91e63;
+    color: var(--accent);
   }
   .logo-shorts {
     color: #ffffff;

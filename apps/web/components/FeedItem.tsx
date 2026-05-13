@@ -95,6 +95,14 @@ export default function FeedItem({ item, isFirst, isSecond = false }: Props) {
     if (el) el.style.display = visible ? "flex" : "none";
   }, []);
 
+  // 動画エリアのtop/heightをCSS変数として親コンテナに書き込む
+  const applyVideoAreaVars = useCallback((top: number, height: number) => {
+    const container = containerRef.current;
+    if (!container) return;
+    container.style.setProperty("--video-top", `${top}px`);
+    container.style.setProperty("--video-height", `${height}px`);
+  }, []);
+
   const calcVideoArea = useCallback((fit?: "cover" | "contain") => {
     const resolvedFit = fit ?? objectFitRef.current;
     const cta     = ctaRef.current;
@@ -121,7 +129,10 @@ export default function FeedItem({ item, isFirst, isSecond = false }: Props) {
     video.style.objectFit      = resolvedFit;
     video.style.objectPosition = resolvedFit === "contain" ? "center 30%" : "center center";
     video.style.borderRadius   = "8px";
-  }, []);
+
+    // オーバーレイ位置をCSS変数で同期
+    applyVideoAreaVars(top, height);
+  }, [applyVideoAreaVars]);
 
   useEffect(() => {
     calcVideoArea();
@@ -392,25 +403,28 @@ export default function FeedItem({ item, isFirst, isSecond = false }: Props) {
             }}
           />
 
-          <div ref={overlayRef} className="action-overlay" aria-hidden="true" style={{ display: "none" }}>
-            <span className="action-icon action-icon--pause" style={{ display: "none" }}>
-              <svg width="48" height="48" viewBox="0 0 48 48" fill="none">
+          {/* オーバーレイ群はすべて video-area-overlay でラップし、動画エリア中央に配置 */}
+          <div className="video-area-overlay">
+            <div ref={overlayRef} className="action-overlay" aria-hidden="true" style={{ display: "none" }}>
+              <span className="action-icon action-icon--pause" style={{ display: "none" }}>
+                <svg width="48" height="48" viewBox="0 0 48 48" fill="none">
+                  <rect x="12" y="8" width="10" height="32" rx="2" fill="white"/>
+                  <rect x="26" y="8" width="10" height="32" rx="2" fill="white"/>
+                </svg>
+              </span>
+              <span className="action-icon action-icon--play" style={{ display: "none" }}>
+                <svg width="48" height="48" viewBox="0 0 48 48" fill="none">
+                  <path d="M14 8L40 24L14 40V8Z" fill="white"/>
+                </svg>
+              </span>
+            </div>
+
+            <div ref={pauseBadgeRef} className="pause-badge" aria-hidden="true" style={{ display: "none" }}>
+              <svg width="40" height="40" viewBox="0 0 48 48" fill="none">
                 <rect x="12" y="8" width="10" height="32" rx="2" fill="white"/>
                 <rect x="26" y="8" width="10" height="32" rx="2" fill="white"/>
               </svg>
-            </span>
-            <span className="action-icon action-icon--play" style={{ display: "none" }}>
-              <svg width="48" height="48" viewBox="0 0 48 48" fill="none">
-                <path d="M14 8L40 24L14 40V8Z" fill="white"/>
-              </svg>
-            </span>
-          </div>
-
-          <div ref={pauseBadgeRef} className="pause-badge" aria-hidden="true" style={{ display: "none" }}>
-            <svg width="40" height="40" viewBox="0 0 48 48" fill="none">
-              <rect x="12" y="8" width="10" height="32" rx="2" fill="white"/>
-              <rect x="26" y="8" width="10" height="32" rx="2" fill="white"/>
-            </svg>
+            </div>
           </div>
 
           <div ref={fastBadgeRef} className="fast-badge" aria-hidden="true" style={{ display: "none" }}>2×</div>
@@ -514,12 +528,27 @@ const itemStyle = `
     touch-action: pan-y;
   }
 
+  /* 動画エリアに重なる共通ラッパー。
+     CSS変数 --video-top / --video-height は calcVideoArea() でJSから注入される */
+  .video-area-overlay {
+    position: absolute;
+    left: ${H_PADDING}px;
+    right: ${H_PADDING}px;
+    top: var(--video-top, ${V_PADDING_TOP}px);
+    height: var(--video-height, 60%);
+    pointer-events: none;
+    z-index: 25;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+
   .action-overlay {
     position: absolute;
     inset: 0;
+    display: flex;
     align-items: center;
     justify-content: center;
-    z-index: 25;
     pointer-events: none;
     animation: overlay-pop 0.65s ease-out forwards;
   }
@@ -539,15 +568,13 @@ const itemStyle = `
 
   .pause-badge {
     position: absolute;
-    top: 50%;
-    left: 50%;
-    transform: translate(-50%, -50%);
-    opacity: 0.7;
-    pointer-events: none;
-    z-index: 20;
-    filter: drop-shadow(0 2px 6px rgba(0,0,0,0.6));
+    inset: 0;
+    display: flex;
     align-items: center;
     justify-content: center;
+    opacity: 0.7;
+    pointer-events: none;
+    filter: drop-shadow(0 2px 6px rgba(0,0,0,0.6));
   }
 
   .fast-badge {
@@ -577,6 +604,7 @@ const itemStyle = `
     padding: 8px 14px 8px 10px;
     z-index: 20;
     cursor: pointer;
+    display: flex;
     align-items: center;
     gap: 6px;
     backdrop-filter: blur(8px);

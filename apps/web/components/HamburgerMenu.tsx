@@ -1,0 +1,138 @@
+"use client";
+
+import { useEffect, useRef, useState } from "react";
+import Link from "next/link";
+
+const MENU_ITEMS = [
+  { label: "トップ", href: "/" },
+  { label: "お問い合わせ", href: "/contact" },
+  { label: "プライバシーポリシー", href: "/privacy" },
+  { label: "特定商取引法に基づく表記", href: "/law" },
+];
+
+export default function HamburgerMenu() {
+  const [open, setOpen] = useState(false);
+  const drawerRef = useRef<HTMLDivElement>(null);
+  const btnRef = useRef<HTMLButtonElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const close = (e: MouseEvent | TouchEvent) => {
+      if (
+        drawerRef.current?.contains(e.target as Node) ||
+        btnRef.current?.contains(e.target as Node)
+      ) return;
+      setOpen(false);
+    };
+    document.addEventListener("mousedown", close);
+    document.addEventListener("touchstart", close);
+    return () => {
+      document.removeEventListener("mousedown", close);
+      document.removeEventListener("touchstart", close);
+    };
+  }, [open]);
+
+  // オープン中はボディスクロール禁止
+  useEffect(() => {
+    document.body.style.overflow = open ? "hidden" : "";
+    return () => { document.body.style.overflow = ""; };
+  }, [open]);
+
+  return (
+    <>
+      <button
+        ref={btnRef}
+        type="button"
+        className="header-icon-btn"
+        aria-label="メニュー"
+        aria-expanded={open}
+        onClick={() => setOpen((v) => !v)}
+      >
+        {open ? (
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none"
+            stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" aria-hidden="true">
+            <line x1="4" y1="4" x2="20" y2="20" />
+            <line x1="20" y1="4" x2="4" y2="20" />
+          </svg>
+        ) : (
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none"
+            stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" aria-hidden="true">
+            <line x1="3" y1="6" x2="21" y2="6" />
+            <line x1="3" y1="12" x2="21" y2="12" />
+            <line x1="3" y1="18" x2="21" y2="18" />
+          </svg>
+        )}
+      </button>
+
+      {/* オーバーレイ */}
+      {open && (
+        <div
+          onClick={() => setOpen(false)}
+          style={{
+            position: "fixed", inset: 0,
+            background: "rgba(0,0,0,0.6)",
+            zIndex: 90,
+            backdropFilter: "blur(2px)",
+          }}
+          aria-hidden="true"
+        />
+      )}
+
+      {/* ドロワー */}
+      <div
+        ref={drawerRef}
+        role="dialog"
+        aria-label="メニュー"
+        aria-modal="true"
+        style={{
+          position: "fixed",
+          top: 0,
+          right: 0,
+          bottom: 0,
+          width: "min(280px, 80vw)",
+          background: "#111",
+          zIndex: 100,
+          transform: open ? "translateX(0)" : "translateX(100%)",
+          transition: "transform 0.25s cubic-bezier(0.4,0,0.2,1)",
+          display: "flex",
+          flexDirection: "column",
+          paddingTop: "52px",
+          borderLeft: "1px solid rgba(255,255,255,0.08)",
+        }}
+      >
+        <nav style={{ padding: "16px 0" }}>
+          {MENU_ITEMS.map((item) => (
+            <Link
+              key={item.href}
+              href={item.href}
+              onClick={() => setOpen(false)}
+              style={{
+                display: "block",
+                padding: "14px 24px",
+                color: "#fff",
+                fontSize: "15px",
+                fontWeight: 500,
+                textDecoration: "none",
+                borderBottom: "1px solid rgba(255,255,255,0.06)",
+                transition: "background 0.15s ease",
+              }}
+            >
+              {item.label}
+            </Link>
+          ))}
+        </nav>
+
+        <div style={{
+          marginTop: "auto",
+          padding: "16px 24px",
+          fontSize: "11px",
+          color: "rgba(255,255,255,0.3)",
+          lineHeight: 1.6,
+        }}>
+          当サイトはアフィリエイト広告を含みます。<br />
+          &copy; {new Date().getFullYear()} ShortVid
+        </div>
+      </div>
+    </>
+  );
+}

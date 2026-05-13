@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { FALLBACK_TAGS } from "@/lib/api/tags";
+import HamburgerMenu from "@/components/HamburgerMenu";
 
 export default function Header() {
   const router      = useRouter();
@@ -14,7 +15,6 @@ export default function Header() {
   const [open, setOpen]   = useState(false);
   const [query, setQuery] = useState("");
 
-  // プルダウン外クリック / タッチで閉じる
   useEffect(() => {
     if (!open) return;
     const close = (e: MouseEvent | TouchEvent) => {
@@ -57,6 +57,7 @@ export default function Header() {
       </Link>
 
       <div className="header-actions">
+        {/* 検索ボタン */}
         <button
           ref={btnRef}
           className={`header-icon-btn${open ? " is-active" : ""}`}
@@ -80,6 +81,9 @@ export default function Header() {
             </svg>
           )}
         </button>
+
+        {/* ハンバーガーメニュー */}
+        <HamburgerMenu />
       </div>
 
       {/* 検索プルダウン */}

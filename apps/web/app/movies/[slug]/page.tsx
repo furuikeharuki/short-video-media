@@ -25,6 +25,7 @@ export default async function MovieDetailPage({ params }: PageProps) {
 
   try {
     const movie = await getMovieBySlug(slug);
+    const imgSrc = movie.image_url_large ?? movie.image_url_list ?? "";
 
     return (
       <>
@@ -32,9 +33,9 @@ export default async function MovieDetailPage({ params }: PageProps) {
           <DetailViewTracker slug={movie.slug} title={movie.title} />
 
           <div style={styles.heroWrap}>
-            <img src={movie.thumbnail_url} alt="" aria-hidden="true" style={styles.heroBgBlur} />
+            <img src={imgSrc} alt="" aria-hidden="true" style={styles.heroBgBlur} />
             <img
-              src={movie.thumbnail_url}
+              src={imgSrc}
               alt={movie.title}
               style={styles.heroImg}
               width={720}

@@ -1,3 +1,5 @@
+import { cache } from "react";
+
 export type MovieDetail = {
   id: string;
   content_id: string | null;
@@ -37,9 +39,10 @@ const API_BASE_URL =
   process.env.NEXT_PUBLIC_API_BASE_URL ||
   "http://127.0.0.1:8000";
 
-export async function getMovieBySlug(slug: string): Promise<MovieDetail> {
+// React.cache: 同一リクエスト内でgenerateMetadataとpageが両方呼んでもfetchは1回のみ
+export const getMovieBySlug = cache(async (slug: string): Promise<MovieDetail> => {
   const res = await fetch(`${API_BASE_URL}/api/v1/movies/${slug}`, {
-    cache: "no-store",
+    next: { revalidate: 3600 }, // 1時間キャッシュ。作品データは頻繁に変わらないため十分
   });
 
   if (res.status === 404) {
@@ -51,4 +54,4 @@ export async function getMovieBySlug(slug: string): Promise<MovieDetail> {
   }
 
   return res.json();
-}
+});

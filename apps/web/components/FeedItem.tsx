@@ -12,7 +12,6 @@ interface Props {
 
 const H_PADDING = 4;
 const V_PADDING_TOP = 4;
-const V_PADDING_BOTTOM = 16;
 const SKIP_SEC = 5;
 const DBL_TAP_MS = 300;
 const LONG_PRESS_MS = 500;
@@ -25,15 +24,15 @@ const isLandscapeScreen = () => window.innerWidth > window.innerHeight;
 let globalUserGestured = false;
 
 export default function FeedItem({ item, isFirst, isSecond = false }: Props) {
-  const videoRef       = useRef<HTMLVideoElement>(null);
-  const ctaRef         = useRef<HTMLDivElement>(null);
-  const sectionRef     = useRef<HTMLElement>(null);
-  const containerRef   = useRef<HTMLDivElement>(null);
-  const shimmerRef     = useRef<HTMLDivElement>(null);
-  const pauseBadgeRef  = useRef<HTMLDivElement>(null);
-  const fastBadgeRef   = useRef<HTMLDivElement>(null);
-  const muteBadgeRef   = useRef<HTMLDivElement>(null);
-  const overlayRef     = useRef<HTMLDivElement>(null);
+  const videoRef        = useRef<HTMLVideoElement>(null);
+  const sectionRef      = useRef<HTMLElement>(null);
+  const containerRef    = useRef<HTMLDivElement>(null);
+  const infoOverlayRef  = useRef<HTMLDivElement>(null);
+  const shimmerRef      = useRef<HTMLDivElement>(null);
+  const pauseBadgeRef   = useRef<HTMLDivElement>(null);
+  const fastBadgeRef    = useRef<HTMLDivElement>(null);
+  const muteBadgeRef    = useRef<HTMLDivElement>(null);
+  const overlayRef      = useRef<HTMLDivElement>(null);
 
   const preloadStartedRef        = useRef(false);
   const objectFitRef             = useRef<"cover" | "contain">("cover");
@@ -52,6 +51,20 @@ export default function FeedItem({ item, isFirst, isSecond = false }: Props) {
   const pcClickTimerRef          = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const [hintVisible, setHintVisible] = useState(isFirst);
+
+  // info-overlay の高さを --info-h として section に書き込む
+  useEffect(() => {
+    const info = infoOverlayRef.current;
+    const section = sectionRef.current;
+    if (!info || !section) return;
+    const update = () => {
+      section.style.setProperty("--info-h", `${info.offsetHeight}px`);
+    };
+    update();
+    const ro = new ResizeObserver(update);
+    ro.observe(info);
+    return () => ro.disconnect();
+  }, []);
 
   useEffect(() => {
     if (!isFirst) return;
@@ -95,56 +108,14 @@ export default function FeedItem({ item, isFirst, isSecond = false }: Props) {
     if (el) el.style.display = visible ? "flex" : "none";
   }, []);
 
-  // 動画エリアのtop/heightをCSS変数として親コンテナに書き込む
-  const applyVideoAreaVars = useCallback((top: number, height: number) => {
-    const container = containerRef.current;
-    if (!container) return;
-    container.style.setProperty("--video-top", `${top}px`);
-    container.style.setProperty("--video-height", `${height}px`);
+  // objectFit を映像アスペクト比に応じて切り替える（CSS変数 --obj-fit で video に反映）
+  const applyObjectFit = useCallback((fit: "cover" | "contain") => {
+    objectFitRef.current = fit;
+    const video = videoRef.current;
+    if (!video) return;
+    video.style.objectFit = fit;
+    video.style.objectPosition = fit === "contain" ? "center 30%" : "center center";
   }, []);
-
-  const calcVideoArea = useCallback((fit?: "cover" | "contain") => {
-    const resolvedFit = fit ?? objectFitRef.current;
-    const cta     = ctaRef.current;
-    const section = sectionRef.current;
-    const video   = videoRef.current;
-    if (!cta || !section || !video) return;
-
-    const sectionRect = section.getBoundingClientRect();
-    const ctaRect     = cta.getBoundingClientRect();
-    if (ctaRect.top === 0 && ctaRect.height === 0) {
-      requestAnimationFrame(() => calcVideoArea(resolvedFit));
-      return;
-    }
-    const ctaTopInSection = ctaRect.top - sectionRect.top;
-    const top    = V_PADDING_TOP;
-    const height = Math.max(ctaTopInSection - top - V_PADDING_BOTTOM, 0);
-    const width  = section.offsetWidth - H_PADDING * 2;
-
-    video.style.position       = "absolute";
-    video.style.top            = `${top}px`;
-    video.style.left           = `${H_PADDING}px`;
-    video.style.width          = `${width}px`;
-    video.style.height         = `${height}px`;
-    video.style.objectFit      = resolvedFit;
-    video.style.objectPosition = resolvedFit === "contain" ? "center 30%" : "center center";
-    video.style.borderRadius   = "8px";
-
-    // オーバーレイ位置をCSS変数で同期
-    applyVideoAreaVars(top, height);
-  }, [applyVideoAreaVars]);
-
-  useEffect(() => {
-    calcVideoArea();
-  }, [calcVideoArea]);
-
-  useEffect(() => {
-    const cta = ctaRef.current;
-    if (!cta) return;
-    const ro = new ResizeObserver(() => calcVideoArea());
-    ro.observe(cta);
-    return () => ro.disconnect();
-  }, [calcVideoArea]);
 
   const handleMetadata = useCallback(() => {
     const video   = videoRef.current;
@@ -158,9 +129,8 @@ export default function FeedItem({ item, isFirst, isSecond = false }: Props) {
       const screenAspect = section.offsetWidth / section.offsetHeight;
       fit = videoAspect <= screenAspect ? "cover" : "contain";
     }
-    objectFitRef.current = fit;
-    calcVideoArea(fit);
-  }, [calcVideoArea]);
+    applyObjectFit(fit);
+  }, [applyObjectFit]);
 
   const playVideo = useCallback(async (video: HTMLVideoElement, withGesture = false) => {
     if (withGesture) globalUserGestured = true;
@@ -384,6 +354,7 @@ export default function FeedItem({ item, isFirst, isSecond = false }: Props) {
             <div className="shimmer-inner" />
           </div>
 
+          {/* 動画: top/left/right/bottom を CSS変数で制御 */}
           <video
             ref={videoRef}
             src={item.sample_movie_url}
@@ -394,16 +365,11 @@ export default function FeedItem({ item, isFirst, isSecond = false }: Props) {
             onLoadedMetadata={handleMetadata}
             onLoadedData={() => setVideoReady(true)}
             onCanPlay={() => setVideoReady(true)}
-            style={{
-              position: "absolute",
-              opacity: 0,
-              transition: "opacity 0.3s ease",
-              inset: 0, width: "100%", height: "100%",
-              objectFit: "cover", objectPosition: "center center",
-            }}
+            className="feed-video"
+            style={{ opacity: 0 }}
           />
 
-          {/* オーバーレイ群はすべて video-area-overlay でラップし、動画エリア中央に配置 */}
+          {/* 再生/停止オーバーレイ: 動画エリアと同じ領域に重ねる */}
           <div className="video-area-overlay">
             <div ref={overlayRef} className="action-overlay" aria-hidden="true" style={{ display: "none" }}>
               <span className="action-icon action-icon--pause" style={{ display: "none" }}>
@@ -460,7 +426,8 @@ export default function FeedItem({ item, isFirst, isSecond = false }: Props) {
         </div>
       )}
 
-      <div className="info-overlay">
+      {/* info-overlay の高さが --info-h として section に反映され、動画エリアが追従する */}
+      <div ref={infoOverlayRef} className="info-overlay">
         <div className="genre-list">
           {item.genres.map((g) => <span key={g} className="genre-badge">{g}</span>)}
         </div>
@@ -468,7 +435,7 @@ export default function FeedItem({ item, isFirst, isSecond = false }: Props) {
         {item.actresses.length > 0 && (
           <p className="item-actress">👤 {item.actresses.join(" / ")}</p>
         )}
-        <div ref={ctaRef} className="cta-buttons">
+        <div className="cta-buttons">
           <Link href={`/movies/${item.slug}`} className="btn-detail" prefetch={false}>
             詳細を見る
           </Link>
@@ -491,12 +458,33 @@ export default function FeedItem({ item, isFirst, isSecond = false }: Props) {
 }
 
 const itemStyle = `
+  /* --info-h は JS の ResizeObserver が section に書き込む。
+     フォールバック値 160px はおおよその初期値。 */
+
+  .feed-video {
+    position: absolute;
+    top: ${V_PADDING_TOP}px;
+    left: ${H_PADDING}px;
+    right: ${H_PADDING}px;
+    bottom: calc(var(--info-h, 160px) + 8px);
+    width: auto;
+    height: auto;
+    /* width/height を auto にして top/left/right/bottom で領域を確定させる */
+    min-width: calc(100% - ${H_PADDING * 2}px);
+    min-height: 0;
+    object-fit: cover;
+    object-position: center center;
+    border-radius: 8px;
+    transition: opacity 0.3s ease;
+  }
+
+  /* shimmer も動画と同じ領域をカバー */
   .shimmer {
     position: absolute;
     top: ${V_PADDING_TOP}px;
     left: ${H_PADDING}px;
     right: ${H_PADDING}px;
-    bottom: 0;
+    bottom: calc(var(--info-h, 160px) + 8px);
     background: #1a1a1a;
     z-index: 1;
     overflow: hidden;
@@ -528,14 +516,13 @@ const itemStyle = `
     touch-action: pan-y;
   }
 
-  /* 動画エリアに重なる共通ラッパー。
-     CSS変数 --video-top / --video-height は calcVideoArea() でJSから注入される */
+  /* 動画エリアと完全に同じ領域をカバーするオーバーレイラッパー */
   .video-area-overlay {
     position: absolute;
+    top: ${V_PADDING_TOP}px;
     left: ${H_PADDING}px;
     right: ${H_PADDING}px;
-    top: var(--video-top, ${V_PADDING_TOP}px);
-    height: var(--video-height, 60%);
+    bottom: calc(var(--info-h, 160px) + 8px);
     pointer-events: none;
     z-index: 25;
     display: flex;

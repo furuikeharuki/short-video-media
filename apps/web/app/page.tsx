@@ -2,24 +2,23 @@ import { getFeed } from "@/lib/api/feed";
 import FeedClient from "@/app/FeedClient";
 
 export default async function HomePage() {
-  // SSR時は seed なし（サーバー側で sessionStorage は使えないので created_at 順）
-  // クライアントマウント後に seed を生成してランダム化
-  let items: Awaited<ReturnType<typeof getFeed>>["items"] = [];
-  let nextCursor: string | null = null;
+  // SSR: seedなしでID順に初回20件を取得し高速に初期表示。
+  // クライアントマウント後に FeedClient 内でランダム順で差し替える。
+  let initialItems: Awaited<ReturnType<typeof getFeed>>["items"] = [];
+  let initialNextCursor: string | null = null;
   try {
     const feed = await getFeed(0, 20);
-    items = feed.items;
-    nextCursor = feed.next_cursor;
+    initialItems       = feed.items;
+    initialNextCursor  = feed.next_cursor;
   } catch {
-    items = [];
+    initialItems = [];
   }
 
   return (
     <>
       <FeedClient
-        initialItems={items}
-        initialNextCursor={nextCursor}
-        initialSeed={0}
+        initialItems={initialItems}
+        initialNextCursor={initialNextCursor}
       />
       <style>{feedStyle}</style>
     </>
@@ -53,7 +52,6 @@ const feedStyle = `
   }
 
   .video-bg { position: absolute; inset: 0; }
-  .video-player { width: 100%; height: 100%; object-fit: cover; display: block; }
   .thumbnail-bg { position: absolute; inset: 0; }
   .thumbnail-img { width: 100%; height: 100%; object-fit: cover; display: block; }
 
@@ -94,13 +92,4 @@ const feedStyle = `
     backdrop-filter: blur(8px); color: #fff; flex: 1;
   }
   .btn-buy { background: #e91e63; color: #fff; flex: 1; }
-
-  .empty-state {
-    display: flex; align-items: center; justify-content: center;
-    height: 100dvh; background: #000; color: #fff;
-  }
-  .empty-inner { text-align: center; padding: 24px; }
-  .empty-icon { font-size: 48px; margin-bottom: 16px; }
-  .empty-inner h2 { font-size: 20px; margin-bottom: 8px; }
-  .empty-inner p { color: rgba(255,255,255,0.5); font-size: 14px; }
 `;

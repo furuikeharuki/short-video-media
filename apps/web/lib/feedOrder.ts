@@ -1,30 +1,15 @@
-import type { MovieCard } from "@/lib/api/feed";
-
 const SEEN_KEY = "seen_movie_ids";
-const SEED_KEY = "feed_session_seed";
 const MAX_SEEN = 2000;
 
-// セッション内で一定の seed を保持（ページ跨ぎでランダム順が崩れないように）
+// ページロードごとに新しい seed を生成する。
+// sessionStorage に保存しないのでリロード・更新で必ず再ランダム化される。
 export function getOrCreateSeed(): number {
-  try {
-    const raw = sessionStorage.getItem(SEED_KEY);
-    if (raw) return parseInt(raw, 10);
-    const seed = Math.floor(Math.random() * 2147483647);
-    sessionStorage.setItem(SEED_KEY, String(seed));
-    return seed;
-  } catch {
-    return Math.floor(Math.random() * 2147483647);
-  }
+  return Math.floor(Math.random() * 2147483647);
 }
 
+// 全周完了時のリセット用（同様に新しい値を返すだけ）
 export function resetSeed(): number {
-  try {
-    const seed = Math.floor(Math.random() * 2147483647);
-    sessionStorage.setItem(SEED_KEY, String(seed));
-    return seed;
-  } catch {
-    return Math.floor(Math.random() * 2147483647);
-  }
+  return Math.floor(Math.random() * 2147483647);
 }
 
 export function getSeenIds(): Set<string> {

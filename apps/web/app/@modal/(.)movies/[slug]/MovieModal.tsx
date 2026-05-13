@@ -51,15 +51,15 @@ export default function MovieModal({ movie }: { movie: MovieDetail }) {
   const hasReview = movie.review_count > 0 && movie.review_average != null;
 
   const metaRows: { label: string; value: React.ReactNode }[] = [
-    { label: "出演",      value: movie.actresses.length > 0 ? movie.actresses.join(" / ") : NA },
-    { label: "シリーズ",  value: movie.series_name ?? NA },
-    { label: "監督",      value: movie.director ?? NA },
-    { label: "メーカー",  value: movie.maker ?? NA },
-    { label: "レーベル",  value: movie.label ?? NA },
-    { label: "収録時間",  value: movie.duration != null ? `${movie.duration}分` : NA },
+    { label: "出演",       value: movie.actresses.length > 0 ? movie.actresses.join(" / ") : NA },
+    { label: "シリーズ",   value: movie.series_name ?? NA },
+    { label: "監督",       value: movie.director ?? NA },
+    { label: "メーカー",   value: movie.maker ?? NA },
+    { label: "レーベル",   value: movie.label ?? NA },
+    { label: "収録時間",   value: movie.duration != null ? `${movie.duration}分` : NA },
     { label: "配信開始日", value: formatDate(movie.delivery_date) },
     { label: "商品発売日", value: formatDate(movie.release_date) },
-    { label: "品番",      value: movie.content_id ?? NA },
+    { label: "メーカー品番", value: movie.maker_product ?? NA },
   ];
 
   return (
@@ -70,7 +70,6 @@ export default function MovieModal({ movie }: { movie: MovieDetail }) {
         <DetailViewTracker slug={movie.slug} title={movie.title} />
 
         <div ref={scrollRef} style={scrollStyle}>
-          {/* ヒーロー画像 */}
           <div style={heroWrapStyle}>
             <img src={imgSrc} alt="" aria-hidden="true" style={heroBgStyle} />
             <img
@@ -94,19 +93,15 @@ export default function MovieModal({ movie }: { movie: MovieDetail }) {
             </button>
           </div>
 
-          {/* コンテンツ */}
           <div style={contentStyle}>
-            {/* ジャンル */}
             <div style={genreListStyle}>
               {movie.genres.map((g) => (
                 <span key={g} style={badgeStyle}>{g}</span>
               ))}
             </div>
 
-            {/* タイトル */}
             <h1 style={titleStyle}>{movie.title}</h1>
 
-            {/* 評価・価格 */}
             <div style={scoreAreaStyle}>
               {hasReview && (
                 <div style={scoreItemStyle}>
@@ -124,7 +119,6 @@ export default function MovieModal({ movie }: { movie: MovieDetail }) {
               )}
             </div>
 
-            {/* メタ情報テーブル */}
             <div style={metaTableStyle}>
               {metaRows.map(({ label, value }) => (
                 <div key={label} style={metaRowStyle}>
@@ -134,12 +128,10 @@ export default function MovieModal({ movie }: { movie: MovieDetail }) {
               ))}
             </div>
 
-            {/* 説明文 */}
             {movie.description && (
               <p style={descStyle}>{movie.description}</p>
             )}
 
-            {/* CTA */}
             <div style={ctaStyle}>
               <AffiliateLink
                 href={movie.affiliate_url}
@@ -155,8 +147,6 @@ export default function MovieModal({ movie }: { movie: MovieDetail }) {
     </>
   );
 }
-
-// ---- styles ----
 
 const backdropStyle: React.CSSProperties = {
   position: "fixed",
@@ -323,7 +313,7 @@ const metaLabelStyle: React.CSSProperties = {
   fontWeight: 600,
   color: "rgba(255,255,255,0.35)",
   letterSpacing: "0.06em",
-  minWidth: "64px",
+  minWidth: "72px",
   paddingTop: "1px",
   flexShrink: 0,
 };

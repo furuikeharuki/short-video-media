@@ -21,13 +21,13 @@ export type MovieDetail = {
   actresses: string[];
   genres: string[];
   series_name: string | null;
-  // 追加フィールド
   delivery_date: string | null;
   release_date: string | null;
-  duration: number | null;       // 収録時間（分）
+  duration: number | null;
   director: string | null;
   maker: string | null;
   label: string | null;
+  maker_product: string | null;
 };
 
 const API_BASE_URL =

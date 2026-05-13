@@ -108,6 +108,7 @@ export default function FeedItem({ item, isFirst, isSecond = false }: Props) {
     if (el) el.style.display = visible ? "flex" : "none";
   }, []);
 
+  // objectFit を映像アスペクト比に応じて切り替える（CSS変数 --obj-fit で video に反映）
   const applyObjectFit = useCallback((fit: "cover" | "contain") => {
     objectFitRef.current = fit;
     const video = videoRef.current;
@@ -353,6 +354,7 @@ export default function FeedItem({ item, isFirst, isSecond = false }: Props) {
             <div className="shimmer-inner" />
           </div>
 
+          {/* 動画: top/left/right/bottom を CSS変数で制御 */}
           <video
             ref={videoRef}
             src={item.sample_movie_url}
@@ -367,6 +369,7 @@ export default function FeedItem({ item, isFirst, isSecond = false }: Props) {
             style={{ opacity: 0 }}
           />
 
+          {/* 再生/停止オーバーレイ: 動画エリアと同じ領域に重ねる */}
           <div className="video-area-overlay">
             <div ref={overlayRef} className="action-overlay" aria-hidden="true" style={{ display: "none" }}>
               <span className="action-icon action-icon--pause" style={{ display: "none" }}>
@@ -423,6 +426,7 @@ export default function FeedItem({ item, isFirst, isSecond = false }: Props) {
         </div>
       )}
 
+      {/* info-overlay の高さが --info-h として section に反映され、動画エリアが追従する */}
       <div ref={infoOverlayRef} className="info-overlay">
         <div className="genre-list">
           {item.genres.map((g) => <span key={g} className="genre-badge">{g}</span>)}
@@ -454,23 +458,27 @@ export default function FeedItem({ item, isFirst, isSecond = false }: Props) {
 }
 
 const itemStyle = `
-  /*
-   * .feed-video は position:absolute + top/left/right/bottom で領域を確定。
-   * width/height/min-width は一切指定しない（指定すると left/right と競合してはみ出す）。
-   * object-fit: cover で領域を満たす。
-   */
+  /* --info-h は JS の ResizeObserver が section に書き込む。
+     フォールバック値 160px はおおよその初期値。 */
+
   .feed-video {
     position: absolute;
     top: ${V_PADDING_TOP}px;
     left: ${H_PADDING}px;
     right: ${H_PADDING}px;
     bottom: calc(var(--info-h, 160px) + 8px);
+    width: auto;
+    height: auto;
+    /* width/height を auto にして top/left/right/bottom で領域を確定させる */
+    min-width: calc(100% - ${H_PADDING * 2}px);
+    min-height: 0;
     object-fit: cover;
     object-position: center center;
     border-radius: 8px;
     transition: opacity 0.3s ease;
   }
 
+  /* shimmer も動画と同じ領域をカバー */
   .shimmer {
     position: absolute;
     top: ${V_PADDING_TOP}px;
@@ -508,6 +516,7 @@ const itemStyle = `
     touch-action: pan-y;
   }
 
+  /* 動画エリアと完全に同じ領域をカバーするオーバーレイラッパー */
   .video-area-overlay {
     position: absolute;
     top: ${V_PADDING_TOP}px;

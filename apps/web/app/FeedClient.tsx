@@ -19,7 +19,6 @@ export default function FeedClient() {
   const containerRef   = useRef<HTMLDivElement>(null);
 
   const [currentIndex, setCurrentIndex] = useState(0);
-  // 初期は必ず空配列（スピナー表示）
   const [windowItems, setWindowItems]   = useState<MovieCard[]>([]);
   const windowStartRef = useRef(0);
 
@@ -64,7 +63,6 @@ export default function FeedClient() {
     }
   }, [updateWindow]);
 
-  // マウント時に即座ランダム取得（SSRデータなし）
   useEffect(() => {
     const seed = getOrCreateSeed();
     seedRef.current = seed;
@@ -124,7 +122,6 @@ export default function FeedClient() {
     };
   }, [goNext, goPrev]);
 
-  // 空ガード（フェッチ失敗時のリトライ）
   useEffect(() => {
     if (windowItems.length === 0 && !isFetchingRef.current) fetchMore();
   }, [windowItems, fetchMore]);
@@ -139,14 +136,16 @@ export default function FeedClient() {
         windowItems.map((item, i) => {
           const absIndex = windowStartRef.current + i;
           const offset   = absIndex - currentIndex;
+          const isActive = offset === 0;
           return (
             <div
               key={`${item.id}-${absIndex}`}
               className="feed-slide"
               style={{
                 transform:     `translateY(${offset * 100}%)`,
-                zIndex:        offset === 0 ? 1 : 0,
-                pointerEvents: offset === 0 ? "auto" : "none",
+                zIndex:        isActive ? 2 : 1,
+                pointerEvents: isActive ? "auto" : "none",
+                visibility:    isActive ? "visible" : "hidden",
               }}
             >
               <FeedItem item={item} isFirst={absIndex === 0} isSecond={absIndex === 1} />

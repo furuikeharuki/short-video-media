@@ -1,6 +1,5 @@
 "use client";
 
-import { useRouter } from "next/navigation";
 import { trackEvent } from "@/lib/analytics/analytics";
 
 type AgeGateFormProps = {
@@ -8,11 +7,7 @@ type AgeGateFormProps = {
 };
 
 export default function AgeGateForm({ nextPath }: AgeGateFormProps) {
-  const router = useRouter();
-
   const handleClick = async () => {
-    // 1. APIルート経由で httpOnly cookie をセットする
-    //    → 次のリクエストから middleware が認証済みと判定できる
     try {
       await fetch("/api/age-gate", {
         method: "POST",
@@ -23,11 +18,10 @@ export default function AgeGateForm({ nextPath }: AgeGateFormProps) {
       // ネットワークエラーでも遷移させる
     }
 
-    // 2. アナリティクス fire-and-forget
     void trackEvent("age_gate_pass", { next_path: nextPath });
 
-    // 3. 遷移
-    router.push(nextPath || "/");
+    // フルナビゲーションでmiddlewareに新しいcookieを確実に送る
+    window.location.href = nextPath || "/";
   };
 
   return (

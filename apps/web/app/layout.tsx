@@ -4,8 +4,8 @@ import AffiliateNotice from "@/components/AffiliateNotice";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "ShortVid",
-  description: "ショート動画メディア",
+  title: "AV Shorts",
+  description: "AVのショート動画メディア",
 };
 
 export default function RootLayout({

@@ -2,7 +2,7 @@ import AgeGateForm from "@/components/analytics/age-gate-form";
 import type { Metadata } from "next";
 
 export const metadata: Metadata = {
-  title: "年齢確認 | Short Video Media",
+  title: "年齢確認 | AV Shorts",
 };
 
 type AgeGatePageProps = {
@@ -17,15 +17,21 @@ export default async function AgeGatePage({ searchParams }: AgeGatePageProps) {
 
   return (
     <main style={styles.main}>
-      {/* 背景グラデーション */}
       <div style={styles.bg} aria-hidden="true" />
 
       <div style={styles.card}>
-        {/* アイコン */}
         <div style={styles.iconWrap} aria-hidden="true">
           <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="#e91e63" strokeWidth="1.5">
             <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
           </svg>
+        </div>
+
+        {/* ロゴ */}
+        <div style={{ marginBottom: "16px" }}>
+          <span style={{ fontSize: "22px", fontWeight: 800, letterSpacing: "-0.02em" }}>
+            <span style={{ color: "#e91e63" }}>AV</span>
+            <span style={{ color: "#fff" }}> Shorts</span>
+          </span>
         </div>
 
         <h1 style={styles.title}>年齢確認</h1>

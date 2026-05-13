@@ -32,7 +32,6 @@ export default function HamburgerMenu() {
     };
   }, [open]);
 
-  // オープン中はボディスクロール禁止
   useEffect(() => {
     document.body.style.overflow = open ? "hidden" : "";
     return () => { document.body.style.overflow = ""; };
@@ -64,7 +63,6 @@ export default function HamburgerMenu() {
         )}
       </button>
 
-      {/* オーバーレイ */}
       {open && (
         <div
           onClick={() => setOpen(false)}
@@ -78,7 +76,6 @@ export default function HamburgerMenu() {
         />
       )}
 
-      {/* ドロワー */}
       <div
         ref={drawerRef}
         role="dialog"
@@ -100,7 +97,19 @@ export default function HamburgerMenu() {
           borderLeft: "1px solid rgba(255,255,255,0.08)",
         }}
       >
-        <nav style={{ padding: "16px 0" }}>
+        {/* ドロワー内ロゴ */}
+        <div style={{
+          padding: "20px 24px 8px",
+          borderBottom: "1px solid rgba(255,255,255,0.08)",
+          marginBottom: "4px",
+        }}>
+          <span style={{ fontSize: "18px", fontWeight: 800, letterSpacing: "-0.02em" }}>
+            <span style={{ color: "#e91e63" }}>AV</span>
+            <span style={{ color: "#fff" }}> Shorts</span>
+          </span>
+        </div>
+
+        <nav style={{ padding: "8px 0" }}>
           {MENU_ITEMS.map((item) => (
             <Link
               key={item.href}
@@ -130,7 +139,7 @@ export default function HamburgerMenu() {
           lineHeight: 1.6,
         }}>
           当サイトはアフィリエイト広告を含みます。<br />
-          &copy; {new Date().getFullYear()} ShortVid
+          &copy; {new Date().getFullYear()} AV Shorts
         </div>
       </div>
     </>

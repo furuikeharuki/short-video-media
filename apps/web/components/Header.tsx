@@ -53,7 +53,11 @@ export default function Header() {
   return (
     <header className="site-header">
       <Link href="/" className="header-logo" aria-label="トップへ戻る">
-        <span className="header-logo-text">ShortVid</span>
+        {/* AV Shorts テキストロゴ */}
+        <span className="header-logo-text">
+          <span className="logo-av">AV</span>
+          <span className="logo-shorts"> Shorts</span>
+        </span>
       </Link>
 
       <div className="header-actions">
@@ -151,6 +155,23 @@ export default function Header() {
           </div>
         </div>
       </div>
+
+      <style>{logoStyle}</style>
     </header>
   );
 }
+
+const logoStyle = `
+  .header-logo-text {
+    font-size: 20px;
+    font-weight: 800;
+    letter-spacing: -0.02em;
+    line-height: 1;
+  }
+  .logo-av {
+    color: #e91e63;
+  }
+  .logo-shorts {
+    color: #ffffff;
+  }
+`;

@@ -371,7 +371,7 @@ export default function FeedItem({ item, isFirst, isSecond = false }: Props) {
 
   return (
     <section ref={sectionRef} className="feed-item" data-movie-id={item.id}>
-      {item.sample_video_url ? (
+      {item.sample_movie_url ? (
         <div
           ref={containerRef}
           className="video-bg video-bg--interactive"
@@ -389,7 +389,7 @@ export default function FeedItem({ item, isFirst, isSecond = false }: Props) {
 
           <video
             ref={videoRef}
-            src={item.sample_video_url}
+            src={item.sample_movie_url}
             muted
             loop
             playsInline
@@ -450,7 +450,7 @@ export default function FeedItem({ item, isFirst, isSecond = false }: Props) {
       ) : (
         <div className="thumbnail-bg">
           <img
-            src={item.thumbnail_url ?? ""}
+            src={item.image_url_large ?? item.image_url_list ?? ""}
             alt={item.title}
             className="thumbnail-img"
             loading={isFirst ? "eager" : "lazy"}

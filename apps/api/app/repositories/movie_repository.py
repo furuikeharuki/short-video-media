@@ -1,4 +1,3 @@
-import random
 from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -21,20 +20,14 @@ async def get_movies_paginated(
     limit: int = 20,
     seed: int | None = None,
 ) -> tuple[list[Movie], int]:
-    """
-    offset/limit ページネーション。
-    seed を指定すると PostgreSQL の setseed+random() で再現可能なランダム順。
-    seed なしの場合は小スワロットプライマリキー順。
-    """
-    count_result = await db.execute(select(func.count()).select_from(Movie).where(Movie.is_visible == True))
+    count_result = await db.execute(select(func.count()).select_from(Movie))
     total = count_result.scalar_one()
 
     if seed is not None:
-        # PostgreSQL: setseed でセッション内安定ソート
-        await db.execute(func.setseed(seed / 2147483647.0))
+        normalized = (seed % 2147483647) / 2147483647.0
+        await db.execute(func.setseed(normalized))
         query = (
             select(Movie)
-            .where(Movie.is_visible == True)
             .order_by(func.random())
             .offset(offset)
             .limit(limit)
@@ -42,8 +35,7 @@ async def get_movies_paginated(
     else:
         query = (
             select(Movie)
-            .where(Movie.is_visible == True)
-            .order_by(Movie.created_at.desc())
+            .order_by(Movie.id)
             .offset(offset)
             .limit(limit)
         )

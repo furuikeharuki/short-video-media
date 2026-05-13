@@ -135,18 +135,6 @@ export default function FeedItem({ item, isFirst, isSecond = false }: Props) {
     return () => ro.disconnect();
   }, [calcVideoArea]);
 
-  useEffect(() => {
-    const hash = window.location.hash.slice(1);
-    if (hash !== item.slug) return;
-    const section = sectionRef.current;
-    if (!section) return;
-    requestAnimationFrame(() => {
-      section.scrollIntoView({ behavior: "instant", block: "start" });
-      history.replaceState(null, "", window.location.pathname);
-    });
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
   const handleMetadata = useCallback(() => {
     const video   = videoRef.current;
     const section = sectionRef.current;
@@ -226,8 +214,6 @@ export default function FeedItem({ item, isFirst, isSecond = false }: Props) {
     el.addEventListener("contextmenu", prevent);
     return () => el.removeEventListener("contextmenu", prevent);
   }, []);
-
-  const handleDetailClick = () => { history.replaceState(null, "", `#${item.slug}`); };
 
   const fireSkip = useCallback((clientX: number, clientY: number) => {
     const video   = videoRef.current;
@@ -469,7 +455,7 @@ export default function FeedItem({ item, isFirst, isSecond = false }: Props) {
           <p className="item-actress">👤 {item.actresses.join(" / ")}</p>
         )}
         <div ref={ctaRef} className="cta-buttons">
-          <Link href={`/movies/${item.slug}`} className="btn-detail" onClick={handleDetailClick}>
+          <Link href={`/movies/${item.slug}`} className="btn-detail" prefetch={false}>
             詳細を見る
           </Link>
           <a href={item.affiliate_url} target="_blank" rel="noopener noreferrer" className="btn-buy">

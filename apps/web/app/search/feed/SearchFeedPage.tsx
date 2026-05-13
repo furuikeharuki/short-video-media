@@ -5,9 +5,9 @@ import { useSearchParams } from "next/navigation";
 import FeedItem from "@/components/FeedItem";
 import type { MovieCard } from "@/lib/api/feed";
 
-const STORAGE_KEY   = "search_feed_items";
-const WINDOW_SIZE   = 2;   // 現在地点の前後に保持する枚数
-const APPEND_AHEAD  = 5;   // 残りがこの枚数以下になったら追加
+const STORAGE_KEY  = "search_feed_items";
+const WINDOW_SIZE  = 2;
+const APPEND_AHEAD = 5;
 
 function shuffle<T>(arr: T[]): T[] {
   const a = [...arr];
@@ -22,17 +22,19 @@ export default function SearchFeedPage() {
   const searchParams = useSearchParams();
   const selectedId   = searchParams.get("id") ?? null;
 
-  const baseItemsRef   = useRef<MovieCard[]>([]);   // 検索結果原列
-  const allItemsRef    = useRef<MovieCard[]>([]);   // 追加していく無限リスト
-  const currentIdxRef  = useRef(0);
-  const wheelLockRef   = useRef(false);
-  const containerRef   = useRef<HTMLDivElement>(null);
+  const baseItemsRef  = useRef<MovieCard[]>([]);
+  const allItemsRef   = useRef<MovieCard[]>([]);
+  const currentIdxRef = useRef(0);
+  const wheelLockRef  = useRef(false);
+
+  // タッチ追跡は window にバインドするため ref 不要
+  const touchStartYRef = useRef(0);
+  const touchTimeRef   = useRef(0);
 
   const [currentIndex, setCurrentIndex] = useState(0);
   const [windowItems,  setWindowItems]  = useState<MovieCard[]>([]);
   const windowStartRef = useRef(0);
 
-  // 現在インデックス周辺のウィンドウを再計算
   const updateWindow = useCallback((idx: number) => {
     const all   = allItemsRef.current;
     const start = Math.max(0, idx - WINDOW_SIZE);
@@ -41,7 +43,6 @@ export default function SearchFeedPage() {
     setWindowItems(all.slice(start, end));
   }, []);
 
-  // 末尾に近づいたらシャッフルした内容を追加（無限ループ）
   const maybeAppend = useCallback((idx: number) => {
     const all  = allItemsRef.current;
     const base = baseItemsRef.current;
@@ -51,26 +52,21 @@ export default function SearchFeedPage() {
     }
   }, []);
 
-  // 初期化: sessionStorage から読み込み、選択アイテムを先頭にシャッフル
   useEffect(() => {
     try {
       const raw = sessionStorage.getItem(STORAGE_KEY);
       if (!raw) return;
       const arr: MovieCard[] = JSON.parse(raw);
       if (arr.length === 0) return;
-
       const selected = (selectedId ? arr.find((m) => m.id === selectedId) : null) ?? arr[0];
       const rest     = shuffle(arr.filter((m) => m.id !== selected.id));
       const initial  = [selected, ...rest];
-
-      baseItemsRef.current  = arr;      // ループ用に原列を保持
+      baseItemsRef.current  = arr;
       allItemsRef.current   = initial;
       currentIdxRef.current = 0;
       setCurrentIndex(0);
       updateWindow(0);
-    } catch {
-      // エラー時は空のまま
-    }
+    } catch { /* ignore */ }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -91,19 +87,23 @@ export default function SearchFeedPage() {
     updateWindow(next);
   }, [updateWindow]);
 
-  // タッチ / ホイール操作
+  // window にバインドすることで FeedItem の touch-action:pan-y を跨いで検知できる
   useEffect(() => {
-    const el = containerRef.current;
-    if (!el) return;
-    let startY = 0, startTime = 0;
-
-    const onTouchStart = (e: TouchEvent) => { startY = e.touches[0].clientY; startTime = Date.now(); };
-    const onTouchEnd   = (e: TouchEvent) => {
-      const dy = startY - e.changedTouches[0].clientY;
-      const dt = Date.now() - startTime;
-      if (Math.abs(dy) > 40 && dt < 500) { if (dy > 0) goNext(); else goPrev(); }
+    const onTouchStart = (e: TouchEvent) => {
+      touchStartYRef.current = e.touches[0].clientY;
+      touchTimeRef.current   = Date.now();
+    };
+    const onTouchEnd = (e: TouchEvent) => {
+      const dy = touchStartYRef.current - e.changedTouches[0].clientY;
+      const dt = Date.now() - touchTimeRef.current;
+      if (Math.abs(dy) > 40 && dt < 500) {
+        if (dy > 0) goNext(); else goPrev();
+      }
     };
     const onWheel = (e: WheelEvent) => {
+      // フィードコンテナの中のホイールのみ処理
+      const target = e.target as HTMLElement;
+      if (!target.closest(".feed-container")) return;
       e.preventDefault();
       if (wheelLockRef.current) return;
       wheelLockRef.current = true;
@@ -111,13 +111,13 @@ export default function SearchFeedPage() {
       if (e.deltaY > 0) goNext(); else goPrev();
     };
 
-    el.addEventListener("touchstart", onTouchStart, { passive: true });
-    el.addEventListener("touchend",   onTouchEnd,   { passive: true });
-    el.addEventListener("wheel",      onWheel,      { passive: false });
+    window.addEventListener("touchstart", onTouchStart, { passive: true });
+    window.addEventListener("touchend",   onTouchEnd,   { passive: true });
+    window.addEventListener("wheel",      onWheel,      { passive: false, capture: true });
     return () => {
-      el.removeEventListener("touchstart", onTouchStart);
-      el.removeEventListener("touchend",   onTouchEnd);
-      el.removeEventListener("wheel",      onWheel);
+      window.removeEventListener("touchstart", onTouchStart);
+      window.removeEventListener("touchend",   onTouchEnd);
+      window.removeEventListener("wheel",      onWheel, { capture: true } as EventListenerOptions);
     };
   }, [goNext, goPrev]);
 
@@ -131,7 +131,7 @@ export default function SearchFeedPage() {
 
   return (
     <>
-      <div ref={containerRef} className="feed-container">
+      <div className="feed-container">
         {windowItems.map((item, i) => {
           const absIndex = windowStartRef.current + i;
           const offset   = absIndex - currentIndex;

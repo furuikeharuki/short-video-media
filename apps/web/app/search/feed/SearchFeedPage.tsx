@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo } from "react";
+import { useEffect, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import FeedItem from "@/components/FeedItem";
 import type { MovieCard } from "@/lib/api/feed";
@@ -19,30 +19,28 @@ function shuffle<T>(arr: T[]): T[] {
 
 export default function SearchFeedPage() {
   const searchParams = useSearchParams();
-  const startId = searchParams.get("id") ?? null;
-  // start（index微小互換性）もフォールバックで保持
-  const startIndex = Number(searchParams.get("start") ?? "0");
+  const selectedId = searchParams.get("id") ?? null;
 
-  const items = useMemo<MovieCard[]>(() => {
+  // useMemoはサーバー・クライアント間で結果が固定されランダムにならないため
+  // useEffectでクライアントマウント後に一度だけ実行する
+  const [items, setItems] = useState<MovieCard[]>([]);
+
+  useEffect(() => {
     try {
       const raw = sessionStorage.getItem(STORAGE_KEY);
-      if (!raw) return [];
+      if (!raw) return;
       const arr: MovieCard[] = JSON.parse(raw);
-      if (arr.length === 0) return [];
+      if (arr.length === 0) return;
 
-      // タップしたアイテムを特定
-      const selected =
-        (startId ? arr.find((m) => m.id === startId) : null) ??
-        arr[startIndex] ??
-        arr[0];
-
-      // 残りをシャッフルして選択アイテムを先頭に追加
+      const selected = (selectedId ? arr.find((m) => m.id === selectedId) : null) ?? arr[0];
       const rest = shuffle(arr.filter((m) => m.id !== selected.id));
-      return [selected, ...rest];
+      setItems([selected, ...rest]);
     } catch {
-      return [];
+      setItems([]);
     }
-  }, [startId, startIndex]);
+  // マウント時に一度だけ実行（selectedIdは依存配列に入れない）
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   if (items.length === 0) {
     return (

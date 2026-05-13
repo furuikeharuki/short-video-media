@@ -12,13 +12,14 @@ interface Props {
 export default function SearchGrid({ items }: Props) {
   const router = useRouter();
 
-  const handleClick = (index: number) => {
+  const handleClick = (item: MovieCard) => {
     try {
       sessionStorage.setItem(STORAGE_KEY, JSON.stringify(items));
     } catch {
-      // sessionStorage 使用不可な璯境では無視
+      // sessionStorage 使用不可な環境では無視
     }
-    router.push(`/search/feed?start=${index}`);
+    // id を渡すことでフィード側が選択アイテムを正確に特定できる
+    router.push(`/search/feed?id=${encodeURIComponent(item.id)}`);
   };
 
   return (
@@ -26,7 +27,7 @@ export default function SearchGrid({ items }: Props) {
       {items.map((item, index) => (
         <div
           key={item.id}
-          onClick={() => handleClick(index)}
+          onClick={() => handleClick(item)}
           style={cardStyle}
         >
           <div style={thumbWrapStyle}>

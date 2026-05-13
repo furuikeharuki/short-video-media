@@ -6,6 +6,7 @@
 """
 import asyncio
 import json
+from datetime import date
 from pathlib import Path
 
 from sqlalchemy import delete
@@ -17,6 +18,13 @@ from app.db.models.genre import Genre
 from app.db.models.movie import Movie, MovieGenre, MovieActress
 
 MOCK_PATH = Path(__file__).parent.parent / "app" / "mock_data" / "movies.json"
+
+
+def parse_date(value: str | None) -> date | None:
+    """'YYYY-MM-DD'文字列をdateオブジェクトに変換。NoneはそのままNoneになる。"""
+    if value is None:
+        return None
+    return date.fromisoformat(value)
 
 
 async def seed(session: AsyncSession) -> None:
@@ -51,18 +59,18 @@ async def seed(session: AsyncSession) -> None:
             sample_movie_url=data.get("sample_movie_url"),
             sample_embed_url=data.get("sample_embed_url", ""),
             affiliate_url=data.get("affiliate_url", ""),
+            affiliate_url_en=data.get("affiliate_url_en"),
             price_list=data.get("price_list"),
             price_min=data.get("price_min"),
-            release_date=data.get("release_date"),
-            delivery_date=data.get("delivery_date"),
-            rental_start_date=data.get("rental_start_date"),
-            primary_date=data.get("primary_date"),
+            release_date=parse_date(data.get("release_date")),
+            delivery_date=parse_date(data.get("delivery_date")),
+            rental_start_date=parse_date(data.get("rental_start_date")),
+            primary_date=parse_date(data.get("primary_date")),
             review_count=data.get("review_count", 0),
             review_average=data.get("review_average"),
             director_name=data.get("director_name"),
             label_name=data.get("label_name"),
             maker_name=data.get("maker_name"),
-            affiliate_url_en=data.get("affiliate_url_en"),
         )
         session.add(movie)
 

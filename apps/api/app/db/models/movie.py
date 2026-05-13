@@ -31,6 +31,7 @@ class Movie(Base):
 
     # アフィリエイト
     affiliate_url: Mapped[str] = mapped_column(String, default="")
+    affiliate_url_en: Mapped[str | None] = mapped_column(String)                      # 英語向けURL
 
     # 価格
     price_list: Mapped[dict | None] = mapped_column(JSONB)                            # 全価格体系（JSONB）
@@ -51,7 +52,7 @@ class Movie(Base):
     label_name: Mapped[str | None] = mapped_column(String)
     maker_name: Mapped[str | None] = mapped_column(String)
 
-    # シリーズFK
+    # シリーFK
     series_id: Mapped[str | None] = mapped_column(
         ForeignKey("series.id", ondelete="SET NULL"), index=True
     )

@@ -138,12 +138,21 @@ export default function FeedItem({ item, isFirst, isSecond = false }: Props) {
     calcVideoArea();
   }, [calcVideoArea]);
 
+  // CTAの高さ変化を監視（既存）
   useEffect(() => {
     const cta = ctaRef.current;
     if (!cta) return;
     const ro = new ResizeObserver(() => calcVideoArea());
     ro.observe(cta);
     return () => ro.disconnect();
+  }, [calcVideoArea]);
+
+  // ウィンドウリサイズ時（スマホのアドレスバー表示/非表示・画面回転）に再計算
+  // 動画スタイルには触れず、--video-top / --video-height のCSS変数のみ更新する
+  useEffect(() => {
+    const onResize = () => calcVideoArea();
+    window.addEventListener("resize", onResize, { passive: true });
+    return () => window.removeEventListener("resize", onResize);
   }, [calcVideoArea]);
 
   const handleMetadata = useCallback(() => {

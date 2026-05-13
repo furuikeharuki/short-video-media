@@ -18,7 +18,6 @@ export default function SearchGrid({ items }: Props) {
     } catch {
       // sessionStorage 使用不可な環境では無視
     }
-    // id を渡すことでフィード側が選択アイテムを正確に特定できる
     router.push(`/search/feed?id=${encodeURIComponent(item.id)}`);
   };
 
@@ -32,14 +31,14 @@ export default function SearchGrid({ items }: Props) {
         >
           <div style={thumbWrapStyle}>
             <img
-              src={item.thumbnail_url}
+              src={item.image_url_large ?? item.image_url_list ?? ""}
               alt={item.title}
               style={thumbStyle}
               loading={index < 6 ? "eager" : "lazy"}
               width={360}
               height={640}
             />
-            {item.sample_video_url && (
+            {item.sample_movie_url && (
               <span style={playBadgeStyle}>▶</span>
             )}
           </div>

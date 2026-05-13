@@ -29,8 +29,14 @@ import asyncio
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import create_async_engine
 from app.core.config import settings
+
+def _get_async_url(url: str) -> str:
+    if url.startswith('postgresql://'):
+        return url.replace('postgresql://', 'postgresql+asyncpg://', 1)
+    return url
+
 async def clean():
-    engine = create_async_engine(settings.DATABASE_URL)
+    engine = create_async_engine(_get_async_url(settings.DATABASE_URL))
     async with engine.begin() as conn:
         await conn.execute(text('TRUNCATE movie_genres, movie_actresses, movies, genres, actresses, series RESTART IDENTITY CASCADE'))
     await engine.dispose()
@@ -48,6 +54,6 @@ git push origin main
 echo "Waiting 30s for Railway deploy..."
 sleep 30
 curl -s https://short-video-media-production.up.railway.app/api/v1/feed \
-  | python3 -m json.tool | grep "$MIGRATION_MSG" | head
+  | python3 -m json.tool | head -30
 
 echo "Done! Migration: $MIGRATION_MSG"

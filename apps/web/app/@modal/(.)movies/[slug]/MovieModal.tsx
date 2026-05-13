@@ -10,15 +10,12 @@ export default function MovieModal({ movie }: { movie: MovieDetail }) {
   const router = useRouter();
   const scrollRef = useRef<HTMLDivElement>(null);
 
-  // モーダル開く時にフィード動画を一時停止、閉じる時に再生
   useEffect(() => {
     const videos = Array.from(
       document.querySelectorAll<HTMLVideoElement>(".feed-item video")
     );
     const wasPlaying = videos.map((v) => !v.paused);
-
     videos.forEach((v) => v.pause());
-
     return () => {
       videos.forEach((v, i) => {
         if (wasPlaying[i]) v.play().catch(() => {});
@@ -26,14 +23,12 @@ export default function MovieModal({ movie }: { movie: MovieDetail }) {
     };
   }, []);
 
-  // body スクロールロック（モーダル表示中）
   useEffect(() => {
     const prev = document.body.style.overflow;
     document.body.style.overflow = "hidden";
     return () => { document.body.style.overflow = prev; };
   }, []);
 
-  // Escape キーで閉じる
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") router.back();
@@ -43,17 +38,13 @@ export default function MovieModal({ movie }: { movie: MovieDetail }) {
   }, [router]);
 
   const imgSrc = movie.image_url_large ?? movie.image_url_list ?? "";
+  const price = movie.price_list?.sale_price ?? movie.price_list?.list_price ?? movie.price_min;
+  const hasReview = movie.review_count > 0 && movie.review_average != null;
 
   return (
     <>
-      {/* 背景オーバーレイ */}
-      <div
-        aria-hidden="true"
-        onClick={() => router.back()}
-        style={backdropStyle}
-      />
+      <div aria-hidden="true" onClick={() => router.back()} style={backdropStyle} />
 
-      {/* モーダル本体 */}
       <div role="dialog" aria-modal="true" style={modalStyle}>
         <DetailViewTracker slug={movie.slug} title={movie.title} />
 
@@ -69,7 +60,6 @@ export default function MovieModal({ movie }: { movie: MovieDetail }) {
               height={1280}
               loading="eager"
             />
-            {/* 戻るボタン */}
             <button
               onClick={() => router.back()}
               aria-label="フィードに戻る"
@@ -85,18 +75,67 @@ export default function MovieModal({ movie }: { movie: MovieDetail }) {
 
           {/* コンテンツ */}
           <div style={contentStyle}>
+            {/* ジャンル */}
             <div style={genreListStyle}>
               {movie.genres.map((g) => (
                 <span key={g} style={badgeStyle}>{g}</span>
               ))}
             </div>
+
+            {/* タイトル */}
             <h1 style={titleStyle}>{movie.title}</h1>
-            {movie.actresses.length > 0 && (
-              <p style={actressStyle}>👤 {movie.actresses.join(" / ")}</p>
-            )}
+
+            {/* メタ情報エリア */}
+            <div style={metaAreaStyle}>
+              {/* 女優 */}
+              {movie.actresses.length > 0 && (
+                <div style={metaRowStyle}>
+                  <span style={metaLabelStyle}>出演</span>
+                  <span style={metaValueStyle}>{movie.actresses.join(" / ")}</span>
+                </div>
+              )}
+
+              {/* シリーズ */}
+              {movie.series_name && (
+                <div style={metaRowStyle}>
+                  <span style={metaLabelStyle}>シリーズ</span>
+                  <span style={metaValueStyle}>{movie.series_name}</span>
+                </div>
+              )}
+
+              {/* レビュー */}
+              {hasReview && (
+                <div style={metaRowStyle}>
+                  <span style={metaLabelStyle}>評価</span>
+                  <span style={metaValueStyle}>
+                    <span style={starsStyle}>
+                      {"★".repeat(Math.round(movie.review_average!))}
+                      {"☆".repeat(5 - Math.round(movie.review_average!))}
+                    </span>
+                    <span style={reviewNumStyle}>
+                      {movie.review_average!.toFixed(1)} ({movie.review_count}件)
+                    </span>
+                  </span>
+                </div>
+              )}
+
+              {/* 価格 */}
+              {price != null && (
+                <div style={metaRowStyle}>
+                  <span style={metaLabelStyle}>価格</span>
+                  <span style={{ ...metaValueStyle, color: "#e91e63", fontWeight: 700 }}>
+                    ¥{price.toLocaleString()}
+                  </span>
+                </div>
+              )}
+            </div>
+
+            {/* 説明文 */}
             {movie.description && (
               <p style={descStyle}>{movie.description}</p>
             )}
+
+            {/* CTA */}
             <div style={ctaStyle}>
               <AffiliateLink
                 href={movie.affiliate_url}
@@ -225,14 +264,54 @@ const titleStyle: React.CSSProperties = {
   fontSize: "clamp(18px, 5vw, 26px)",
   fontWeight: 700,
   lineHeight: 1.35,
-  marginBottom: "10px",
+  marginBottom: "16px",
   color: "#fff",
 };
 
-const actressStyle: React.CSSProperties = {
+const metaAreaStyle: React.CSSProperties = {
+  display: "flex",
+  flexDirection: "column",
+  gap: "10px",
+  marginBottom: "20px",
+  paddingBottom: "20px",
+  borderBottom: "1px solid rgba(255,255,255,0.08)",
+};
+
+const metaRowStyle: React.CSSProperties = {
+  display: "flex",
+  alignItems: "flex-start",
+  gap: "10px",
+};
+
+const metaLabelStyle: React.CSSProperties = {
+  fontSize: "11px",
+  fontWeight: 600,
+  color: "rgba(255,255,255,0.35)",
+  letterSpacing: "0.06em",
+  minWidth: "52px",
+  paddingTop: "2px",
+  flexShrink: 0,
+};
+
+const metaValueStyle: React.CSSProperties = {
   fontSize: "13px",
-  color: "rgba(255,255,255,0.55)",
-  marginBottom: "16px",
+  color: "rgba(255,255,255,0.75)",
+  lineHeight: 1.5,
+  display: "flex",
+  alignItems: "center",
+  gap: "6px",
+  flexWrap: "wrap",
+};
+
+const starsStyle: React.CSSProperties = {
+  color: "#f5c518",
+  fontSize: "14px",
+  letterSpacing: "1px",
+};
+
+const reviewNumStyle: React.CSSProperties = {
+  fontSize: "12px",
+  color: "rgba(255,255,255,0.45)",
 };
 
 const descStyle: React.CSSProperties = {
@@ -240,8 +319,6 @@ const descStyle: React.CSSProperties = {
   lineHeight: 1.8,
   color: "rgba(255,255,255,0.6)",
   marginBottom: "28px",
-  borderTop: "1px solid rgba(255,255,255,0.08)",
-  paddingTop: "20px",
 };
 
 const ctaStyle: React.CSSProperties = {

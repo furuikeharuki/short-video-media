@@ -24,6 +24,51 @@ const isLandscapeScreen = () => window.innerWidth > window.innerHeight;
 
 let globalUserGestured = false;
 
+/** contain モード時に映像が実際に描画される領域を計算する */
+function calcRenderedRect(
+  containerW: number,
+  containerH: number,
+  videoW: number,
+  videoH: number,
+  objectPosition: string, // e.g. "center 30%"
+): { top: number; left: number; width: number; height: number } {
+  if (videoW === 0 || videoH === 0) {
+    return { top: 0, left: 0, width: containerW, height: containerH };
+  }
+  const containerAspect = containerW / containerH;
+  const videoAspect     = videoW / videoH;
+
+  let renderedW: number;
+  let renderedH: number;
+  if (videoAspect < containerAspect) {
+    // 縦いっぱい、横に黒帯
+    renderedH = containerH;
+    renderedW = renderedH * videoAspect;
+  } else {
+    // 横いっぱい、縦に黒帯
+    renderedW = containerW;
+    renderedH = renderedW / videoAspect;
+  }
+
+  // object-position のパース（"center 30%" など）
+  const parts = objectPosition.split(" ");
+  const parsePos = (val: string, total: number, rendered: number) => {
+    if (val === "center") return (total - rendered) / 2;
+    if (val === "top" || val === "left") return 0;
+    if (val === "bottom" || val === "right") return total - rendered;
+    if (val.endsWith("%")) {
+      const pct = parseFloat(val) / 100;
+      return pct * (total - rendered);
+    }
+    return parseFloat(val) || (total - rendered) / 2;
+  };
+
+  const left = parsePos(parts[0] ?? "center", containerW, renderedW);
+  const top  = parsePos(parts[1] ?? "center", containerH, renderedH);
+
+  return { top, left, width: renderedW, height: renderedH };
+}
+
 export default function FeedItem({ item, isFirst, isSecond = false }: Props) {
   const videoRef      = useRef<HTMLVideoElement>(null);
   const ctaRef        = useRef<HTMLDivElement>(null);
@@ -51,6 +96,8 @@ export default function FeedItem({ item, isFirst, isSecond = false }: Props) {
   const pcClickTimerRef          = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const [hintVisible, setHintVisible] = useState(isFirst);
+
+  // overlay wrap: 映像の実際の描画領域に合わせた位置・サイズ
   const [wrapStyle, setWrapStyle] = useState<React.CSSProperties>({
     position: "absolute",
     top: 0, left: 0, width: 0, height: 0,
@@ -117,33 +164,54 @@ export default function FeedItem({ item, isFirst, isSecond = false }: Props) {
     }
 
     const ctaTopInSection = ctaRect.top - sectionRect.top;
-    const top    = V_PADDING_TOP;
-    const height = Math.max(ctaTopInSection - top - V_PADDING_BOTTOM, 0);
-    const width  = section.offsetWidth - H_PADDING * 2;
+    const videoTop    = V_PADDING_TOP;
+    const videoHeight = Math.max(ctaTopInSection - videoTop - V_PADDING_BOTTOM, 0);
+    const videoWidth  = section.offsetWidth - H_PADDING * 2;
 
-    // inset/width/heightの初期値なしの状態から書き込むので競合しない
+    const objPosition = resolvedFit === "contain" ? "center 30%" : "center center";
+
+    // video 本体のスタイル
     video.style.position       = "absolute";
-    video.style.top            = `${top}px`;
+    video.style.top            = `${videoTop}px`;
     video.style.left           = `${H_PADDING}px`;
     video.style.right          = "";
     video.style.bottom         = "";
-    video.style.width          = `${width}px`;
-    video.style.height         = `${height}px`;
+    video.style.width          = `${videoWidth}px`;
+    video.style.height         = `${videoHeight}px`;
     video.style.objectFit      = resolvedFit;
-    video.style.objectPosition = resolvedFit === "contain" ? "center 30%" : "center center";
+    video.style.objectPosition = objPosition;
     video.style.borderRadius   = "8px";
 
+    // overlay wrap: contain時は映像の実際の描画領域を計算して配置
+    // cover時はコンテナ全体が映像なので videoTop/videoWidth/videoHeight そのまま
+    let wrapTop  = videoTop;
+    let wrapLeft = H_PADDING;
+    let wrapW    = videoWidth;
+    let wrapH    = videoHeight;
+
+    if (resolvedFit === "contain" && video.videoWidth > 0 && video.videoHeight > 0) {
+      const rendered = calcRenderedRect(
+        videoWidth, videoHeight,
+        video.videoWidth, video.videoHeight,
+        objPosition,
+      );
+      wrapTop  = videoTop  + rendered.top;
+      wrapLeft = H_PADDING + rendered.left;
+      wrapW    = rendered.width;
+      wrapH    = rendered.height;
+    }
+
     setWrapStyle(prev => {
-      // 値が同じなら再レンダーしない
-      if (prev.top === top && prev.left === H_PADDING && prev.width === width && prev.height === height) {
-        return prev;
-      }
+      if (
+        prev.top === wrapTop && prev.left === wrapLeft &&
+        prev.width === wrapW && prev.height === wrapH
+      ) return prev;
       return {
         position: "absolute",
-        top,
-        left: H_PADDING,
-        width,
-        height,
+        top: wrapTop,
+        left: wrapLeft,
+        width: wrapW,
+        height: wrapH,
         pointerEvents: "none",
         zIndex: 25,
         overflow: "hidden",
@@ -152,7 +220,6 @@ export default function FeedItem({ item, isFirst, isSecond = false }: Props) {
     });
   }, []);
 
-  // useLayoutEffect: DOMペイント前に同期的に実行されるので初回レンダーから正しい位置になる
   useLayoutEffect(() => {
     calcVideoArea();
   }, [calcVideoArea]);
@@ -184,6 +251,7 @@ export default function FeedItem({ item, isFirst, isSecond = false }: Props) {
       fit = videoAspect <= screenAspect ? "cover" : "contain";
     }
     objectFitRef.current = fit;
+    // メタデータ取得後に再計算（videoWidth/videoHeightが確定する）
     calcVideoArea(fit);
   }, [calcVideoArea]);
 
@@ -409,7 +477,6 @@ export default function FeedItem({ item, isFirst, isSecond = false }: Props) {
             <div className="shimmer-inner" />
           </div>
 
-          {/* inset/width/heightの初期値なし。calcVideoAreaが全て設定する */}
           <video
             ref={videoRef}
             src={item.sample_movie_url}
@@ -427,7 +494,6 @@ export default function FeedItem({ item, isFirst, isSecond = false }: Props) {
             }}
           />
 
-          {/* wrapStyleはReact state経由。calcVideoAreaがvideoと全同値をsetWrapStyleする */}
           <div style={wrapStyle}>
             <div ref={overlayRef} className="action-overlay" aria-hidden="true" style={{ display: "none" }}>
               <span className="action-icon action-icon--pause" style={{ display: "none" }}>

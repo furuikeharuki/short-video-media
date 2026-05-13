@@ -15,18 +15,18 @@ export default function LawPage() {
         </nav>
 
         <h1 style={styles.h1}>特定商取引法に基づく表記</h1>
-        <p style={styles.updated}>最終更新日：2026年5月13日</p>
+        <p style={styles.updated}>最終更新日：2026年5月12日</p>
 
         <table style={styles.table}>
           <tbody>
             <Row label="販売業者">
-              <p>各販売事業者（FANZA等）</p>
+              <p>Short Video Media 運営者</p>
             </Row>
             <Row label="所在地">
               <p>東京都</p>
             </Row>
             <Row label="メールアドレス">
-              <a href="mailto:avshorts0512@gmail.com" style={styles.link}>avshorts0512@gmail.com</a>
+              <p>お問い合わせフォームよりご連絡ください。</p>
             </Row>
             <Row label="運営責任者">
               <p>サイト運営者</p>

@@ -1,7 +1,7 @@
 """fanza_schema_v2
 
 Revision ID: fanza_schema_v2
-Revises: add_sample_video_url
+Revises: a1b2c3d4e5f6
 Create Date: 2026-05-13 04:00:00.000000+00:00
 
 """
@@ -12,7 +12,7 @@ import sqlalchemy as sa
 from sqlalchemy.dialects import postgresql
 
 revision: str = 'fanza_schema_v2'
-down_revision: Union[str, None] = 'add_sample_video_url'
+down_revision: Union[str, None] = 'a1b2c3d4e5f6'
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
@@ -51,7 +51,7 @@ def upgrade() -> None:
     op.drop_index('ix_movies_fanza_id', table_name='movies')
     op.drop_column('movies', 'fanza_id')
     op.drop_column('movies', 'thumbnail_url')
-    op.drop_column('movies', 'sample_embed_url')  # sample_video_urlは前マイグで追加済み
+    op.drop_column('movies', 'sample_embed_url')
 
     # --- movies テーブル: 新カラム追加 ---
     op.add_column('movies', sa.Column('content_id', sa.String(), nullable=True))
@@ -80,17 +80,16 @@ def upgrade() -> None:
     )
     op.create_index(op.f('ix_movies_content_id'), 'movies', ['content_id'], unique=True)
 
+    # --- sample_video_url カラム名変更 ---
+    op.alter_column('movies', 'sample_video_url', new_column_name='_sample_video_url_old', nullable=True)
+
     # --- movie_performers / performers 削除 ---
     op.drop_table('movie_performers')
     op.drop_index('ix_performers_name', table_name='performers')
     op.drop_table('performers')
 
-    # --- sample_video_url カラム名変更（前マイグで追加されている） ---
-    op.alter_column('movies', 'sample_video_url', new_column_name='_sample_video_url_old', nullable=True)
-
 
 def downgrade() -> None:
-    # 簡易ロールバック: 本番運用では使用しない前提
     op.drop_table('movie_actresses')
     op.drop_index(op.f('ix_actresses_name'), table_name='actresses')
     op.drop_table('actresses')

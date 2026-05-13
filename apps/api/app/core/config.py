@@ -9,6 +9,7 @@ class Settings(BaseSettings):
     )
 
     DATABASE_URL: str = "postgresql+asyncpg://postgres:postgres@localhost:5432/short_video_media"
+    REDIS_URL: str | None = None  # 未設定時は Redis なしでフォールバック
 
 
 settings = Settings()

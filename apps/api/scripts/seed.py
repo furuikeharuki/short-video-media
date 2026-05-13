@@ -20,6 +20,13 @@ from app.db.models.movie import Movie, MovieGenre, MovieActress
 MOCK_PATH = Path(__file__).parent.parent / "app" / "mock_data" / "movies.json"
 
 
+def _get_async_url(url: str) -> str:
+    """postgresql:// を postgresql+asyncpg:// に正規化する。"""
+    if url.startswith("postgresql://"):
+        return url.replace("postgresql://", "postgresql+asyncpg://", 1)
+    return url
+
+
 def parse_date(value: str | None) -> date | None:
     """'YYYY-MM-DD'文字列をdateオブジェクトに変換。NoneはそのままNoneになる。"""
     if value is None:
@@ -99,7 +106,7 @@ async def seed(session: AsyncSession) -> None:
 
 
 async def main() -> None:
-    engine = create_async_engine(settings.DATABASE_URL, echo=True)
+    engine = create_async_engine(_get_async_url(settings.DATABASE_URL), echo=True)
     session_factory = async_sessionmaker(engine, expire_on_commit=False, class_=AsyncSession)
     async with session_factory() as session:
         await seed(session)

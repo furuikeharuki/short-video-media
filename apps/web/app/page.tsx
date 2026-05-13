@@ -13,44 +13,50 @@ const feedStyle = `
   html { background: #000; }
   body { background: #000; overflow: hidden; height: 100dvh; }
 
+  /* ========= feed-container =========
+     スマホ: 画面全体
+     PC: カードを中央寄せ、左右は黒帯 */
   .feed-container {
     position: fixed;
     top: var(--header-h, 52px);
     left: 0; right: 0; bottom: 0;
     overflow: hidden;
+    display: flex;
+    align-items: stretch;
+    justify-content: center;
     background: #000;
   }
 
-  /* feed-slide は inset:0 で絶対配置しつつ、
-     内部を flex 中央寄せにすることで feed-item が中央に来る */
   .feed-slide {
     position: absolute;
     inset: 0;
+    transition: transform 0.32s cubic-bezier(0.4, 0, 0.2, 1);
+    will-change: transform;
     display: flex;
     justify-content: center;
     align-items: stretch;
-    transition: transform 0.32s cubic-bezier(0.4, 0, 0.2, 1);
-    will-change: transform;
   }
 
-  /* スマホ: 全幅全高 */
+  /* ========= feed-item (縦長カード) =========
+     スマホ: 幅100%、高さ100% (全画面)
+     PC   : 最大430px幅、中央寄せ */
   .feed-item {
     position: relative;
     width: 100%;
+    max-width: 430px;
     height: 100%;
     overflow: hidden;
     background: #111;
+    flex-shrink: 0;
   }
 
-  /* PC: 390px 固定幅 + 角丸 + 影で TikTok PC風 */
+  /* PCは少し小さめに固定して黒帯を出す */
   @media (min-width: 600px) {
     .feed-item {
       width: 390px;
-      height: calc(100% - 24px);
-      margin: 12px 0;
       border-radius: 16px;
-      box-shadow: 0 8px 40px rgba(0,0,0,0.8);
-      flex-shrink: 0;
+      margin: 12px 0;
+      box-shadow: 0 8px 40px rgba(0,0,0,0.7);
     }
   }
 
@@ -64,7 +70,7 @@ const feedStyle = `
     padding: 0 16px 32px;
     color: #fff;
     z-index: 10;
-    background: linear-gradient(to top, rgba(0,0,0,0.72) 0%, rgba(0,0,0,0.28) 60%, transparent 100%);
+    background: linear-gradient(to top, rgba(0,0,0,0.7) 0%, rgba(0,0,0,0.3) 60%, transparent 100%);
   }
   .genre-list { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 10px; }
   .genre-badge {

@@ -6,7 +6,13 @@ export const metadata: Metadata = {
   description: "縦型ショート動画でAV作品を探す",
 };
 
-export default function RootLayout({ children }: { children: React.ReactNode }) {
+export default function RootLayout({
+  children,
+  modal,
+}: {
+  children: React.ReactNode;
+  modal: React.ReactNode;
+}) {
   return (
     <html lang="ja">
       <head>
@@ -14,10 +20,11 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         <link rel="preconnect" href="https://cc3001.dmm.co.jp" />
         <link rel="preconnect" href="https://cc3001.dmm.co.jp" crossOrigin="anonymous" />
         <link rel="dns-prefetch" href="https://cc3001.dmm.co.jp" />
-        <link rel="preconnect" href="https://d2b5w5e5s4v5v5.cloudfront.net" />
-        <link rel="dns-prefetch" href="https://d2b5w5e5s4v5v5.cloudfront.net" />
       </head>
-      <body>{children}</body>
+      <body>
+        {children}
+        {modal}
+      </body>
     </html>
   );
 }

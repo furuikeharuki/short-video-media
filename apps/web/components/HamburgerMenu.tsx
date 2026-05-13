@@ -95,14 +95,14 @@ export default function HamburgerMenu() {
           borderLeft: "1px solid rgba(255,255,255,0.08)",
         }}
       >
-        {/* ドロワー内ロゴ：var(--accent)で購入ボタンと同色に展開 */}
+        {/* ドロワー内ロゴ：購入ボタンと同じ #e91e63 */}
         <div style={{
           padding: "20px 24px 8px",
           borderBottom: "1px solid rgba(255,255,255,0.08)",
           marginBottom: "4px",
         }}>
           <span style={{ fontSize: "18px", fontWeight: 800, letterSpacing: "-0.02em" }}>
-            <span style={{ color: "var(--accent)" }}>AV</span>
+            <span style={{ color: "#e91e63" }}>AV</span>
             <span style={{ color: "#fff" }}> Shorts</span>
           </span>
         </div>

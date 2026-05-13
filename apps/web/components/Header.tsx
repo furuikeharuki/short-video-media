@@ -156,7 +156,7 @@ export default function Header() {
   );
 }
 
-// globals.css の --accent を参照することで購入ボタンと完全に同一色になる
+/* 購入ボタン (.btn-buy) と同じ #e91e63 に統一 */
 const logoStyle = `
   .header-logo-text {
     font-size: 20px;
@@ -165,7 +165,7 @@ const logoStyle = `
     line-height: 1;
   }
   .logo-av {
-    color: var(--accent);
+    color: #e91e63;
   }
   .logo-shorts {
     color: #ffffff;

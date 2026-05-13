@@ -1,13 +1,14 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import FeedItem from "@/components/FeedItem";
 import type { MovieCard } from "@/lib/api/feed";
 
-const STORAGE_KEY = "search_feed_items";
+const STORAGE_KEY   = "search_feed_items";
+const WINDOW_SIZE   = 2;   // 現在地点の前後に保持する枚数
+const APPEND_AHEAD  = 5;   // 残りがこの枚数以下になったら追加
 
-/** Fisher-Yates シャッフル */
 function shuffle<T>(arr: T[]): T[] {
   const a = [...arr];
   for (let i = a.length - 1; i > 0; i--) {
@@ -19,12 +20,38 @@ function shuffle<T>(arr: T[]): T[] {
 
 export default function SearchFeedPage() {
   const searchParams = useSearchParams();
-  const selectedId = searchParams.get("id") ?? null;
+  const selectedId   = searchParams.get("id") ?? null;
 
-  // useMemoはサーバー・クライアント間で結果が固定されランダムにならないため
-  // useEffectでクライアントマウント後に一度だけ実行する
-  const [items, setItems] = useState<MovieCard[]>([]);
+  const baseItemsRef   = useRef<MovieCard[]>([]);   // 検索結果原列
+  const allItemsRef    = useRef<MovieCard[]>([]);   // 追加していく無限リスト
+  const currentIdxRef  = useRef(0);
+  const wheelLockRef   = useRef(false);
+  const containerRef   = useRef<HTMLDivElement>(null);
 
+  const [currentIndex, setCurrentIndex] = useState(0);
+  const [windowItems,  setWindowItems]  = useState<MovieCard[]>([]);
+  const windowStartRef = useRef(0);
+
+  // 現在インデックス周辺のウィンドウを再計算
+  const updateWindow = useCallback((idx: number) => {
+    const all   = allItemsRef.current;
+    const start = Math.max(0, idx - WINDOW_SIZE);
+    const end   = Math.min(all.length, idx + WINDOW_SIZE + 1);
+    windowStartRef.current = start;
+    setWindowItems(all.slice(start, end));
+  }, []);
+
+  // 末尾に近づいたらシャッフルした内容を追加（無限ループ）
+  const maybeAppend = useCallback((idx: number) => {
+    const all  = allItemsRef.current;
+    const base = baseItemsRef.current;
+    if (base.length === 0) return;
+    if (all.length - idx <= APPEND_AHEAD) {
+      allItemsRef.current = [...all, ...shuffle(base)];
+    }
+  }, []);
+
+  // 初期化: sessionStorage から読み込み、選択アイテムを先頭にシャッフル
   useEffect(() => {
     try {
       const raw = sessionStorage.getItem(STORAGE_KEY);
@@ -33,16 +60,68 @@ export default function SearchFeedPage() {
       if (arr.length === 0) return;
 
       const selected = (selectedId ? arr.find((m) => m.id === selectedId) : null) ?? arr[0];
-      const rest = shuffle(arr.filter((m) => m.id !== selected.id));
-      setItems([selected, ...rest]);
+      const rest     = shuffle(arr.filter((m) => m.id !== selected.id));
+      const initial  = [selected, ...rest];
+
+      baseItemsRef.current  = arr;      // ループ用に原列を保持
+      allItemsRef.current   = initial;
+      currentIdxRef.current = 0;
+      setCurrentIndex(0);
+      updateWindow(0);
     } catch {
-      setItems([]);
+      // エラー時は空のまま
     }
-  // マウント時に一度だけ実行（selectedIdは依存配列に入れない）
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  if (items.length === 0) {
+  const goNext = useCallback(() => {
+    const next = currentIdxRef.current + 1;
+    maybeAppend(next);
+    if (next >= allItemsRef.current.length) return;
+    currentIdxRef.current = next;
+    setCurrentIndex(next);
+    updateWindow(next);
+  }, [maybeAppend, updateWindow]);
+
+  const goPrev = useCallback(() => {
+    const next = Math.max(0, currentIdxRef.current - 1);
+    if (next === currentIdxRef.current) return;
+    currentIdxRef.current = next;
+    setCurrentIndex(next);
+    updateWindow(next);
+  }, [updateWindow]);
+
+  // タッチ / ホイール操作
+  useEffect(() => {
+    const el = containerRef.current;
+    if (!el) return;
+    let startY = 0, startTime = 0;
+
+    const onTouchStart = (e: TouchEvent) => { startY = e.touches[0].clientY; startTime = Date.now(); };
+    const onTouchEnd   = (e: TouchEvent) => {
+      const dy = startY - e.changedTouches[0].clientY;
+      const dt = Date.now() - startTime;
+      if (Math.abs(dy) > 40 && dt < 500) { if (dy > 0) goNext(); else goPrev(); }
+    };
+    const onWheel = (e: WheelEvent) => {
+      e.preventDefault();
+      if (wheelLockRef.current) return;
+      wheelLockRef.current = true;
+      setTimeout(() => { wheelLockRef.current = false; }, 300);
+      if (e.deltaY > 0) goNext(); else goPrev();
+    };
+
+    el.addEventListener("touchstart", onTouchStart, { passive: true });
+    el.addEventListener("touchend",   onTouchEnd,   { passive: true });
+    el.addEventListener("wheel",      onWheel,      { passive: false });
+    return () => {
+      el.removeEventListener("touchstart", onTouchStart);
+      el.removeEventListener("touchend",   onTouchEnd);
+      el.removeEventListener("wheel",      onWheel);
+    };
+  }, [goNext, goPrev]);
+
+  if (windowItems.length === 0) {
     return (
       <div style={styles.empty}>
         該当する作品が見つかりませんでした
@@ -52,16 +131,25 @@ export default function SearchFeedPage() {
 
   return (
     <>
-      <main className="feed-container">
-        {items.map((item, index) => (
-          <FeedItem
-            key={item.id}
-            item={item}
-            isFirst={index === 0}
-            isSecond={index === 1}
-          />
-        ))}
-      </main>
+      <div ref={containerRef} className="feed-container">
+        {windowItems.map((item, i) => {
+          const absIndex = windowStartRef.current + i;
+          const offset   = absIndex - currentIndex;
+          return (
+            <div
+              key={`${item.id}-${absIndex}`}
+              className="feed-slide"
+              style={{
+                transform:     `translateY(${offset * 100}%)`,
+                zIndex:        offset === 0 ? 1 : 0,
+                pointerEvents: offset === 0 ? "auto" : "none",
+              }}
+            >
+              <FeedItem item={item} isFirst={absIndex === 0} isSecond={absIndex === 1} />
+            </div>
+          );
+        })}
+      </div>
       <style>{feedStyle}</style>
     </>
   );
@@ -83,31 +171,35 @@ const styles: Record<string, React.CSSProperties> = {
 const feedStyle = `
   html { background: #000; }
   body { background: #000; overflow: hidden; height: 100dvh; }
+
   .feed-container {
     position: fixed;
-    top: var(--header-h);
+    top: var(--header-h, 52px);
     left: 0; right: 0; bottom: 0;
-    overflow-y: scroll;
-    scroll-snap-type: y mandatory;
-    -webkit-overflow-scrolling: touch;
-    overscroll-behavior-y: contain;
-    scrollbar-width: none;
+    overflow: hidden;
   }
-  .feed-container::-webkit-scrollbar { display: none; }
+
+  .feed-slide {
+    position: absolute;
+    inset: 0;
+    transition: transform 0.32s cubic-bezier(0.4, 0, 0.2, 1);
+    will-change: transform;
+  }
+
   .feed-item {
     position: relative;
     width: 100%;
-    height: calc(100dvh - var(--header-h));
-    scroll-snap-align: start;
-    scroll-snap-stop: always;
+    height: 100%;
     overflow: hidden;
     background: #000;
   }
+
   .video-bg { position: absolute; inset: 0; }
   .video-player { width: 100%; height: 100%; object-fit: cover; display: block; }
   .thumbnail-bg { position: absolute; inset: 0; }
   .thumbnail-img { width: 100%; height: 100%; object-fit: cover; display: block; }
   .thumbnail-overlay { display: none; }
+
   .info-overlay {
     position: absolute;
     bottom: 0; left: 0; right: 0;
@@ -145,5 +237,4 @@ const feedStyle = `
     backdrop-filter: blur(8px); color: #fff; flex: 1;
   }
   .btn-buy { background: #e91e63; color: #fff; flex: 1; }
-  @media (prefers-reduced-motion: reduce) { .scroll-hint { animation: none; } }
 `;

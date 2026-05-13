@@ -1,9 +1,12 @@
 export type MovieDetail = {
   id: string;
   content_id: string | null;
+  product_id: string | null;
+  maker_product: string | null;
   title: string;
   slug: string;
   description: string;
+  volume: number | null;
   image_url_list: string | null;
   image_url_large: string | null;
   sample_movie_url: string | null;
@@ -16,18 +19,17 @@ export type MovieDetail = {
     delivery_price: number | null;
   } | null;
   price_min: number | null;
+  release_date: string | null;
+  delivery_date: string | null;
+  rental_start_date: string | null;
   review_count: number;
   review_average: number | null;
+  director_name: string | null;
+  label_name: string | null;
+  maker_name: string | null;
   actresses: string[];
   genres: string[];
   series_name: string | null;
-  delivery_date: string | null;
-  release_date: string | null;
-  duration: number | null;
-  director: string | null;
-  maker: string | null;
-  label: string | null;
-  maker_product: string | null;
 };
 
 const API_BASE_URL =

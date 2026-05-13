@@ -7,20 +7,42 @@ import type { MovieCard } from "@/lib/api/feed";
 
 const STORAGE_KEY = "search_feed_items";
 
+/** Fisher-Yates シャッフル */
+function shuffle<T>(arr: T[]): T[] {
+  const a = [...arr];
+  for (let i = a.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [a[i], a[j]] = [a[j], a[i]];
+  }
+  return a;
+}
+
 export default function SearchFeedPage() {
   const searchParams = useSearchParams();
-  const start = Number(searchParams.get("start") ?? "0");
+  const startId = searchParams.get("id") ?? null;
+  // start（index微小互換性）もフォールバックで保持
+  const startIndex = Number(searchParams.get("start") ?? "0");
 
   const items = useMemo<MovieCard[]>(() => {
     try {
       const raw = sessionStorage.getItem(STORAGE_KEY);
       if (!raw) return [];
       const arr: MovieCard[] = JSON.parse(raw);
-      return [...arr.slice(start), ...arr.slice(0, start)];
+      if (arr.length === 0) return [];
+
+      // タップしたアイテムを特定
+      const selected =
+        (startId ? arr.find((m) => m.id === startId) : null) ??
+        arr[startIndex] ??
+        arr[0];
+
+      // 残りをシャッフルして選択アイテムを先頭に追加
+      const rest = shuffle(arr.filter((m) => m.id !== selected.id));
+      return [selected, ...rest];
     } catch {
       return [];
     }
-  }, [start]);
+  }, [startId, startIndex]);
 
   if (items.length === 0) {
     return (

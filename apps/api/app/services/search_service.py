@@ -1,7 +1,7 @@
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.repositories.search_repository import search_movies
-from app.schemas.movie import MovieCard
+from app.schemas.movie import MovieCard, PriceList
 from app.schemas.search import SearchResponse
 
 
@@ -11,14 +11,20 @@ async def search(db: AsyncSession, query: str) -> SearchResponse:
     items = [
         MovieCard(
             id=movie.id,
+            content_id=movie.content_id,
             title=movie.title,
             slug=movie.slug,
-            thumbnail_url=movie.thumbnail_url,
-            sample_video_url=movie.sample_video_url,
-            sample_embed_url=movie.sample_embed_url,
-            actresses=[p.name for p in movie.performers],
+            image_url_list=movie.image_url_list,
+            image_url_large=movie.image_url_large,
+            sample_movie_url=movie.sample_movie_url,
+            affiliate_url=movie.affiliate_url or "",
+            price_list=PriceList.model_validate(movie.price_list) if movie.price_list else None,
+            price_min=movie.price_min,
+            review_count=movie.review_count or 0,
+            review_average=float(movie.review_average) if movie.review_average else None,
+            actresses=[a.name for a in movie.actresses],
             genres=[g.name for g in movie.genres],
-            affiliate_url=movie.affiliate_url,
+            series_name=movie.series.name if movie.series else None,
         )
         for movie in movies
     ]

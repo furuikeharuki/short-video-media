@@ -1,25 +1,12 @@
-import { getFeed } from "@/lib/api/feed";
 import FeedClient from "@/app/FeedClient";
 
-export default async function HomePage() {
-  // SSR: seedなしでID順に初回20件を取得し高速に初期表示。
-  // クライアントマウント後に FeedClient 内でランダム順で差し替える。
-  let initialItems: Awaited<ReturnType<typeof getFeed>>["items"] = [];
-  let initialNextCursor: string | null = null;
-  try {
-    const feed = await getFeed(0, 20);
-    initialItems       = feed.items;
-    initialNextCursor  = feed.next_cursor;
-  } catch {
-    initialItems = [];
-  }
-
+export default function HomePage() {
+  // SSRで初期データを渡さない。
+  // クライアントマウント後に seed を生成して即座にランダム順で取得する。
+  // SSR で取得すると ID 順の最初の一件が一瞬フラッシュするため無効化。
   return (
     <>
-      <FeedClient
-        initialItems={initialItems}
-        initialNextCursor={initialNextCursor}
-      />
+      <FeedClient />
       <style>{feedStyle}</style>
     </>
   );

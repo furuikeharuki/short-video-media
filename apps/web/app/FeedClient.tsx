@@ -9,24 +9,18 @@ import type { MovieCard } from "@/lib/api/feed";
 const WINDOW_SIZE    = 2;
 const PREFETCH_AHEAD = 8;
 
-interface Props {
-  initialItems: MovieCard[];
-  initialNextCursor: string | null;
-}
-
-export default function FeedClient({ initialItems, initialNextCursor }: Props) {
-  const allItemsRef    = useRef<MovieCard[]>(initialItems);
-  const nextCursorRef  = useRef<string | null>(initialNextCursor);
-  const seedRef        = useRef<number | null>(null); // null = 未初期化
+export default function FeedClient() {
+  const allItemsRef    = useRef<MovieCard[]>([]);
+  const nextCursorRef  = useRef<string | null>(null);
+  const seedRef        = useRef<number | null>(null);
   const isFetchingRef  = useRef(false);
   const currentIdxRef  = useRef(0);
   const wheelLockRef   = useRef(false);
   const containerRef   = useRef<HTMLDivElement>(null);
 
   const [currentIndex, setCurrentIndex] = useState(0);
-  const [windowItems, setWindowItems]   = useState<MovieCard[]>(
-    () => initialItems.slice(0, Math.min(WINDOW_SIZE * 2 + 1, initialItems.length))
-  );
+  // 初期は必ず空配列（スピナー表示）
+  const [windowItems, setWindowItems]   = useState<MovieCard[]>([]);
   const windowStartRef = useRef(0);
 
   const updateWindow = useCallback((idx: number) => {
@@ -54,8 +48,7 @@ export default function FeedClient({ initialItems, initialNextCursor }: Props) {
       const res = await getFeed(parseInt(cursor, 10), 20, seed);
 
       if (overrideCursor === "0") {
-        // ランダム初期化時は一括差し替え
-        allItemsRef.current = res.items;
+        allItemsRef.current   = res.items;
         currentIdxRef.current = 0;
         setCurrentIndex(0);
       } else {
@@ -71,11 +64,10 @@ export default function FeedClient({ initialItems, initialNextCursor }: Props) {
     }
   }, [updateWindow]);
 
-  // マウント時: seed を得てランダム順で最初の20件を再取得
+  // マウント時に即座ランダム取得（SSRデータなし）
   useEffect(() => {
     const seed = getOrCreateSeed();
     seedRef.current = seed;
-    // SSRで取得したID順データをランダム順で上書き
     fetchMore("0", seed);
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -84,9 +76,7 @@ export default function FeedClient({ initialItems, initialNextCursor }: Props) {
     const all  = allItemsRef.current;
     const next = currentIdxRef.current + 1;
 
-    if (all.length - next <= PREFETCH_AHEAD) {
-      fetchMore();
-    }
+    if (all.length - next <= PREFETCH_AHEAD) fetchMore();
     if (next >= all.length) return;
 
     const item = all[currentIdxRef.current];
@@ -110,25 +100,18 @@ export default function FeedClient({ initialItems, initialNextCursor }: Props) {
     if (!el) return;
     let startY = 0, startTime = 0;
 
-    const onTouchStart = (e: TouchEvent) => {
-      startY    = e.touches[0].clientY;
-      startTime = Date.now();
-    };
-    const onTouchEnd = (e: TouchEvent) => {
+    const onTouchStart = (e: TouchEvent) => { startY = e.touches[0].clientY; startTime = Date.now(); };
+    const onTouchEnd   = (e: TouchEvent) => {
       const dy = startY - e.changedTouches[0].clientY;
       const dt = Date.now() - startTime;
-      if (Math.abs(dy) > 40 && dt < 500) {
-        if (dy > 0) goNext();
-        else        goPrev();
-      }
+      if (Math.abs(dy) > 40 && dt < 500) { if (dy > 0) goNext(); else goPrev(); }
     };
     const onWheel = (e: WheelEvent) => {
       e.preventDefault();
       if (wheelLockRef.current) return;
       wheelLockRef.current = true;
       setTimeout(() => { wheelLockRef.current = false; }, 300);
-      if (e.deltaY > 0) goNext();
-      else              goPrev();
+      if (e.deltaY > 0) goNext(); else goPrev();
     };
 
     el.addEventListener("touchstart", onTouchStart, { passive: true });
@@ -141,11 +124,9 @@ export default function FeedClient({ initialItems, initialNextCursor }: Props) {
     };
   }, [goNext, goPrev]);
 
-  // 空ガード
+  // 空ガード（フェッチ失敗時のリトライ）
   useEffect(() => {
-    if (windowItems.length === 0 && !isFetchingRef.current) {
-      fetchMore();
-    }
+    if (windowItems.length === 0 && !isFetchingRef.current) fetchMore();
   }, [windowItems, fetchMore]);
 
   return (
@@ -168,11 +149,7 @@ export default function FeedClient({ initialItems, initialNextCursor }: Props) {
                 pointerEvents: offset === 0 ? "auto" : "none",
               }}
             >
-              <FeedItem
-                item={item}
-                isFirst={absIndex === 0}
-                isSecond={absIndex === 1}
-              />
+              <FeedItem item={item} isFirst={absIndex === 0} isSecond={absIndex === 1} />
             </div>
           );
         })

@@ -11,9 +11,13 @@ class Settings(BaseSettings):
     DATABASE_URL: str = "postgresql+asyncpg://postgres:postgres@localhost:5432/short_video_media"
     REDIS_URL: str | None = None
 
-    # CORS: カンマ区切りで複数指定可能。例: https://example.com,https://www.example.com
-    # 未設定時は開発用にlocalhostのみ許可
-    ALLOWED_ORIGINS: list[str] = ["http://localhost:3000", "http://localhost:3001"]
+    # CORS許可Origin。カンマ区切りで複数指定可能。
+    # 例: ALLOWED_ORIGINS=http://localhost:3000,https://example.com
+    ALLOWED_ORIGINS: str = "http://localhost:3000,http://localhost:3001"
+
+    @property
+    def allowed_origins_list(self) -> list[str]:
+        return [origin.strip() for origin in self.ALLOWED_ORIGINS.split(",") if origin.strip()]
 
     @property
     def async_database_url(self) -> str:

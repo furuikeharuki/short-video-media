@@ -32,8 +32,8 @@ export default function FeedClient() {
   const containerRef    = useRef<HTMLDivElement>(null);
   const preloadAbortRef = useRef<AbortController | null>(null);
   const activeGenresRef = useRef<string[]>([]);
-  /** タグ切替後のフェッチ完了まで true: goPrev を index=0 でブロック */
-  const genreFetchingRef = useRef(false);
+  /** goPrev で戻れる下限インデックス（タグ切替後は切替時点の index に固定） */
+  const minIdxRef = useRef(0);
 
   const [currentIndex, setCurrentIndex] = useState(0);
   const [windowItems, setWindowItems]   = useState<MovieCard[]>([]);
@@ -78,6 +78,7 @@ export default function FeedClient() {
       allItemsRef.current   = res.items;
       nextCursorRef.current = res.next_cursor;
       currentIdxRef.current = 0;
+      minIdxRef.current     = 0;
       setCurrentIndex(0);
       setIsEmpty(res.items.length === 0);
       setCurrentGenres(res.items[0]?.genres ?? []);
@@ -100,16 +101,11 @@ export default function FeedClient() {
 
     const currentItem = allItemsRef.current[currentIdxRef.current];
 
-    // フェッチ中フラグ ON & 旧プリフェッチをキャンセル
-    genreFetchingRef.current = true;
+    // 旧プリフェッチをキャンセル
     preloadAbortRef.current?.abort();
 
-    // index を 0 に移動（currentItem を先頭に固定）
-    // フェッチ完了前でも goPrev で前に戻れないようにする
-    allItemsRef.current   = currentItem ? [currentItem] : [];
-    currentIdxRef.current = 0;
-    setCurrentIndex(0);
-    updateWindow(0);
+    // goPrev の下限を現在地に設定（フェッチ完了後に 0 にリセット）
+    minIdxRef.current = currentIdxRef.current;
 
     ;(async () => {
       try {
@@ -119,14 +115,16 @@ export default function FeedClient() {
           next.length > 0 ? next : undefined,
         );
         const filtered = res.items.filter((item) => item.id !== currentItem?.id);
+        // 現在地を index=0 に移動し、以降を絞り込み済みで差し替え
         allItemsRef.current   = currentItem ? [currentItem, ...filtered] : filtered;
         nextCursorRef.current = res.next_cursor;
+        currentIdxRef.current = 0;
+        minIdxRef.current     = 0; // リセット
+        setCurrentIndex(0);
         setIsEmpty(filtered.length === 0 && !currentItem);
         updateWindow(0);
       } catch (e) {
         console.error("handleGenreToggle fetch failed", e);
-      } finally {
-        genreFetchingRef.current = false;
       }
     })();
   }, [updateWindow]);
@@ -150,9 +148,8 @@ export default function FeedClient() {
   }, [updateWindow]);
 
   const goPrev = useCallback(() => {
-    // タグ切替フェッチ中は index=0 より上に戻れない
-    if (genreFetchingRef.current && currentIdxRef.current === 0) return;
-    const next = Math.max(0, currentIdxRef.current - 1);
+    // minIdxRef より上には戻れない
+    const next = Math.max(minIdxRef.current, currentIdxRef.current - 1);
     if (next === currentIdxRef.current) return;
     currentIdxRef.current = next;
     setCurrentIndex(next);
@@ -164,7 +161,7 @@ export default function FeedClient() {
     if (!el) return;
 
     const isAtEnd = () => currentIdxRef.current >= allItemsRef.current.length - 1;
-    const isAtTop = () => currentIdxRef.current <= 0;
+    const isAtTop = () => currentIdxRef.current <= minIdxRef.current;
 
     let startY = 0;
     let startTime = 0;

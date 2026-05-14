@@ -5,12 +5,43 @@ const ALLOWED_EVENTS = new Set([
   "age_gate_pass",
   "detail_view",
   "affiliate_click",
+  "video_play",
+  "video_complete",
+  "scroll_depth",
+  "search",
 ]);
 
 type EventPayload = {
   event: string;
   properties?: Record<string, unknown>;
 };
+
+async function sendToGA4(event: string, properties: Record<string, unknown>) {
+  const GA_MEASUREMENT_ID = process.env.NEXT_PUBLIC_GA_MEASUREMENT_ID;
+  const GA_API_SECRET = process.env.GA_API_SECRET;
+
+  if (!GA_MEASUREMENT_ID || !GA_API_SECRET) return;
+
+  await fetch(
+    `https://www.google-analytics.com/mp/collect?measurement_id=${GA_MEASUREMENT_ID}&api_secret=${GA_API_SECRET}`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        client_id: properties.client_id ?? "anonymous",
+        events: [
+          {
+            name: event,
+            params: {
+              ...properties,
+              engagement_time_msec: 100,
+            },
+          },
+        ],
+      }),
+    }
+  );
+}
 
 export async function POST(request: Request) {
   try {
@@ -30,6 +61,9 @@ export async function POST(request: Request) {
     };
 
     console.log("[analytics]", JSON.stringify(payload));
+
+    // GA4に送信
+    await sendToGA4(payload.event, payload.properties);
 
     return NextResponse.json({ ok: true });
   } catch {

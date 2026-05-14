@@ -2,7 +2,11 @@ export type AnalyticsEventName =
   | "page_view"
   | "age_gate_pass"
   | "detail_view"
-  | "affiliate_click";
+  | "affiliate_click"
+  | "video_play"
+  | "video_complete"
+  | "scroll_depth"
+  | "search";
 
 export type AnalyticsProperties = Record<string, unknown>;
 

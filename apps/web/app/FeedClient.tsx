@@ -95,7 +95,6 @@ export default function FeedClient() {
         allItemsRef.current   = res.items;
         currentIdxRef.current = 0;
         setCurrentIndex(0);
-        // 初回ロード時に結果0件なら空状態を表示
         setIsEmpty(res.items.length === 0);
       } else {
         allItemsRef.current = [...allItemsRef.current, ...res.items];
@@ -192,8 +191,8 @@ export default function FeedClient() {
     if (windowItems.length === 0 && !isFetchingRef.current && !isEmpty) fetchMore();
   }, [windowItems, fetchMore, isEmpty]);
 
-  const showEmpty    = isEmpty && !isLoading;
-  const showLoading  = isLoading || (windowItems.length === 0 && !isEmpty);
+  const showEmpty   = isEmpty && !isLoading;
+  const showLoading = isLoading || (windowItems.length === 0 && !isEmpty);
 
   return (
     <>
@@ -218,16 +217,7 @@ export default function FeedClient() {
       <div ref={containerRef} className="feed-container">
         {showEmpty ? (
           <div className="feed-empty">
-            <div className="feed-empty-icon">🔍</div>
-            <p className="feed-empty-text">
-              「{activeGenre}」の該当作品が見つかりませんでした
-            </p>
-            <button
-              className="feed-empty-btn"
-              onClick={() => handleGenreSelect(null)}
-            >
-              オールに戻る
-            </button>
+            <p className="feed-empty-text">該当する作品が見つかりませんでした</p>
           </div>
         ) : showLoading ? (
           <div className="feed-loading">
@@ -276,20 +266,12 @@ const spinnerStyle = `
   @keyframes spin { to { transform: rotate(360deg); } }
   .feed-empty {
     position: absolute; inset: 0;
-    display: flex; flex-direction: column;
-    align-items: center; justify-content: center;
-    background: #000; gap: 16px;
+    display: flex; align-items: center; justify-content: center;
+    background: #000;
   }
-  .feed-empty-icon { font-size: 48px; }
   .feed-empty-text {
-    font-size: 15px; color: rgba(255,255,255,0.6);
-    text-align: center; line-height: 1.6;
-  }
-  .feed-empty-btn {
-    padding: 10px 24px; border-radius: 999px;
-    background: #e91e63; color: #fff;
-    font-size: 14px; font-weight: 700;
-    border: none; cursor: pointer;
+    font-size: 15px;
+    color: rgba(255,255,255,0.5);
   }
   .genre-bar {
     position: fixed;
@@ -324,5 +306,4 @@ const spinnerStyle = `
     border-color: #e91e63;
     color: #fff;
   }
-  @keyframes spin { to { transform: rotate(360deg); } }
 `;

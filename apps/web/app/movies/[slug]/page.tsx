@@ -6,6 +6,9 @@ import DetailViewTracker from "@/components/analytics/detail-view-tracker";
 import BackButton from "@/components/BackButton";
 import { getMovieBySlug } from "@/lib/api/movies";
 
+const SITE_NAME = "AV Shorts";
+const SITE_URL = "https://av-shorts.com";
+
 type PageProps = {
   params: Promise<{ slug: string }>;
 };
@@ -14,9 +17,35 @@ export async function generateMetadata({ params }: PageProps): Promise<Metadata>
   try {
     const { slug } = await params;
     const movie = await getMovieBySlug(slug);
-    return { title: `${movie.title} | Short Video Media` };
+    const title = `${movie.title} | ${SITE_NAME}`;
+    const description = movie.description
+      ? movie.description.slice(0, 120) + "..."
+      : `${movie.actresses.join("・")}出演。${movie.maker_name ?? ""}の作品をショート動画で試し見できます。`;
+    const imageUrl = movie.image_url_large ?? movie.image_url_list ?? "";
+    const canonical = `${SITE_URL}/movies/${slug}`;
+
+    return {
+      title,
+      description,
+      alternates: { canonical },
+      openGraph: {
+        type: "video.other",
+        url: canonical,
+        title,
+        description,
+        images: imageUrl ? [{ url: imageUrl, width: 720, height: 1280, alt: movie.title }] : [],
+        siteName: SITE_NAME,
+        locale: "ja_JP",
+      },
+      twitter: {
+        card: "summary_large_image",
+        title,
+        description,
+        images: imageUrl ? [imageUrl] : [],
+      },
+    };
   } catch {
-    return { title: "Short Video Media" };
+    return { title: SITE_NAME };
   }
 }
 
@@ -37,6 +66,7 @@ export default async function MovieDetailPage({ params }: PageProps) {
     const imgSrc = movie.image_url_large ?? movie.image_url_list ?? "";
     const price = movie.price_list?.sale_price ?? movie.price_list?.list_price ?? movie.price_min;
     const hasReview = movie.review_count > 0 && movie.review_average != null;
+    const canonical = `${SITE_URL}/movies/${slug}`;
 
     const metaRows = [
       { label: "出演",       value: movie.actresses.length > 0 ? movie.actresses.join(" / ") : NA },
@@ -50,16 +80,50 @@ export default async function MovieDetailPage({ params }: PageProps) {
       { label: "メーカー品番", value: movie.maker_product ?? NA },
     ];
 
+    // JSON-LD 構造化データ（VideoObject）
+    const jsonLd = {
+      "@context": "https://schema.org",
+      "@type": "VideoObject",
+      name: movie.title,
+      description: movie.description ?? `${movie.actresses.join("・")}出演作品`,
+      thumbnailUrl: imgSrc,
+      uploadDate: movie.delivery_date ?? movie.release_date ?? "",
+      duration: movie.volume ? `PT${movie.volume}M` : undefined,
+      contentUrl: canonical,
+      embedUrl: canonical,
+      author: {
+        "@type": "Organization",
+        name: movie.maker_name ?? SITE_NAME,
+      },
+      aggregateRating: hasReview ? {
+        "@type": "AggregateRating",
+        ratingValue: movie.review_average,
+        reviewCount: movie.review_count,
+        bestRating: 5,
+        worstRating: 1,
+      } : undefined,
+    };
+
     return (
       <>
+        <script
+          type="application/ld+json"
+          dangerouslySetInnerHTML={{ __html: JSON.stringify(jsonLd) }}
+        />
+        <link rel="canonical" href={canonical} />
         <main style={styles.main}>
           <DetailViewTracker slug={movie.slug} title={movie.title} />
 
           <div style={styles.heroWrap}>
-            <img src={imgSrc} alt="" aria-hidden="true" style={styles.heroBgBlur} />
             <img
               src={imgSrc}
-              alt={movie.title}
+              alt={`${movie.title} サムネイル`}
+              aria-hidden="true"
+              style={styles.heroBgBlur}
+            />
+            <img
+              src={imgSrc}
+              alt={`${movie.title}${movie.actresses.length > 0 ? ` - ${movie.actresses.join("・")}` : ""}`}
               style={styles.heroImg}
               width={720}
               height={1280}

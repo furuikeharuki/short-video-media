@@ -3,9 +3,47 @@ import Header from "@/components/Header";
 import AffiliateNotice from "@/components/AffiliateNotice";
 import "./globals.css";
 
+const SITE_NAME = "AV Shorts";
+const SITE_URL = "https://av-shorts.com";
+const SITE_DESCRIPTION = "FANZAのAV作品をショート動画で試し見。気に入ったらそのまま購入できるアダルト動画メディア。";
+
 export const metadata: Metadata = {
-  title: "AV Shorts",
-  description: "AVのショート動画メディア",
+  metadataBase: new URL(SITE_URL),
+  title: {
+    default: `${SITE_NAME} | AVショート動画メディア`,
+    template: `%s | ${SITE_NAME}`,
+  },
+  description: SITE_DESCRIPTION,
+  keywords: ["AV", "ショート動画", "FANZA", "アダルト動画", "サンプル動画", "アフィリエイト"],
+  authors: [{ name: SITE_NAME }],
+  creator: SITE_NAME,
+  openGraph: {
+    type: "website",
+    locale: "ja_JP",
+    url: SITE_URL,
+    siteName: SITE_NAME,
+    title: `${SITE_NAME} | AVショート動画メディア`,
+    description: SITE_DESCRIPTION,
+  },
+  twitter: {
+    card: "summary_large_image",
+    title: `${SITE_NAME} | AVショート動画メディア`,
+    description: SITE_DESCRIPTION,
+  },
+  robots: {
+    index: true,
+    follow: true,
+    googleBot: {
+      index: true,
+      follow: true,
+      "max-video-preview": -1,
+      "max-image-preview": "large",
+      "max-snippet": -1,
+    },
+  },
+  alternates: {
+    canonical: SITE_URL,
+  },
 };
 
 export default function RootLayout({

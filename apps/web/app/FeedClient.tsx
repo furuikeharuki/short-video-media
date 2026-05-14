@@ -39,12 +39,11 @@ export default function FeedClient() {
   const wheelLockRef    = useRef(false);
   const containerRef    = useRef<HTMLDivElement>(null);
   const preloadAbortRef = useRef<AbortController | null>(null);
-  // genresをrefで管理しfetchMoreのクロージャ問題を回避
   const activeGenresRef = useRef<string[]>([]);
 
   const [currentIndex, setCurrentIndex] = useState(0);
   const [windowItems, setWindowItems]   = useState<MovieCard[]>([]);
-  const [activeGenres, setActiveGenres] = useState<string[]>([]); // UI用
+  const [activeGenres, setActiveGenres] = useState<string[]>([]);
   const [isEmpty, setIsEmpty]           = useState(false);
   const [isLoading, setIsLoading]       = useState(false);
   const windowStartRef = useRef(0);
@@ -112,7 +111,7 @@ export default function FeedClient() {
     }
   }, [updateWindow]);
 
-  // タグをトグル（同じタグを再タップで解除）
+  // ジャンルトグル（FeedClientのgenre-bar + FeedItemのバッジ両方から呼ばれる）
   const handleGenreToggle = useCallback((tag: string) => {
     const current = activeGenresRef.current;
     const next = current.includes(tag)
@@ -204,6 +203,7 @@ export default function FeedClient() {
 
   return (
     <>
+      {/* 上部ジャンルバー（固定タグ一覧） */}
       <div className="genre-bar">
         {GENRE_TAGS.map((tag) => (
           <button
@@ -241,7 +241,13 @@ export default function FeedClient() {
                   visibility:    isActive ? "visible" : "hidden",
                 }}
               >
-                <FeedItem item={item} isFirst={absIndex === 0} isSecond={absIndex === 1} />
+                <FeedItem
+                  item={item}
+                  isFirst={absIndex === 0}
+                  isSecond={absIndex === 1}
+                  activeGenres={activeGenres}
+                  onGenreClick={handleGenreToggle}
+                />
               </div>
             );
           })

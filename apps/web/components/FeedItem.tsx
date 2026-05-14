@@ -8,6 +8,8 @@ interface Props {
   item: MovieCard;
   isFirst: boolean;
   isSecond?: boolean;
+  activeGenres?: string[];
+  onGenreClick?: (genre: string) => void;
 }
 
 const H_PADDING = 4;
@@ -18,13 +20,11 @@ const DBL_TAP_MS = 300;
 const LONG_PRESS_MS = 500;
 const TAP_MOVE_THRESHOLD = 10;
 const PLAY_THRESHOLD = 0.85;
-// preloadObserverは廃除→FeedClientのfetch()に一本化（隠しvideoのcanceled問題を修正）
 
 const isLandscapeScreen = () => window.innerWidth > window.innerHeight;
 
 let globalUserGestured = false;
 
-/** contain モード時に映像が実際に描画される領域を計算する */
 function calcRenderedRect(
   containerW: number,
   containerH: number,
@@ -66,7 +66,7 @@ function calcRenderedRect(
   return { top, left, width: renderedW, height: renderedH };
 }
 
-export default function FeedItem({ item, isFirst, isSecond = false }: Props) {
+export default function FeedItem({ item, isFirst, isSecond = false, activeGenres = [], onGenreClick }: Props) {
   const videoRef      = useRef<HTMLVideoElement>(null);
   const ctaRef        = useRef<HTMLDivElement>(null);
   const sectionRef    = useRef<HTMLElement>(null);
@@ -442,8 +442,30 @@ export default function FeedItem({ item, isFirst, isSecond = false }: Props) {
 
   const preloadAttr = isFirst || isSecond ? "auto" : "metadata";
 
+  // ジャンルバッジのクリック: イベント伝播を止めてFeedClientに通知
+  const handleGenreClick = useCallback((e: React.MouseEvent | React.TouchEvent, genre: string) => {
+    e.stopPropagation();
+    e.preventDefault();
+    onGenreClick?.(genre);
+  }, [onGenreClick]);
+
   return (
     <section ref={sectionRef} className="feed-item" data-movie-id={item.id}>
+      {/* 左上: ジャンルバッジ（タップで検索） */}
+      <div className="genre-badges-top">
+        {item.genres.slice(0, 4).map((g) => (
+          <button
+            key={g}
+            className={`genre-badge-btn${activeGenres.includes(g) ? " genre-badge-btn--active" : ""}`}
+            onTouchEnd={(e) => handleGenreClick(e, g)}
+            onClick={(e) => handleGenreClick(e, g)}
+            aria-label={`${g}で絞り込む`}
+          >
+            {g}
+          </button>
+        ))}
+      </div>
+
       {item.sample_movie_url ? (
         <div
           ref={containerRef}
@@ -534,9 +556,6 @@ export default function FeedItem({ item, isFirst, isSecond = false }: Props) {
       )}
 
       <div className="info-overlay">
-        <div className="genre-list">
-          {item.genres.map((g) => <span key={g} className="genre-badge">{g}</span>)}
-        </div>
         <h2 className="item-title">{item.title}</h2>
         {item.actresses.length > 0 && (
           <p className="item-actress">👤 {item.actresses.join(" / ")}</p>
@@ -564,6 +583,41 @@ export default function FeedItem({ item, isFirst, isSecond = false }: Props) {
 }
 
 const itemStyle = `
+  .genre-badges-top {
+    position: absolute;
+    top: 60px;
+    left: 12px;
+    z-index: 30;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    max-width: 60%;
+    pointer-events: auto;
+  }
+  .genre-badge-btn {
+    padding: 4px 10px;
+    border-radius: 999px;
+    border: 1px solid rgba(255,255,255,0.4);
+    background: rgba(0,0,0,0.45);
+    color: rgba(255,255,255,0.85);
+    font-size: 11px;
+    font-weight: 600;
+    cursor: pointer;
+    white-space: nowrap;
+    backdrop-filter: blur(6px);
+    -webkit-backdrop-filter: blur(6px);
+    transition: background 0.15s, border-color 0.15s, color 0.15s;
+    -webkit-tap-highlight-color: transparent;
+  }
+  .genre-badge-btn--active {
+    background: #e91e63;
+    border-color: #e91e63;
+    color: #fff;
+  }
+  .genre-badge-btn:active {
+    opacity: 0.75;
+  }
+
   .shimmer {
     position: absolute;
     top: ${V_PADDING_TOP}px;

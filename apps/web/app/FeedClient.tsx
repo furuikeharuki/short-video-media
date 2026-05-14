@@ -39,12 +39,13 @@ export default function FeedClient() {
   const wheelLockRef    = useRef(false);
   const containerRef    = useRef<HTMLDivElement>(null);
   const preloadAbortRef = useRef<AbortController | null>(null);
-  // activeGenreをrefで管理することでfetchMore内で常に最新値を参照できる
   const activeGenreRef  = useRef<string | null>(null);
 
   const [currentIndex, setCurrentIndex] = useState(0);
   const [windowItems, setWindowItems]   = useState<MovieCard[]>([]);
-  const [activeGenre, setActiveGenre]   = useState<string | null>(null); // UI表示用
+  const [activeGenre, setActiveGenre]   = useState<string | null>(null);
+  const [isEmpty, setIsEmpty]           = useState(false);
+  const [isLoading, setIsLoading]       = useState(false);
   const windowStartRef = useRef(0);
 
   const updateWindow = useCallback((idx: number) => {
@@ -66,7 +67,6 @@ export default function FeedClient() {
     }
   }, []);
 
-  // fetchMoreは常にactiveGenreRef.currentを参照するので追加ページも正しく絞り込まれる
   const fetchMore = useCallback(async (
     overrideCursor?: string,
     overrideSeed?: number,
@@ -95,6 +95,8 @@ export default function FeedClient() {
         allItemsRef.current   = res.items;
         currentIdxRef.current = 0;
         setCurrentIndex(0);
+        // 初回ロード時に結果0件なら空状態を表示
+        setIsEmpty(res.items.length === 0);
       } else {
         allItemsRef.current = [...allItemsRef.current, ...res.items];
       }
@@ -105,15 +107,16 @@ export default function FeedClient() {
       console.error("fetchMore failed", e);
     } finally {
       isFetchingRef.current = false;
+      setIsLoading(false);
     }
   }, [updateWindow]);
 
   const handleGenreSelect = useCallback((genre: string | null) => {
-    // refとstateを同時に更新。refはfetchMoreで即座に参照される
     activeGenreRef.current = genre;
     setActiveGenre(genre);
+    setIsEmpty(false);
+    setIsLoading(true);
 
-    // フィード状態をリセット
     allItemsRef.current   = [];
     nextCursorRef.current = null;
     currentIdxRef.current = 0;
@@ -186,8 +189,11 @@ export default function FeedClient() {
   }, [goNext, goPrev]);
 
   useEffect(() => {
-    if (windowItems.length === 0 && !isFetchingRef.current) fetchMore();
-  }, [windowItems, fetchMore]);
+    if (windowItems.length === 0 && !isFetchingRef.current && !isEmpty) fetchMore();
+  }, [windowItems, fetchMore, isEmpty]);
+
+  const showEmpty    = isEmpty && !isLoading;
+  const showLoading  = isLoading || (windowItems.length === 0 && !isEmpty);
 
   return (
     <>
@@ -210,7 +216,20 @@ export default function FeedClient() {
       </div>
 
       <div ref={containerRef} className="feed-container">
-        {windowItems.length === 0 ? (
+        {showEmpty ? (
+          <div className="feed-empty">
+            <div className="feed-empty-icon">🔍</div>
+            <p className="feed-empty-text">
+              「{activeGenre}」の該当作品が見つかりませんでした
+            </p>
+            <button
+              className="feed-empty-btn"
+              onClick={() => handleGenreSelect(null)}
+            >
+              オールに戻る
+            </button>
+          </div>
+        ) : showLoading ? (
           <div className="feed-loading">
             <div className="feed-spinner" />
           </div>
@@ -255,6 +274,23 @@ const spinnerStyle = `
     animation: spin 0.8s linear infinite;
   }
   @keyframes spin { to { transform: rotate(360deg); } }
+  .feed-empty {
+    position: absolute; inset: 0;
+    display: flex; flex-direction: column;
+    align-items: center; justify-content: center;
+    background: #000; gap: 16px;
+  }
+  .feed-empty-icon { font-size: 48px; }
+  .feed-empty-text {
+    font-size: 15px; color: rgba(255,255,255,0.6);
+    text-align: center; line-height: 1.6;
+  }
+  .feed-empty-btn {
+    padding: 10px 24px; border-radius: 999px;
+    background: #e91e63; color: #fff;
+    font-size: 14px; font-weight: 700;
+    border: none; cursor: pointer;
+  }
   .genre-bar {
     position: fixed;
     top: 52px;
@@ -288,4 +324,5 @@ const spinnerStyle = `
     border-color: #e91e63;
     color: #fff;
   }
+  @keyframes spin { to { transform: rotate(360deg); } }
 `;

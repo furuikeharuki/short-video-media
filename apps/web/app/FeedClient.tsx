@@ -32,6 +32,8 @@ export default function FeedClient() {
   const containerRef    = useRef<HTMLDivElement>(null);
   const preloadAbortRef = useRef<AbortController | null>(null);
   const activeGenresRef = useRef<string[]>([]);
+  /** タグ切替後のフェッチ完了まで true: goPrev を index=0 でブロック */
+  const genreFetchingRef = useRef(false);
 
   const [currentIndex, setCurrentIndex] = useState(0);
   const [windowItems, setWindowItems]   = useState<MovieCard[]>([]);
@@ -41,7 +43,6 @@ export default function FeedClient() {
   const [isLoading, setIsLoading]       = useState(false);
   const windowStartRef = useRef(0);
 
-  // ラバーバンド用
   const [dragPx, setDragPx] = useState(0);
   const dragStartY = useRef(0);
   const isDragging = useRef(false);
@@ -54,7 +55,6 @@ export default function FeedClient() {
     setWindowItems(all.slice(start, end));
     setCurrentGenres(all[idx]?.genres ?? []);
 
-    // 旧プリフェッチをキャンセルして再走
     preloadAbortRef.current?.abort();
     const controller = new AbortController();
     preloadAbortRef.current = controller;
@@ -98,11 +98,18 @@ export default function FeedClient() {
     activeGenresRef.current = next;
     setActiveGenres([...next]);
 
-    // 今見ている動画を確保
     const currentItem = allItemsRef.current[currentIdxRef.current];
 
-    // 旧プリフェッチを即座にキャンセル（タグ切替時点で不要になった動画の先読みを捨てる）
+    // フェッチ中フラグ ON & 旧プリフェッチをキャンセル
+    genreFetchingRef.current = true;
     preloadAbortRef.current?.abort();
+
+    // index を 0 に移動（currentItem を先頭に固定）
+    // フェッチ完了前でも goPrev で前に戻れないようにする
+    allItemsRef.current   = currentItem ? [currentItem] : [];
+    currentIdxRef.current = 0;
+    setCurrentIndex(0);
+    updateWindow(0);
 
     ;(async () => {
       try {
@@ -114,13 +121,12 @@ export default function FeedClient() {
         const filtered = res.items.filter((item) => item.id !== currentItem?.id);
         allItemsRef.current   = currentItem ? [currentItem, ...filtered] : filtered;
         nextCursorRef.current = res.next_cursor;
-        currentIdxRef.current = 0;
-        setCurrentIndex(0);
         setIsEmpty(filtered.length === 0 && !currentItem);
-        // updateWindow 内で prefetchVideo も再走する
         updateWindow(0);
       } catch (e) {
         console.error("handleGenreToggle fetch failed", e);
+      } finally {
+        genreFetchingRef.current = false;
       }
     })();
   }, [updateWindow]);
@@ -135,10 +141,8 @@ export default function FeedClient() {
   const goNext = useCallback(async () => {
     const all = allItemsRef.current;
     const currentItem = all[currentIdxRef.current];
-
     const nextIdx = currentIdxRef.current + 1;
     if (nextIdx >= all.length) return;
-
     if (currentItem) markSeen(currentItem.id);
     currentIdxRef.current = nextIdx;
     setCurrentIndex(nextIdx);
@@ -146,6 +150,8 @@ export default function FeedClient() {
   }, [updateWindow]);
 
   const goPrev = useCallback(() => {
+    // タグ切替フェッチ中は index=0 より上に戻れない
+    if (genreFetchingRef.current && currentIdxRef.current === 0) return;
     const next = Math.max(0, currentIdxRef.current - 1);
     if (next === currentIdxRef.current) return;
     currentIdxRef.current = next;
@@ -185,7 +191,6 @@ export default function FeedClient() {
       if (!isDragging.current) return;
       isDragging.current = false;
       setDragPx(0);
-
       const dy = e.changedTouches[0].clientY - startY;
       const dt = Date.now() - startTime;
       if (Math.abs(dy) > 60 && dt < 500) {

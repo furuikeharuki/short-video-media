@@ -17,6 +17,9 @@ export const metadata: Metadata = {
   keywords: ["AV", "ショート動画", "FANZA", "アダルト動画", "サンプル動画", "アフィリエイト"],
   authors: [{ name: SITE_NAME }],
   creator: SITE_NAME,
+  verification: {
+    google: "yE_TjT7FgGV-2DYARJhuv3UOAm8-2QUJfSnZoIlVjiA",
+  },
   openGraph: {
     type: "website",
     locale: "ja_JP",

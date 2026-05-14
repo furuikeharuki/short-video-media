@@ -39,11 +39,12 @@ export default function FeedClient() {
   const wheelLockRef    = useRef(false);
   const containerRef    = useRef<HTMLDivElement>(null);
   const preloadAbortRef = useRef<AbortController | null>(null);
-  const activeGenreRef  = useRef<string | null>(null);
+  // genresをrefで管理しfetchMoreのクロージャ問題を回避
+  const activeGenresRef = useRef<string[]>([]);
 
   const [currentIndex, setCurrentIndex] = useState(0);
   const [windowItems, setWindowItems]   = useState<MovieCard[]>([]);
-  const [activeGenre, setActiveGenre]   = useState<string | null>(null);
+  const [activeGenres, setActiveGenres] = useState<string[]>([]); // UI用
   const [isEmpty, setIsEmpty]           = useState(false);
   const [isLoading, setIsLoading]       = useState(false);
   const windowStartRef = useRef(0);
@@ -84,11 +85,12 @@ export default function FeedClient() {
         cursor = "0";
       }
 
+      const genres = activeGenresRef.current;
       const res = await getFeed(
         parseInt(cursor, 10),
         20,
         seed,
-        activeGenreRef.current ?? undefined,
+        genres.length > 0 ? genres : undefined,
       );
 
       if (overrideCursor === "0") {
@@ -110,9 +112,15 @@ export default function FeedClient() {
     }
   }, [updateWindow]);
 
-  const handleGenreSelect = useCallback((genre: string | null) => {
-    activeGenreRef.current = genre;
-    setActiveGenre(genre);
+  // タグをトグル（同じタグを再タップで解除）
+  const handleGenreToggle = useCallback((tag: string) => {
+    const current = activeGenresRef.current;
+    const next = current.includes(tag)
+      ? current.filter((g) => g !== tag)
+      : [...current, tag];
+
+    activeGenresRef.current = next;
+    setActiveGenres(next);
     setIsEmpty(false);
     setIsLoading(true);
 
@@ -197,17 +205,11 @@ export default function FeedClient() {
   return (
     <>
       <div className="genre-bar">
-        <button
-          className={`genre-chip${activeGenre === null ? " active" : ""}`}
-          onClick={() => handleGenreSelect(null)}
-        >
-          オール
-        </button>
         {GENRE_TAGS.map((tag) => (
           <button
             key={tag}
-            className={`genre-chip${activeGenre === tag ? " active" : ""}`}
-            onClick={() => handleGenreSelect(tag)}
+            className={`genre-chip${activeGenres.includes(tag) ? " active" : ""}`}
+            onClick={() => handleGenreToggle(tag)}
           >
             {tag}
           </button>

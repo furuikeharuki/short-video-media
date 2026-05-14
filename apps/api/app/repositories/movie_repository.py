@@ -10,13 +10,14 @@ async def get_movie_by_slug(db: AsyncSession, slug: str) -> Movie | None:
     return result.scalar_one_or_none()
 
 
-async def get_all_movie_ids(db: AsyncSession, genre: str | None = None) -> list[str]:
-    """全IDを取得。genreが指定された場合はそのジャンルに絞り込む。"""
-    if genre:
+async def get_all_movie_ids(db: AsyncSession, genres: list[str] | None = None) -> list[str]:
+    """全IDを取得。genresが指定された場合はOR条件で絞り込む。"""
+    if genres:
         query = (
             select(Movie.id)
             .join(Movie.genres)
-            .where(Genre.name == genre)
+            .where(Genre.name.in_(genres))
+            .distinct()
             .order_by(Movie.id)
         )
     else:
@@ -38,15 +39,15 @@ async def get_movies_paginated(
     db: AsyncSession,
     offset: int = 0,
     limit: int = 20,
-    genre: str | None = None,
+    genres: list[str] | None = None,
 ) -> tuple[list[Movie], int]:
-    """
-    フォールバック用（Redis未接続・seedなし時）。
-    genreが指定された場合はジャンルで絞り込む。
-    """
-    if genre:
-        base_query = select(Movie).join(Movie.genres).where(Genre.name == genre)
-        count_query = select(func.count()).select_from(Movie).join(Movie.genres).where(Genre.name == genre)
+    if genres:
+        base_query = select(Movie).join(Movie.genres).where(Genre.name.in_(genres)).distinct()
+        count_query = (
+            select(func.count(Movie.id.distinct()))
+            .join(Movie.genres)
+            .where(Genre.name.in_(genres))
+        )
     else:
         base_query = select(Movie)
         count_query = select(func.count()).select_from(Movie)

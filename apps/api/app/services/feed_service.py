@@ -11,8 +11,8 @@ from app.repositories.movie_repository import (
 from app.schemas.feed import FeedResponse
 from app.schemas.movie import MovieCard, PriceList
 
-SHUFFLE_CACHE_TTL = 3600   # 1時間
-MOVIES_CACHE_TTL  = 1800   # 30分
+SHUFFLE_CACHE_TTL = 3600
+MOVIES_CACHE_TTL  = 1800
 SHUFFLE_KEY_PREFIX = "feed:shuffle:"
 MOVIES_KEY_PREFIX  = "movies:data:"
 
@@ -48,14 +48,10 @@ def _card_to_dict(card: MovieCard) -> dict:
 async def _get_shuffled_ids(
     db: AsyncSession,
     seed: int,
-    genre: str | None = None,
+    genres: list[str] | None = None,
 ) -> list[str]:
-    """
-    seedに対応するシャッフル済みIDリストをRedisから取得。
-    genreが指定された場合はジャンル別キャッシュキーを使う。
-    """
     redis = get_redis()
-    genre_key = genre or "all"
+    genre_key = ",".join(sorted(genres)) if genres else "all"
     key = f"{SHUFFLE_KEY_PREFIX}{seed}:{genre_key}"
 
     if redis is not None:
@@ -63,7 +59,7 @@ async def _get_shuffled_ids(
         if cached:
             return json.loads(cached)
 
-    ids = await get_all_movie_ids(db, genre=genre)
+    ids = await get_all_movie_ids(db, genres=genres)
     rng = random.Random(seed)
     rng.shuffle(ids)
 
@@ -110,10 +106,10 @@ async def get_feed_paginated(
     offset: int = 0,
     limit: int = 20,
     seed: int | None = None,
-    genre: str | None = None,
+    genres: list[str] | None = None,
 ) -> FeedResponse:
     if seed is not None:
-        shuffled_ids = await _get_shuffled_ids(db, seed, genre=genre)
+        shuffled_ids = await _get_shuffled_ids(db, seed, genres=genres)
         total = len(shuffled_ids)
         page_ids = shuffled_ids[offset: offset + limit]
 
@@ -127,8 +123,7 @@ async def get_feed_paginated(
         next_cursor = str(next_offset) if next_offset < total else None
         return FeedResponse(items=items, next_cursor=next_cursor)
 
-    # seedなしフォールバック
-    movies, total = await get_movies_paginated(db, offset=offset, limit=limit, genre=genre)
+    movies, total = await get_movies_paginated(db, offset=offset, limit=limit, genres=genres)
     items = [_to_card(m) for m in movies]
     next_offset = offset + limit
     next_cursor = str(next_offset) if next_offset < total else None

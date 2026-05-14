@@ -32,8 +32,11 @@ export default function FeedClient() {
   const containerRef    = useRef<HTMLDivElement>(null);
   const preloadAbortRef = useRef<AbortController | null>(null);
   const activeGenresRef = useRef<string[]>([]);
-  /** goPrev で戻れる下限インデックス（タグ切替後は切替時点の index に固定） */
-  const minIdxRef = useRef(0);
+
+  /** タグ切替フェッチ中にそのまま進んだステップ数。null = フェッチ中でない */
+  const pendingStepsRef = useRef<number | null>(null);
+  /** タグ切替時の基準点になる動画(currentItem) */
+  const pendingBaseItemRef = useRef<MovieCard | null>(null);
 
   const [currentIndex, setCurrentIndex] = useState(0);
   const [windowItems, setWindowItems]   = useState<MovieCard[]>([]);
@@ -78,7 +81,6 @@ export default function FeedClient() {
       allItemsRef.current   = res.items;
       nextCursorRef.current = res.next_cursor;
       currentIdxRef.current = 0;
-      minIdxRef.current     = 0;
       setCurrentIndex(0);
       setIsEmpty(res.items.length === 0);
       setCurrentGenres(res.items[0]?.genres ?? []);
@@ -99,13 +101,11 @@ export default function FeedClient() {
     activeGenresRef.current = next;
     setActiveGenres([...next]);
 
-    const currentItem = allItemsRef.current[currentIdxRef.current];
+    // 切替時点の動画を記憶し、ステップカウンターをリセット
+    pendingBaseItemRef.current = allItemsRef.current[currentIdxRef.current] ?? null;
+    pendingStepsRef.current    = 0;
 
-    // 旧プリフェッチをキャンセル
     preloadAbortRef.current?.abort();
-
-    // goPrev の下限を現在地に設定（フェッチ完了後に 0 にリセット）
-    minIdxRef.current = currentIdxRef.current;
 
     ;(async () => {
       try {
@@ -114,17 +114,25 @@ export default function FeedClient() {
           0, 20, seed,
           next.length > 0 ? next : undefined,
         );
-        const filtered = res.items.filter((item) => item.id !== currentItem?.id);
-        // 現在地を index=0 に移動し、以降を絞り込み済みで差し替え
-        allItemsRef.current   = currentItem ? [currentItem, ...filtered] : filtered;
+        const baseItem = pendingBaseItemRef.current;
+        const steps    = pendingStepsRef.current ?? 0;
+        const filtered = res.items.filter((item) => item.id !== baseItem?.id);
+
+        // 新リスト: [baseItem, ...filtered]
+        allItemsRef.current   = baseItem ? [baseItem, ...filtered] : filtered;
         nextCursorRef.current = res.next_cursor;
-        currentIdxRef.current = 0;
-        minIdxRef.current     = 0; // リセット
-        setCurrentIndex(0);
-        setIsEmpty(filtered.length === 0 && !currentItem);
-        updateWindow(0);
+
+        // フェッチ中に進んだ分だけオフセットを加える（尊重して車窓外にならないようクランプ）
+        const targetIdx = Math.min(steps, allItemsRef.current.length - 1);
+        currentIdxRef.current = targetIdx;
+        setCurrentIndex(targetIdx);
+        setIsEmpty(filtered.length === 0 && !baseItem);
+        updateWindow(targetIdx);
       } catch (e) {
         console.error("handleGenreToggle fetch failed", e);
+      } finally {
+        pendingStepsRef.current    = null;
+        pendingBaseItemRef.current = null;
       }
     })();
   }, [updateWindow]);
@@ -140,6 +148,13 @@ export default function FeedClient() {
     const all = allItemsRef.current;
     const currentItem = all[currentIdxRef.current];
     const nextIdx = currentIdxRef.current + 1;
+
+    // フェッチ中: 表示は変えずステップだけカウント
+    if (pendingStepsRef.current !== null) {
+      pendingStepsRef.current += 1;
+      return;
+    }
+
     if (nextIdx >= all.length) return;
     if (currentItem) markSeen(currentItem.id);
     currentIdxRef.current = nextIdx;
@@ -148,8 +163,9 @@ export default function FeedClient() {
   }, [updateWindow]);
 
   const goPrev = useCallback(() => {
-    // minIdxRef より上には戻れない
-    const next = Math.max(minIdxRef.current, currentIdxRef.current - 1);
+    // フェッチ中は goPrev をブロック（切替前の動画に戻さない）
+    if (pendingStepsRef.current !== null) return;
+    const next = Math.max(0, currentIdxRef.current - 1);
     if (next === currentIdxRef.current) return;
     currentIdxRef.current = next;
     setCurrentIndex(next);
@@ -160,8 +176,10 @@ export default function FeedClient() {
     const el = containerRef.current;
     if (!el) return;
 
-    const isAtEnd = () => currentIdxRef.current >= allItemsRef.current.length - 1;
-    const isAtTop = () => currentIdxRef.current <= minIdxRef.current;
+    const isAtEnd = () => currentIdxRef.current >= allItemsRef.current.length - 1
+      && pendingStepsRef.current === null;
+    const isAtTop = () => currentIdxRef.current <= 0
+      || pendingStepsRef.current !== null;
 
     let startY = 0;
     let startTime = 0;

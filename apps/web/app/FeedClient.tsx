@@ -33,10 +33,10 @@ export default function FeedClient() {
   const preloadAbortRef = useRef<AbortController | null>(null);
   const activeGenresRef = useRef<string[]>([]);
 
-  const bgFetchPromiseRef  = useRef<Promise<void> | null>(null);
-  const pendingItemsRef    = useRef<MovieCard[] | null>(null);
-  const pendingCursorRef   = useRef<string | null>(null);
-  const pendingSeedRef     = useRef<number | null>(null);
+  const bgFetchPromiseRef = useRef<Promise<void> | null>(null);
+  const pendingItemsRef   = useRef<MovieCard[] | null>(null);
+  const pendingCursorRef  = useRef<string | null>(null);
+  const pendingSeedRef    = useRef<number | null>(null);
 
   const [currentIndex, setCurrentIndex] = useState(0);
   const [windowItems, setWindowItems]   = useState<MovieCard[]>([]);
@@ -63,7 +63,6 @@ export default function FeedClient() {
     }
   }, []);
 
-  /** 初期ロードのみ（無限スクロールなし） */
   const fetchInitial = useCallback(async (overrideCursor?: string, overrideSeed?: number) => {
     if (isFetchingRef.current) return;
     isFetchingRef.current = true;
@@ -90,7 +89,6 @@ export default function FeedClient() {
     }
   }, [updateWindow]);
 
-  /** バックグラウンドフェッチ: Promise を ref に保持 */
   const fetchBackground = useCallback((genres: string[]) => {
     pendingItemsRef.current  = null;
     pendingCursorRef.current = null;
@@ -132,49 +130,46 @@ export default function FeedClient() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  /**
-   * goNext:
-   * - bgFetchPromise があれば await して pending に切替
-   * - pending の中から現在再生中と同じ動画を除外
-   * - 無限スクロールなし（末尾で止まる）
-   */
   const goNext = useCallback(async () => {
     const all = allItemsRef.current;
     const currentItem = all[currentIdxRef.current];
 
+    // bg fetch 中なら完了を待つ
     if (bgFetchPromiseRef.current) {
       await bgFetchPromiseRef.current;
       bgFetchPromiseRef.current = null;
     }
 
     if (pendingItemsRef.current && pendingItemsRef.current.length > 0) {
-      if (currentItem) markSeen(currentItem.id);
-
-      // 現在再生中と同じ動画を pending から除外
+      // 現在の動画と重複するものを除外
       const filtered = pendingItemsRef.current.filter(
         (item) => item.id !== currentItem?.id
       );
 
-      if (filtered.length === 0) {
-        // pending が全部同じ動画だった場合は通常遷移
-        pendingItemsRef.current = null;
-      } else {
-        allItemsRef.current   = filtered;
-        nextCursorRef.current = pendingCursorRef.current;
-        seedRef.current       = pendingSeedRef.current;
-        pendingItemsRef.current  = null;
-        pendingCursorRef.current = null;
-        pendingSeedRef.current   = null;
-        isFetchingRef.current    = false;
+      pendingItemsRef.current  = null;
+      pendingCursorRef.current = null;
+      pendingSeedRef.current   = null;
+      isFetchingRef.current    = false;
 
-        currentIdxRef.current = 0;
-        setCurrentIndex(0);
-        updateWindow(0);
+      if (filtered.length > 0) {
+        // 現在の動画を index=0 に残し、以降を絞り込み済みリストで上書き
+        // → goPrev で現在の動画に戻れる
+        allItemsRef.current   = currentItem
+          ? [currentItem, ...filtered]
+          : filtered;
+        nextCursorRef.current = null;
+
+        if (currentItem) markSeen(currentItem.id);
+        const nextIdx = 1;
+        currentIdxRef.current = nextIdx;
+        setCurrentIndex(nextIdx);
+        updateWindow(nextIdx);
         return;
       }
+      // filtered が空 = 全部同じ動画 → 通常遷移にフォールスルー
     }
 
-    // 通常遷移（末尾で止まる）
+    // 通常遷移（末尾で停止）
     const nextIdx = currentIdxRef.current + 1;
     if (nextIdx >= all.length) return;
 

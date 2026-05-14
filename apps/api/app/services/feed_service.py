@@ -11,10 +11,8 @@ from app.repositories.movie_repository import (
 from app.schemas.feed import FeedResponse
 from app.schemas.movie import MovieCard, PriceList
 
-SHUFFLE_CACHE_TTL = 3600   # 1時間
-MOVIES_CACHE_TTL  = 1800   # 30分
+SHUFFLE_CACHE_TTL = 3600  # 1時間
 SHUFFLE_KEY_PREFIX = "feed:shuffle:"
-MOVIES_KEY_PREFIX  = "movies:data:"
 
 
 def _to_card(movie) -> MovieCard:
@@ -39,10 +37,6 @@ def _to_card(movie) -> MovieCard:
         genres=[g.name for g in movie.genres],
         series_name=movie.series.name if movie.series else None,
     )
-
-
-def _card_to_dict(card: MovieCard) -> dict:
-    return card.model_dump()
 
 
 async def _get_shuffled_ids(
@@ -71,42 +65,6 @@ async def _get_shuffled_ids(
     return ids
 
 
-async def _get_movies_with_cache(
-    db: AsyncSession,
-    page_ids: list[str],
-) -> dict[str, MovieCard]:
-    """
-    動画データをRedisキャッシュから取得。
-    キャッシュミスしたIDのみDBから取得してキャッシュに保存する。
-    """
-    redis = get_redis()
-    result: dict[str, MovieCard] = {}
-    missing_ids: list[str] = []
-
-    if redis is not None:
-        for movie_id in page_ids:
-            key = f"{MOVIES_KEY_PREFIX}{movie_id}"
-            cached = await redis.get(key)
-            if cached:
-                data = json.loads(cached)
-                result[movie_id] = MovieCard.model_validate(data)
-            else:
-                missing_ids.append(movie_id)
-    else:
-        missing_ids = page_ids
-
-    if missing_ids:
-        id_map = await get_movies_by_ids(db, missing_ids)
-        for movie_id, movie in id_map.items():
-            card = _to_card(movie)
-            result[movie_id] = card
-            if redis is not None:
-                key = f"{MOVIES_KEY_PREFIX}{movie_id}"
-                await redis.set(key, json.dumps(_card_to_dict(card)), ex=MOVIES_CACHE_TTL)
-
-    return result
-
-
 async def get_feed_paginated(
     db: AsyncSession,
     offset: int = 0,
@@ -128,8 +86,8 @@ async def get_feed_paginated(
         if not page_ids:
             return FeedResponse(items=[], next_cursor=None)
 
-        card_map = await _get_movies_with_cache(db, page_ids)
-        items = [card_map[i] for i in page_ids if i in card_map]
+        id_map = await get_movies_by_ids(db, page_ids)
+        items = [_to_card(id_map[i]) for i in page_ids if i in id_map]
 
         next_offset = offset + limit
         next_cursor = str(next_offset) if next_offset < total else None

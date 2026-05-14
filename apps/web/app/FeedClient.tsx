@@ -2,18 +2,14 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import FeedItem from "@/components/FeedItem";
-import { markSeen, getOrCreateSeed, resetSeed } from "@/lib/feedOrder";
+import { markSeen, getOrCreateSeed } from "@/lib/feedOrder";
 import { getFeed } from "@/lib/api/feed";
 import type { MovieCard } from "@/lib/api/feed";
 
-const WINDOW_SIZE    = 2;
-const PREFETCH_AHEAD = 8;
-const PRELOAD_AHEAD  = 2;   // 先読み枚数
-const PRELOAD_BYTES  = 2 * 1024 * 1024; // 最初の2MBのみRange取得
+const WINDOW_SIZE   = 2;
+const PRELOAD_AHEAD = 2;
+const PRELOAD_BYTES = 2 * 1024 * 1024;
 
-// ブラウザのHTTPキャッシュに載せるためfetchでプリロード
-// AbortControllerでキャンセルできるが、キャッシュは残るので次回再生時に即返り
-// CORSngの場合はno-corsでキャッシュに載せる（レスポンスは読めないがキャッシュは有効）
 const preloadCache = new Set<string>();
 
 function prefetchVideo(url: string, abortSignal: AbortSignal) {
@@ -23,26 +19,28 @@ function prefetchVideo(url: string, abortSignal: AbortSignal) {
     method: "GET",
     headers: { Range: `bytes=0-${PRELOAD_BYTES - 1}` },
     signal: abortSignal,
-    // credentialsなし・CORSエラーでも無視
-  }).catch(() => {
-    // CORSやキャンセルは無視。キャッシュへの書き込みはブラウザが行う
-    preloadCache.delete(url);
-  });
+  }).catch(() => { preloadCache.delete(url); });
 }
 
 export default function FeedClient() {
-  const allItemsRef    = useRef<MovieCard[]>([]);
-  const nextCursorRef  = useRef<string | null>(null);
-  const seedRef        = useRef<number | null>(null);
-  const isFetchingRef  = useRef(false);
-  const currentIdxRef  = useRef(0);
-  const wheelLockRef   = useRef(false);
-  const containerRef   = useRef<HTMLDivElement>(null);
+  const allItemsRef     = useRef<MovieCard[]>([]);
+  const nextCursorRef   = useRef<string | null>(null);
+  const seedRef         = useRef<number | null>(null);
+  const isFetchingRef   = useRef(false);
+  const currentIdxRef   = useRef(0);
+  const wheelLockRef    = useRef(false);
+  const containerRef    = useRef<HTMLDivElement>(null);
   const preloadAbortRef = useRef<AbortController | null>(null);
 
   const [currentIndex, setCurrentIndex] = useState(0);
   const [windowItems, setWindowItems]   = useState<MovieCard[]>([]);
+  const [isEmpty, setIsEmpty]           = useState(false);
+  const [isLoading, setIsLoading]       = useState(false);
   const windowStartRef = useRef(0);
+
+  const [dragPx, setDragPx] = useState(0);
+  const dragStartY = useRef(0);
+  const isDragging = useRef(false);
 
   const updateWindow = useCallback((idx: number) => {
     const all   = allItemsRef.current;
@@ -51,73 +49,53 @@ export default function FeedClient() {
     windowStartRef.current = start;
     setWindowItems(all.slice(start, end));
 
-    // 前のプリロードをキャンセルして新しいセットを開始
     preloadAbortRef.current?.abort();
     const controller = new AbortController();
     preloadAbortRef.current = controller;
-
     for (let i = 1; i <= PRELOAD_AHEAD; i++) {
       const ahead = all[idx + i];
-      if (ahead?.sample_movie_url) {
-        prefetchVideo(ahead.sample_movie_url, controller.signal);
-      }
+      if (ahead?.sample_movie_url) prefetchVideo(ahead.sample_movie_url, controller.signal);
     }
   }, []);
 
-  const fetchMore = useCallback(async (overrideCursor?: string, overrideSeed?: number) => {
+  const fetchInitial = useCallback(async (overrideCursor?: string, overrideSeed?: number) => {
     if (isFetchingRef.current) return;
     isFetchingRef.current = true;
     try {
-      let cursor = overrideCursor ?? nextCursorRef.current;
-      let seed   = overrideSeed   ?? seedRef.current ?? 0;
-
-      if (cursor === null) {
-        seed   = resetSeed();
-        seedRef.current       = seed;
-        nextCursorRef.current = "0";
-        cursor = "0";
-      }
-
+      const cursor = overrideCursor ?? "0";
+      const seed   = overrideSeed   ?? seedRef.current ?? 0;
       const res = await getFeed(parseInt(cursor, 10), 20, seed);
-
-      if (overrideCursor === "0") {
-        allItemsRef.current   = res.items;
-        currentIdxRef.current = 0;
-        setCurrentIndex(0);
-      } else {
-        allItemsRef.current = [...allItemsRef.current, ...res.items];
-      }
-
+      allItemsRef.current   = res.items;
       nextCursorRef.current = res.next_cursor;
-      updateWindow(currentIdxRef.current);
+      currentIdxRef.current = 0;
+      setCurrentIndex(0);
+      setIsEmpty(res.items.length === 0);
+      updateWindow(0);
     } catch (e) {
-      console.error("fetchMore failed", e);
+      console.error("fetchInitial failed", e);
     } finally {
       isFetchingRef.current = false;
+      setIsLoading(false);
     }
   }, [updateWindow]);
 
   useEffect(() => {
     const seed = getOrCreateSeed();
     seedRef.current = seed;
-    fetchMore("0", seed);
+    fetchInitial("0", seed);
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const goNext = useCallback(() => {
-    const all  = allItemsRef.current;
-    const next = currentIdxRef.current + 1;
-
-    if (all.length - next <= PREFETCH_AHEAD) fetchMore();
-    if (next >= all.length) return;
-
-    const item = all[currentIdxRef.current];
-    if (item) markSeen(item.id);
-
-    currentIdxRef.current = next;
-    setCurrentIndex(next);
-    updateWindow(next);
-  }, [fetchMore, updateWindow]);
+  const goNext = useCallback(async () => {
+    const all = allItemsRef.current;
+    const currentItem = all[currentIdxRef.current];
+    const nextIdx = currentIdxRef.current + 1;
+    if (nextIdx >= all.length) return;
+    if (currentItem) markSeen(currentItem.id);
+    currentIdxRef.current = nextIdx;
+    setCurrentIndex(nextIdx);
+    updateWindow(nextIdx);
+  }, [updateWindow]);
 
   const goPrev = useCallback(() => {
     const next = Math.max(0, currentIdxRef.current - 1);
@@ -130,14 +108,47 @@ export default function FeedClient() {
   useEffect(() => {
     const el = containerRef.current;
     if (!el) return;
-    let startY = 0, startTime = 0;
 
-    const onTouchStart = (e: TouchEvent) => { startY = e.touches[0].clientY; startTime = Date.now(); };
-    const onTouchEnd   = (e: TouchEvent) => {
-      const dy = startY - e.changedTouches[0].clientY;
-      const dt = Date.now() - startTime;
-      if (Math.abs(dy) > 40 && dt < 500) { if (dy > 0) goNext(); else goPrev(); }
+    let startY = 0;
+    let startTime = 0;
+
+    const onTouchStart = (e: TouchEvent) => {
+      startY = e.touches[0].clientY;
+      startTime = Date.now();
+      isDragging.current = true;
+      dragStartY.current = startY;
+      setDragPx(0);
     };
+
+    const onTouchMove = (e: TouchEvent) => {
+      if (!isDragging.current) return;
+      const dy = e.touches[0].clientY - dragStartY.current;
+      const atEnd = currentIdxRef.current >= allItemsRef.current.length - 1;
+      const atTop = currentIdxRef.current <= 0;
+      if ((dy > 0 && atEnd) || (dy < 0 && atTop)) {
+        setDragPx(dy * 0.35);
+      } else {
+        setDragPx(0);
+      }
+    };
+
+    const onTouchEnd = (e: TouchEvent) => {
+      if (!isDragging.current) return;
+      isDragging.current = false;
+      setDragPx(0);
+      const dy = e.changedTouches[0].clientY - startY;
+      const dt = Date.now() - startTime;
+      if (Math.abs(dy) > 60 && dt < 500) {
+        if (dy < 0) goNext();
+        else        goPrev();
+      }
+    };
+
+    const onTouchCancel = () => {
+      isDragging.current = false;
+      setDragPx(0);
+    };
+
     const onWheel = (e: WheelEvent) => {
       e.preventDefault();
       if (wheelLockRef.current) return;
@@ -146,23 +157,34 @@ export default function FeedClient() {
       if (e.deltaY > 0) goNext(); else goPrev();
     };
 
-    el.addEventListener("touchstart", onTouchStart, { passive: true });
-    el.addEventListener("touchend",   onTouchEnd,   { passive: true });
-    el.addEventListener("wheel",      onWheel,      { passive: false });
+    el.addEventListener("touchstart",  onTouchStart,  { passive: true });
+    el.addEventListener("touchmove",   onTouchMove,   { passive: true });
+    el.addEventListener("touchend",    onTouchEnd,    { passive: true });
+    el.addEventListener("touchcancel", onTouchCancel, { passive: true });
+    el.addEventListener("wheel",       onWheel,       { passive: false });
     return () => {
-      el.removeEventListener("touchstart", onTouchStart);
-      el.removeEventListener("touchend",   onTouchEnd);
-      el.removeEventListener("wheel",      onWheel);
+      el.removeEventListener("touchstart",  onTouchStart);
+      el.removeEventListener("touchmove",   onTouchMove);
+      el.removeEventListener("touchend",    onTouchEnd);
+      el.removeEventListener("touchcancel", onTouchCancel);
+      el.removeEventListener("wheel",       onWheel);
     };
   }, [goNext, goPrev]);
 
   useEffect(() => {
-    if (windowItems.length === 0 && !isFetchingRef.current) fetchMore();
-  }, [windowItems, fetchMore]);
+    if (windowItems.length === 0 && !isFetchingRef.current && !isEmpty) fetchInitial();
+  }, [windowItems, fetchInitial, isEmpty]);
+
+  const showEmpty   = isEmpty && !isLoading;
+  const showLoading = isLoading || (windowItems.length === 0 && !isEmpty);
 
   return (
     <div ref={containerRef} className="feed-container">
-      {windowItems.length === 0 ? (
+      {showEmpty ? (
+        <div className="feed-empty">
+          <p className="feed-empty-text">該当する作品が見つかりませんでした</p>
+        </div>
+      ) : showLoading ? (
         <div className="feed-loading">
           <div className="feed-spinner" />
         </div>
@@ -171,18 +193,28 @@ export default function FeedClient() {
           const absIndex = windowStartRef.current + i;
           const offset   = absIndex - currentIndex;
           const isActive = offset === 0;
+          const transform = isActive
+            ? `translateY(calc(${offset * 100}% + ${dragPx}px))`
+            : `translateY(${offset * 100}%)`;
           return (
             <div
               key={`${item.id}-${absIndex}`}
               className="feed-slide"
               style={{
-                transform:     `translateY(${offset * 100}%)`,
+                transform,
+                transition: isActive && dragPx === 0
+                  ? "transform 0.35s cubic-bezier(0.25,1,0.5,1)"
+                  : isActive ? "none" : undefined,
                 zIndex:        isActive ? 2 : 1,
                 pointerEvents: isActive ? "auto" : "none",
                 visibility:    isActive ? "visible" : "hidden",
               }}
             >
-              <FeedItem item={item} isFirst={absIndex === 0} isSecond={absIndex === 1} />
+              <FeedItem
+                item={item}
+                isFirst={absIndex === 0}
+                isSecond={absIndex === 1}
+              />
             </div>
           );
         })
@@ -206,4 +238,13 @@ const spinnerStyle = `
     animation: spin 0.8s linear infinite;
   }
   @keyframes spin { to { transform: rotate(360deg); } }
+  .feed-empty {
+    position: absolute; inset: 0;
+    display: flex; align-items: center; justify-content: center;
+    background: #000;
+  }
+  .feed-empty-text {
+    font-size: 15px;
+    color: rgba(255,255,255,0.5);
+  }
 `;

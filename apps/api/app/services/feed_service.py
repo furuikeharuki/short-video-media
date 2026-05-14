@@ -11,8 +11,8 @@ from app.repositories.movie_repository import (
 from app.schemas.feed import FeedResponse
 from app.schemas.movie import MovieCard, PriceList
 
-SHUFFLE_CACHE_TTL = 3600   # 1時間
-MOVIES_CACHE_TTL  = 1800   # 30分
+SHUFFLE_CACHE_TTL = 3600
+MOVIES_CACHE_TTL  = 1800
 SHUFFLE_KEY_PREFIX = "feed:shuffle:"
 MOVIES_KEY_PREFIX  = "movies:data:"
 
@@ -48,20 +48,18 @@ def _card_to_dict(card: MovieCard) -> dict:
 async def _get_shuffled_ids(
     db: AsyncSession,
     seed: int,
+    genres: list[str] | None = None,
 ) -> list[str]:
-    """
-    seed に対応するシャッフル済み ID リストを Redis から取得。
-    キャッシュなし時は DB から全 ID を取得しシャッフルして保存。
-    """
     redis = get_redis()
-    key = f"{SHUFFLE_KEY_PREFIX}{seed}"
+    genre_key = ",".join(sorted(genres)) if genres else "all"
+    key = f"{SHUFFLE_KEY_PREFIX}{seed}:{genre_key}"
 
     if redis is not None:
         cached = await redis.get(key)
         if cached:
             return json.loads(cached)
 
-    ids = await get_all_movie_ids(db)
+    ids = await get_all_movie_ids(db, genres=genres)
     rng = random.Random(seed)
     rng.shuffle(ids)
 
@@ -75,10 +73,6 @@ async def _get_movies_with_cache(
     db: AsyncSession,
     page_ids: list[str],
 ) -> dict[str, MovieCard]:
-    """
-    動画データをRedisキャッシュから取得。
-    キャッシュミスしたIDのみDBから取得してキャッシュに保存する。
-    """
     redis = get_redis()
     result: dict[str, MovieCard] = {}
     missing_ids: list[str] = []
@@ -112,16 +106,10 @@ async def get_feed_paginated(
     offset: int = 0,
     limit: int = 20,
     seed: int | None = None,
+    genres: list[str] | None = None,
 ) -> FeedResponse:
-    """
-    seed あり: Redis キャッシュのシャッフル済み ID リストから offset/limit で切り出し。
-    seed なし: フォールバック（ID 順）。
-
-    NOTE: get_all_movies（全件取得）は意図的に削除済み。
-          大量データでのメモリ枯渇を防ぐため、必ずページネーションを使うこと。
-    """
     if seed is not None:
-        shuffled_ids = await _get_shuffled_ids(db, seed)
+        shuffled_ids = await _get_shuffled_ids(db, seed, genres=genres)
         total = len(shuffled_ids)
         page_ids = shuffled_ids[offset: offset + limit]
 
@@ -135,8 +123,7 @@ async def get_feed_paginated(
         next_cursor = str(next_offset) if next_offset < total else None
         return FeedResponse(items=items, next_cursor=next_cursor)
 
-    # seed なしフォールバック: ID順ページネーション
-    movies, total = await get_movies_paginated(db, offset=offset, limit=limit)
+    movies, total = await get_movies_paginated(db, offset=offset, limit=limit, genres=genres)
     items = [_to_card(m) for m in movies]
     next_offset = offset + limit
     next_cursor = str(next_offset) if next_offset < total else None

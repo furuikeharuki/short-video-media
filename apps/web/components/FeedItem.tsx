@@ -2,12 +2,15 @@
 
 import { useEffect, useLayoutEffect, useRef, useCallback, useState } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import type { MovieCard } from "@/lib/api/feed";
 
 interface Props {
   item: MovieCard;
   isFirst: boolean;
   isSecond?: boolean;
+  activeGenres?: string[];
+  onGenreClick?: (genre: string) => void;
 }
 
 const H_PADDING = 4;
@@ -18,13 +21,11 @@ const DBL_TAP_MS = 300;
 const LONG_PRESS_MS = 500;
 const TAP_MOVE_THRESHOLD = 10;
 const PLAY_THRESHOLD = 0.85;
-// preloadObserverは廃除→FeedClientのfetch()に一本化（隠しvideoのcanceled問題を修正）
 
 const isLandscapeScreen = () => window.innerWidth > window.innerHeight;
 
 let globalUserGestured = false;
 
-/** contain モード時に映像が実際に描画される領域を計算する */
 function calcRenderedRect(
   containerW: number,
   containerH: number,
@@ -67,6 +68,8 @@ function calcRenderedRect(
 }
 
 export default function FeedItem({ item, isFirst, isSecond = false }: Props) {
+  const router = useRouter();
+
   const videoRef      = useRef<HTMLVideoElement>(null);
   const ctaRef        = useRef<HTMLDivElement>(null);
   const sectionRef    = useRef<HTMLElement>(null);
@@ -212,9 +215,7 @@ export default function FeedItem({ item, isFirst, isSecond = false }: Props) {
     });
   }, []);
 
-  useLayoutEffect(() => {
-    calcVideoArea();
-  }, [calcVideoArea]);
+  useLayoutEffect(() => { calcVideoArea(); }, [calcVideoArea]);
 
   useEffect(() => {
     const cta = ctaRef.current;
@@ -272,7 +273,6 @@ export default function FeedItem({ item, isFirst, isSecond = false }: Props) {
   useEffect(() => {
     const video = videoRef.current;
     if (!video) return;
-
     const playObserver = new IntersectionObserver(([entry]) => {
       if (entry.isIntersecting) {
         playVideo(video, false);
@@ -289,7 +289,6 @@ export default function FeedItem({ item, isFirst, isSecond = false }: Props) {
         setMuteBadge(false);
       }
     }, { threshold: PLAY_THRESHOLD });
-
     playObserver.observe(video);
     return () => { playObserver.disconnect(); };
   }, [playVideo, setVideoReady, setPauseBadge, setFastBadge, setMuteBadge]);
@@ -306,11 +305,10 @@ export default function FeedItem({ item, isFirst, isSecond = false }: Props) {
     const video   = videoRef.current;
     const section = sectionRef.current;
     if (!video || !section) return;
-    const rect  = section.getBoundingClientRect();
+    const rect   = section.getBoundingClientRect();
     const isLeft = clientX - rect.left < rect.width / 2;
     if (isLeft) video.currentTime = Math.max(0, video.currentTime - SKIP_SEC);
     else        video.currentTime = Math.min(video.duration || Infinity, video.currentTime + SKIP_SEC);
-
     const ripple = document.createElement("div");
     ripple.className = "skip-ripple";
     ripple.style.left = `${clientX - rect.left}px`;
@@ -470,11 +468,7 @@ export default function FeedItem({ item, isFirst, isSecond = false }: Props) {
             onLoadedMetadata={handleMetadata}
             onLoadedData={() => setVideoReady(true)}
             onCanPlay={() => setVideoReady(true)}
-            style={{
-              position: "absolute",
-              opacity: 0,
-              transition: "opacity 0.3s ease",
-            }}
+            style={{ position: "absolute", opacity: 0, transition: "opacity 0.3s ease" }}
           />
 
           <div style={wrapStyle}>
@@ -491,7 +485,6 @@ export default function FeedItem({ item, isFirst, isSecond = false }: Props) {
                 </svg>
               </span>
             </div>
-
             <div ref={pauseBadgeRef} className="pause-badge" aria-hidden="true" style={{ display: "none" }}>
               <svg width="40" height="40" viewBox="0 0 48 48" fill="none">
                 <rect x="12" y="8" width="10" height="32" rx="2" fill="white"/>
@@ -534,9 +527,19 @@ export default function FeedItem({ item, isFirst, isSecond = false }: Props) {
       )}
 
       <div className="info-overlay">
-        <div className="genre-list">
-          {item.genres.map((g) => <span key={g} className="genre-badge">{g}</span>)}
-        </div>
+        {item.genres && item.genres.length > 0 && (
+          <div className="genre-chips" onClick={(e) => e.stopPropagation()}>
+            {item.genres.map((tag) => (
+              <button
+                key={tag}
+                className="genre-chip"
+                onClick={() => router.push(`/search?genre=${encodeURIComponent(tag)}`)}
+              >
+                {tag}
+              </button>
+            ))}
+          </div>
+        )}
         <h2 className="item-title">{item.title}</h2>
         {item.actresses.length > 0 && (
           <p className="item-actress">👤 {item.actresses.join(" / ")}</p>
@@ -591,7 +594,6 @@ const itemStyle = `
     0%   { background-position: 200% 0; }
     100% { background-position: -200% 0; }
   }
-
   .video-bg--interactive {
     cursor: pointer;
     -webkit-tap-highlight-color: transparent;
@@ -600,7 +602,6 @@ const itemStyle = `
     user-select: none;
     touch-action: pan-y;
   }
-
   .action-overlay {
     position: absolute;
     inset: 0;
@@ -623,7 +624,6 @@ const itemStyle = `
     70%  { opacity: 0.8; transform: scale(1); }
     100% { opacity: 0; transform: scale(1); }
   }
-
   .pause-badge {
     position: absolute;
     inset: 0;
@@ -634,7 +634,6 @@ const itemStyle = `
     pointer-events: none;
     filter: drop-shadow(0 2px 6px rgba(0,0,0,0.6));
   }
-
   .fast-badge {
     position: absolute;
     top: 12px;
@@ -652,7 +651,6 @@ const itemStyle = `
     -webkit-backdrop-filter: blur(6px);
     text-shadow: 0 1px 4px rgba(0,0,0,0.5);
   }
-
   .mute-badge {
     position: absolute;
     bottom: 80px;
@@ -680,7 +678,29 @@ const itemStyle = `
     letter-spacing: 0.02em;
     text-shadow: 0 1px 3px rgba(0,0,0,0.6);
   }
-
+  .genre-chips {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 5px;
+    margin-bottom: 8px;
+  }
+  .genre-chip {
+    padding: 3px 10px;
+    border-radius: 999px;
+    border: 1px solid rgba(255,255,255,0.35);
+    background: rgba(255,255,255,0.12);
+    color: rgba(255,255,255,0.9);
+    font-size: 11px;
+    font-weight: 600;
+    cursor: pointer;
+    white-space: nowrap;
+    backdrop-filter: blur(6px);
+    -webkit-backdrop-filter: blur(6px);
+    -webkit-tap-highlight-color: transparent;
+    line-height: 1.5;
+    transition: background 0.15s;
+  }
+  .genre-chip:active { background: rgba(255,255,255,0.25); }
   .scroll-hint {
     position: absolute;
     bottom: 180px;
@@ -696,18 +716,12 @@ const itemStyle = `
     transition: opacity 0.5s ease;
     animation: bounce 2s ease-in-out infinite;
   }
-  .scroll-hint--hidden {
-    opacity: 0;
-    animation: none;
-  }
-  .scroll-arrow {
-    font-size: 18px;
-  }
+  .scroll-hint--hidden { opacity: 0; animation: none; }
+  .scroll-arrow { font-size: 18px; }
   @keyframes bounce {
     0%, 100% { transform: translateY(0); }
     50%       { transform: translateY(6px); }
   }
-
   .skip-ripple {
     position: absolute;
     transform: translate(-50%, -50%);
@@ -736,7 +750,6 @@ const itemStyle = `
     40%  { opacity: 1; transform: translate(-50%, -50%) scale(1.1); }
     100% { opacity: 0; transform: translate(-50%, -50%) scale(1.35); }
   }
-
   @media (prefers-reduced-motion: reduce) {
     .shimmer-inner  { animation: none; }
     .scroll-hint    { animation: none; }

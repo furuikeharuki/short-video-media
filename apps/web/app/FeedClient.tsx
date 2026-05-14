@@ -34,6 +34,13 @@ export default function FeedClient() {
   const preloadAbortRef = useRef<AbortController | null>(null);
   const activeGenresRef = useRef<string[]>([]);
 
+  // ジャンル変更時にバックグラウンドで取得しておくキュー
+  // 「現在の動画 + バックグラウンド取得分」を持つ
+  const pendingItemsRef    = useRef<MovieCard[] | null>(null);
+  const pendingCursorRef   = useRef<string | null>(null);
+  const pendingSeedRef     = useRef<number | null>(null);
+  const isBgFetchingRef    = useRef(false);
+
   const [currentIndex, setCurrentIndex] = useState(0);
   const [windowItems, setWindowItems]   = useState<MovieCard[]>([]);
   const [activeGenres, setActiveGenres] = useState<string[]>([]);
@@ -59,6 +66,7 @@ export default function FeedClient() {
     }
   }, []);
 
+  /** 通常のフィード取得（初期ロード & ページ増加） */
   const fetchMore = useCallback(async (overrideCursor?: string, overrideSeed?: number) => {
     if (isFetchingRef.current) return;
     isFetchingRef.current = true;
@@ -75,9 +83,7 @@ export default function FeedClient() {
 
       const genres = activeGenresRef.current;
       const res = await getFeed(
-        parseInt(cursor, 10),
-        20,
-        seed,
+        parseInt(cursor, 10), 20, seed,
         genres.length > 0 ? genres : undefined,
       );
 
@@ -101,7 +107,33 @@ export default function FeedClient() {
     }
   }, [updateWindow]);
 
-  /** タグ選択: リロードなし。次のfetchMoreから自動的に絞り込まれる */
+  /**
+   * バックグラウンド取得: 現在動画はそのまま、次ページから絞り込み済みリストをpendingに保持
+   */
+  const fetchBackground = useCallback(async (genres: string[]) => {
+    if (isBgFetchingRef.current) return;
+    isBgFetchingRef.current = true;
+    try {
+      const seed = resetSeed();
+      pendingSeedRef.current = seed;
+      const res = await getFeed(
+        0, 20, seed,
+        genres.length > 0 ? genres : undefined,
+      );
+      pendingItemsRef.current  = res.items;
+      pendingCursorRef.current = res.next_cursor;
+    } catch (e) {
+      console.error("fetchBackground failed", e);
+    } finally {
+      isBgFetchingRef.current = false;
+    }
+  }, []);
+
+  /**
+   * タグ選択:
+   * 1. activeGenresを即時更新（UI反映）
+   * 2. バックグラウンドで次ページ分を取得開始（現在動画は不動）
+   */
   const handleGenreToggle = useCallback((tag: string) => {
     const current = activeGenresRef.current;
     const next = current.includes(tag)
@@ -109,7 +141,12 @@ export default function FeedClient() {
       : [...current, tag];
     activeGenresRef.current = next;
     setActiveGenres([...next]);
-  }, []);
+    // pendingをリセットしてバックグラウンド取得
+    pendingItemsRef.current  = null;
+    pendingCursorRef.current = null;
+    pendingSeedRef.current   = null;
+    fetchBackground(next);
+  }, [fetchBackground]);
 
   useEffect(() => {
     const seed = getOrCreateSeed();
@@ -118,16 +155,43 @@ export default function FeedClient() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  /**
+   * goNext: 次動画へ進む。
+   * pendingが準備できていれば、現在動画の次からpendingリストに切り替える。
+   */
   const goNext = useCallback(() => {
     const all  = allItemsRef.current;
-    const next = currentIdxRef.current + 1;
-    if (all.length - next <= PREFETCH_AHEAD) fetchMore();
-    if (next >= all.length) return;
+    const nextIdx = currentIdxRef.current + 1;
+
+    // pendingあり & 次の動画に進むタイミングでリストを切り替え
+    if (pendingItemsRef.current && pendingItemsRef.current.length > 0) {
+      const item = all[currentIdxRef.current];
+      if (item) markSeen(item.id);
+
+      // 現在動画は残し、以降はpendingに切り替え
+      allItemsRef.current   = [all[currentIdxRef.current], ...pendingItemsRef.current];
+      nextCursorRef.current = pendingCursorRef.current;
+      seedRef.current       = pendingSeedRef.current;
+      pendingItemsRef.current  = null;
+      pendingCursorRef.current = null;
+      pendingSeedRef.current   = null;
+      isFetchingRef.current    = false;
+
+      currentIdxRef.current = 1;
+      setCurrentIndex(1);
+      updateWindow(1);
+      return;
+    }
+
+    if (all.length - nextIdx <= PREFETCH_AHEAD) fetchMore();
+    if (nextIdx >= all.length) return;
+
     const item = all[currentIdxRef.current];
     if (item) markSeen(item.id);
-    currentIdxRef.current = next;
-    setCurrentIndex(next);
-    updateWindow(next);
+
+    currentIdxRef.current = nextIdx;
+    setCurrentIndex(nextIdx);
+    updateWindow(nextIdx);
   }, [fetchMore, updateWindow]);
 
   const goPrev = useCallback(() => {
@@ -174,7 +238,6 @@ export default function FeedClient() {
 
   return (
     <>
-      {/* 上部ジャンルバー: 現在動画のジャンルを折り返し全件表示 */}
       <div className="genre-bar" role="toolbar" aria-label="ジャンル絞り込み">
         {currentGenres.length > 0 ? (
           currentGenres.map((tag) => (
@@ -263,8 +326,6 @@ const spinnerStyle = `
     font-size: 15px;
     color: rgba(255,255,255,0.5);
   }
-
-  /* ジャンルバー: 折り返しあり、全件表示 */
   .genre-bar {
     position: fixed;
     top: 52px;

@@ -1,8 +1,9 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import { useRouter } from "next/navigation";
 import FeedItem from "@/components/FeedItem";
-import { markSeen, getOrCreateSeed, resetSeed } from "@/lib/feedOrder";
+import { markSeen, getOrCreateSeed } from "@/lib/feedOrder";
 import { getFeed } from "@/lib/api/feed";
 import type { MovieCard } from "@/lib/api/feed";
 
@@ -23,6 +24,8 @@ function prefetchVideo(url: string, abortSignal: AbortSignal) {
 }
 
 export default function FeedClient() {
+  const router = useRouter();
+
   const allItemsRef     = useRef<MovieCard[]>([]);
   const nextCursorRef   = useRef<string | null>(null);
   const seedRef         = useRef<number | null>(null);
@@ -31,16 +34,9 @@ export default function FeedClient() {
   const wheelLockRef    = useRef(false);
   const containerRef    = useRef<HTMLDivElement>(null);
   const preloadAbortRef = useRef<AbortController | null>(null);
-  const activeGenresRef = useRef<string[]>([]);
-
-  /** タグ切替フェッチ中にそのまま進んだステップ数。null = フェッチ中でない */
-  const pendingStepsRef = useRef<number | null>(null);
-  /** タグ切替時の基準点になる動画(currentItem) */
-  const pendingBaseItemRef = useRef<MovieCard | null>(null);
 
   const [currentIndex, setCurrentIndex] = useState(0);
   const [windowItems, setWindowItems]   = useState<MovieCard[]>([]);
-  const [activeGenres, setActiveGenres] = useState<string[]>([]);
   const [currentGenres, setCurrentGenres] = useState<string[]>([]);
   const [isEmpty, setIsEmpty]           = useState(false);
   const [isLoading, setIsLoading]       = useState(false);
@@ -73,11 +69,7 @@ export default function FeedClient() {
     try {
       const cursor = overrideCursor ?? "0";
       const seed   = overrideSeed   ?? seedRef.current ?? 0;
-      const genres = activeGenresRef.current;
-      const res = await getFeed(
-        parseInt(cursor, 10), 20, seed,
-        genres.length > 0 ? genres : undefined,
-      );
+      const res = await getFeed(parseInt(cursor, 10), 20, seed);
       allItemsRef.current   = res.items;
       nextCursorRef.current = res.next_cursor;
       currentIdxRef.current = 0;
@@ -93,49 +85,10 @@ export default function FeedClient() {
     }
   }, [updateWindow]);
 
-  const handleGenreToggle = useCallback(async (tag: string) => {
-    const current = activeGenresRef.current;
-    const next = current.includes(tag)
-      ? current.filter((g) => g !== tag)
-      : [...current, tag];
-    activeGenresRef.current = next;
-    setActiveGenres([...next]);
-
-    // 切替時点の動画を記憶し、ステップカウンターをリセット
-    pendingBaseItemRef.current = allItemsRef.current[currentIdxRef.current] ?? null;
-    pendingStepsRef.current    = 0;
-
-    preloadAbortRef.current?.abort();
-
-    ;(async () => {
-      try {
-        const seed = resetSeed();
-        const res = await getFeed(
-          0, 20, seed,
-          next.length > 0 ? next : undefined,
-        );
-        const baseItem = pendingBaseItemRef.current;
-        const steps    = pendingStepsRef.current ?? 0;
-        const filtered = res.items.filter((item) => item.id !== baseItem?.id);
-
-        // 新リスト: [baseItem, ...filtered]
-        allItemsRef.current   = baseItem ? [baseItem, ...filtered] : filtered;
-        nextCursorRef.current = res.next_cursor;
-
-        // フェッチ中に進んだ分だけオフセットを加える（尊重して車窓外にならないようクランプ）
-        const targetIdx = Math.min(steps, allItemsRef.current.length - 1);
-        currentIdxRef.current = targetIdx;
-        setCurrentIndex(targetIdx);
-        setIsEmpty(filtered.length === 0 && !baseItem);
-        updateWindow(targetIdx);
-      } catch (e) {
-        console.error("handleGenreToggle fetch failed", e);
-      } finally {
-        pendingStepsRef.current    = null;
-        pendingBaseItemRef.current = null;
-      }
-    })();
-  }, [updateWindow]);
+  /** タグチップタップ → 検索画面へ遷移するだけ */
+  const handleGenreClick = useCallback((tag: string) => {
+    router.push(`/search?genre=${encodeURIComponent(tag)}`);
+  }, [router]);
 
   useEffect(() => {
     const seed = getOrCreateSeed();
@@ -148,13 +101,6 @@ export default function FeedClient() {
     const all = allItemsRef.current;
     const currentItem = all[currentIdxRef.current];
     const nextIdx = currentIdxRef.current + 1;
-
-    // フェッチ中: 表示は変えずステップだけカウント
-    if (pendingStepsRef.current !== null) {
-      pendingStepsRef.current += 1;
-      return;
-    }
-
     if (nextIdx >= all.length) return;
     if (currentItem) markSeen(currentItem.id);
     currentIdxRef.current = nextIdx;
@@ -163,8 +109,6 @@ export default function FeedClient() {
   }, [updateWindow]);
 
   const goPrev = useCallback(() => {
-    // フェッチ中は goPrev をブロック（切替前の動画に戻さない）
-    if (pendingStepsRef.current !== null) return;
     const next = Math.max(0, currentIdxRef.current - 1);
     if (next === currentIdxRef.current) return;
     currentIdxRef.current = next;
@@ -176,10 +120,8 @@ export default function FeedClient() {
     const el = containerRef.current;
     if (!el) return;
 
-    const isAtEnd = () => currentIdxRef.current >= allItemsRef.current.length - 1
-      && pendingStepsRef.current === null;
-    const isAtTop = () => currentIdxRef.current <= 0
-      || pendingStepsRef.current !== null;
+    const isAtEnd = () => currentIdxRef.current >= allItemsRef.current.length - 1;
+    const isAtTop = () => currentIdxRef.current <= 0;
 
     let startY = 0;
     let startTime = 0;
@@ -250,14 +192,13 @@ export default function FeedClient() {
 
   return (
     <>
-      <div className="genre-bar" role="toolbar" aria-label="ジャンル絞り込み">
+      <div className="genre-bar" role="toolbar" aria-label="ジャンル">
         {currentGenres.length > 0 ? (
           currentGenres.map((tag) => (
             <button
               key={tag}
-              className={`genre-chip${activeGenres.includes(tag) ? " active" : ""}`}
-              onClick={() => handleGenreToggle(tag)}
-              aria-pressed={activeGenres.includes(tag)}
+              className="genre-chip"
+              onClick={() => handleGenreClick(tag)}
             >
               {tag}
             </button>
@@ -308,8 +249,8 @@ export default function FeedClient() {
                   item={item}
                   isFirst={absIndex === 0}
                   isSecond={absIndex === 1}
-                  activeGenres={activeGenres}
-                  onGenreClick={handleGenreToggle}
+                  activeGenres={[]}
+                  onGenreClick={handleGenreClick}
                 />
               </div>
             );
@@ -350,11 +291,14 @@ const spinnerStyle = `
     left: 0; right: 0;
     z-index: 100;
     display: flex;
-    flex-wrap: wrap;
+    flex-wrap: nowrap;
+    overflow-x: auto;
     gap: 6px;
     padding: 8px 12px 10px;
     background: linear-gradient(to bottom, rgba(0,0,0,0.75) 0%, rgba(0,0,0,0) 100%);
+    scrollbar-width: none;
   }
+  .genre-bar::-webkit-scrollbar { display: none; }
   .genre-chip {
     flex-shrink: 0;
     padding: 5px 13px;
@@ -372,11 +316,6 @@ const spinnerStyle = `
     -webkit-tap-highlight-color: transparent;
     line-height: 1.4;
     min-height: 30px;
-  }
-  .genre-chip.active {
-    background: #e91e63;
-    border-color: #e91e63;
-    color: #fff;
   }
   .genre-chip:active { opacity: 0.75; }
   .genre-chip-skeleton {

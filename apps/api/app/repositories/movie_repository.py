@@ -3,6 +3,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.models.movie import Movie
 from app.db.models.genre import Genre
+from app.db.models.movie import MovieGenre
 
 
 async def get_movie_by_slug(db: AsyncSession, slug: str) -> Movie | None:
@@ -11,13 +12,15 @@ async def get_movie_by_slug(db: AsyncSession, slug: str) -> Movie | None:
 
 
 async def get_all_movie_ids(db: AsyncSession, genres: list[str] | None = None) -> list[str]:
-    """全IDを取得。genresが指定された場合はOR条件で絞り込む。"""
+    """全IDを取得。genresが指定された場合はAND条件で絞り込む。"""
     if genres:
+        # AND: 各ジャンルをすべて持つ作品のみ
         query = (
             select(Movie.id)
             .join(Movie.genres)
             .where(Genre.name.in_(genres))
-            .distinct()
+            .group_by(Movie.id)
+            .having(func.count(Genre.id.distinct()) == len(genres))
             .order_by(Movie.id)
         )
     else:
@@ -42,12 +45,17 @@ async def get_movies_paginated(
     genres: list[str] | None = None,
 ) -> tuple[list[Movie], int]:
     if genres:
-        base_query = select(Movie).join(Movie.genres).where(Genre.name.in_(genres)).distinct()
-        count_query = (
-            select(func.count(Movie.id.distinct()))
+        # AND: 各ジャンルをすべて持つ作品のみ
+        subq = (
+            select(Movie.id)
             .join(Movie.genres)
             .where(Genre.name.in_(genres))
+            .group_by(Movie.id)
+            .having(func.count(Genre.id.distinct()) == len(genres))
+            .subquery()
         )
+        base_query = select(Movie).where(Movie.id.in_(select(subq)))
+        count_query = select(func.count()).select_from(subq)
     else:
         base_query = select(Movie)
         count_query = select(func.count()).select_from(Movie)

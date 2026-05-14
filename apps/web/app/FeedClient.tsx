@@ -11,11 +11,6 @@ const PREFETCH_AHEAD = 8;
 const PRELOAD_AHEAD  = 2;
 const PRELOAD_BYTES  = 2 * 1024 * 1024;
 
-const GENRE_TAGS = [
-  "ビーナス", "素人", "美少女", "巨乳", "中出し",
-  "OL", "ハード系", "VR", "耶婦", "プロ作品",
-];
-
 const preloadCache = new Set<string>();
 
 function prefetchVideo(url: string, abortSignal: AbortSignal) {
@@ -44,6 +39,7 @@ export default function FeedClient() {
   const [currentIndex, setCurrentIndex] = useState(0);
   const [windowItems, setWindowItems]   = useState<MovieCard[]>([]);
   const [activeGenres, setActiveGenres] = useState<string[]>([]);
+  const [currentGenres, setCurrentGenres] = useState<string[]>([]); // 表示中動画のジャンル
   const [isEmpty, setIsEmpty]           = useState(false);
   const [isLoading, setIsLoading]       = useState(false);
   const windowStartRef = useRef(0);
@@ -54,6 +50,10 @@ export default function FeedClient() {
     const end   = Math.min(all.length, idx + WINDOW_SIZE + 1);
     windowStartRef.current = start;
     setWindowItems(all.slice(start, end));
+
+    // 現在の動画のジャンルをバーに反映
+    const current = all[idx];
+    setCurrentGenres(current?.genres ?? []);
 
     preloadAbortRef.current?.abort();
     const controller = new AbortController();
@@ -97,6 +97,7 @@ export default function FeedClient() {
         currentIdxRef.current = 0;
         setCurrentIndex(0);
         setIsEmpty(res.items.length === 0);
+        setCurrentGenres(res.items[0]?.genres ?? []);
       } else {
         allItemsRef.current = [...allItemsRef.current, ...res.items];
       }
@@ -111,7 +112,6 @@ export default function FeedClient() {
     }
   }, [updateWindow]);
 
-  // ジャンルトグル（FeedClientのgenre-bar + FeedItemのバッジ両方から呼ばれる）
   const handleGenreToggle = useCallback((tag: string) => {
     const current = activeGenresRef.current;
     const next = current.includes(tag)
@@ -129,6 +129,7 @@ export default function FeedClient() {
     isFetchingRef.current = false;
     setCurrentIndex(0);
     setWindowItems([]);
+    setCurrentGenres([]);
 
     const seed = resetSeed();
     seedRef.current = seed;
@@ -203,17 +204,29 @@ export default function FeedClient() {
 
   return (
     <>
-      {/* 上部ジャンルバー（固定タグ一覧） */}
-      <div className="genre-bar">
-        {GENRE_TAGS.map((tag) => (
-          <button
-            key={tag}
-            className={`genre-chip${activeGenres.includes(tag) ? " active" : ""}`}
-            onClick={() => handleGenreToggle(tag)}
-          >
-            {tag}
-          </button>
-        ))}
+      {/* 上部ジャンルバー: 現在表示中の動画のジャンルを表示 */}
+      <div className="genre-bar" role="toolbar" aria-label="ジャンル絞り込み">
+        {currentGenres.length > 0 ? (
+          currentGenres.map((tag) => (
+            <button
+              key={tag}
+              className={`genre-chip${activeGenres.includes(tag) ? " active" : ""}`}
+              onClick={() => handleGenreToggle(tag)}
+              aria-pressed={activeGenres.includes(tag)}
+            >
+              {tag}
+            </button>
+          ))
+        ) : (
+          // ロード中はスケルトン表示
+          !showEmpty && (
+            <>
+              <div className="genre-chip-skeleton" style={{ width: 52 }} />
+              <div className="genre-chip-skeleton" style={{ width: 44 }} />
+              <div className="genre-chip-skeleton" style={{ width: 60 }} />
+            </>
+          )
+        )}
       </div>
 
       <div ref={containerRef} className="feed-container">
@@ -287,31 +300,46 @@ const spinnerStyle = `
     left: 0; right: 0;
     z-index: 100;
     display: flex;
-    gap: 8px;
-    padding: 8px 12px;
-    overflow-x: auto;
+    flex-wrap: wrap;
+    gap: 6px;
+    padding: 8px 12px 10px;
     background: linear-gradient(to bottom, rgba(0,0,0,0.85) 0%, rgba(0,0,0,0) 100%);
-    -webkit-overflow-scrolling: touch;
-    scrollbar-width: none;
+    /* スクロールなし・折り返し対応 */
   }
-  .genre-bar::-webkit-scrollbar { display: none; }
   .genre-chip {
     flex-shrink: 0;
-    padding: 5px 14px;
+    padding: 5px 13px;
     border-radius: 999px;
     border: 1px solid rgba(255,255,255,0.3);
     background: rgba(255,255,255,0.1);
-    color: rgba(255,255,255,0.75);
-    font-size: 12px;
+    color: rgba(255,255,255,0.8);
+    font-size: clamp(11px, 1.8vw, 13px);
     font-weight: 600;
     cursor: pointer;
     white-space: nowrap;
+    backdrop-filter: blur(6px);
+    -webkit-backdrop-filter: blur(6px);
     transition: background 0.15s, color 0.15s, border-color 0.15s;
     -webkit-tap-highlight-color: transparent;
+    line-height: 1.4;
   }
   .genre-chip.active {
     background: #e91e63;
     border-color: #e91e63;
     color: #fff;
+  }
+  .genre-chip-skeleton {
+    height: 28px;
+    border-radius: 999px;
+    background: rgba(255,255,255,0.1);
+    animation: skel-pulse 1.2s ease-in-out infinite;
+  }
+  @keyframes skel-pulse {
+    0%, 100% { opacity: 0.5; }
+    50%       { opacity: 1; }
+  }
+  @media (min-width: 640px) {
+    .genre-bar { padding: 10px 20px 12px; gap: 8px; }
+    .genre-chip { padding: 6px 16px; }
   }
 `;

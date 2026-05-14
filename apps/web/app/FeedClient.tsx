@@ -31,18 +31,20 @@ function prefetchVideo(url: string, abortSignal: AbortSignal) {
 }
 
 export default function FeedClient() {
-  const allItemsRef    = useRef<MovieCard[]>([]);
-  const nextCursorRef  = useRef<string | null>(null);
-  const seedRef        = useRef<number | null>(null);
-  const isFetchingRef  = useRef(false);
-  const currentIdxRef  = useRef(0);
-  const wheelLockRef   = useRef(false);
-  const containerRef   = useRef<HTMLDivElement>(null);
+  const allItemsRef     = useRef<MovieCard[]>([]);
+  const nextCursorRef   = useRef<string | null>(null);
+  const seedRef         = useRef<number | null>(null);
+  const isFetchingRef   = useRef(false);
+  const currentIdxRef   = useRef(0);
+  const wheelLockRef    = useRef(false);
+  const containerRef    = useRef<HTMLDivElement>(null);
   const preloadAbortRef = useRef<AbortController | null>(null);
+  // activeGenreをrefで管理することでfetchMore内で常に最新値を参照できる
+  const activeGenreRef  = useRef<string | null>(null);
 
   const [currentIndex, setCurrentIndex] = useState(0);
   const [windowItems, setWindowItems]   = useState<MovieCard[]>([]);
-  const [activeGenre, setActiveGenre]   = useState<string | null>(null);
+  const [activeGenre, setActiveGenre]   = useState<string | null>(null); // UI表示用
   const windowStartRef = useRef(0);
 
   const updateWindow = useCallback((idx: number) => {
@@ -64,10 +66,10 @@ export default function FeedClient() {
     }
   }, []);
 
+  // fetchMoreは常にactiveGenreRef.currentを参照するので追加ページも正しく絞り込まれる
   const fetchMore = useCallback(async (
     overrideCursor?: string,
     overrideSeed?: number,
-    genre?: string | null,
   ) => {
     if (isFetchingRef.current) return;
     isFetchingRef.current = true;
@@ -82,12 +84,11 @@ export default function FeedClient() {
         cursor = "0";
       }
 
-      const currentGenre = genre !== undefined ? genre : activeGenre;
       const res = await getFeed(
         parseInt(cursor, 10),
         20,
         seed,
-        currentGenre ?? undefined,
+        activeGenreRef.current ?? undefined,
       );
 
       if (overrideCursor === "0") {
@@ -105,39 +106,30 @@ export default function FeedClient() {
     } finally {
       isFetchingRef.current = false;
     }
-  }, [updateWindow, activeGenre]);
+  }, [updateWindow]);
 
-  // タグ選択時にフィードをリセット
   const handleGenreSelect = useCallback((genre: string | null) => {
+    // refとstateを同時に更新。refはfetchMoreで即座に参照される
+    activeGenreRef.current = genre;
     setActiveGenre(genre);
+
+    // フィード状態をリセット
     allItemsRef.current   = [];
     nextCursorRef.current = null;
     currentIdxRef.current = 0;
+    isFetchingRef.current = false;
     setCurrentIndex(0);
     setWindowItems([]);
 
     const seed = resetSeed();
     seedRef.current = seed;
-    // fetchMoreはactiveGenreの更新を待たず直接genreを渡す
-    isFetchingRef.current = false;
-
-    const params = new URLSearchParams({ offset: "0", limit: "20", seed: String(seed) });
-    if (genre) params.set("genre", genre);
-    const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL || "http://127.0.0.1:8000";
-    fetch(`${API_BASE_URL}/api/v1/feed?${params}`, { cache: "no-store" })
-      .then((r) => r.json())
-      .then((res) => {
-        allItemsRef.current   = res.items;
-        nextCursorRef.current = res.next_cursor;
-        updateWindow(0);
-      })
-      .catch(console.error);
-  }, [updateWindow]);
+    fetchMore("0", seed);
+  }, [fetchMore]);
 
   useEffect(() => {
     const seed = getOrCreateSeed();
     seedRef.current = seed;
-    fetchMore("0", seed, null);
+    fetchMore("0", seed);
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -199,7 +191,6 @@ export default function FeedClient() {
 
   return (
     <>
-      {/* タグバー */}
       <div className="genre-bar">
         <button
           className={`genre-chip${activeGenre === null ? " active" : ""}`}

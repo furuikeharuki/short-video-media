@@ -6,10 +6,9 @@ import { markSeen, getOrCreateSeed, resetSeed } from "@/lib/feedOrder";
 import { getFeed } from "@/lib/api/feed";
 import type { MovieCard } from "@/lib/api/feed";
 
-const WINDOW_SIZE    = 2;
-const PREFETCH_AHEAD = 8;
-const PRELOAD_AHEAD  = 2;
-const PRELOAD_BYTES  = 2 * 1024 * 1024;
+const WINDOW_SIZE   = 2;
+const PRELOAD_AHEAD = 2;
+const PRELOAD_BYTES = 2 * 1024 * 1024;
 
 const preloadCache = new Set<string>();
 
@@ -34,7 +33,6 @@ export default function FeedClient() {
   const preloadAbortRef = useRef<AbortController | null>(null);
   const activeGenresRef = useRef<string[]>([]);
 
-  // バックグラウンドフェッチのPromiseを保持。goNextはこれをawaitする
   const bgFetchPromiseRef  = useRef<Promise<void> | null>(null);
   const pendingItemsRef    = useRef<MovieCard[] | null>(null);
   const pendingCursorRef   = useRef<string | null>(null);
@@ -65,51 +63,34 @@ export default function FeedClient() {
     }
   }, []);
 
-  /** 通常フィード取得（初期ロード & ページ増加） */
-  const fetchMore = useCallback(async (overrideCursor?: string, overrideSeed?: number) => {
+  /** 初期ロードのみ（無限スクロールなし） */
+  const fetchInitial = useCallback(async (overrideCursor?: string, overrideSeed?: number) => {
     if (isFetchingRef.current) return;
     isFetchingRef.current = true;
     try {
-      let cursor = overrideCursor ?? nextCursorRef.current;
-      let seed   = overrideSeed   ?? seedRef.current ?? 0;
-
-      if (cursor === null) {
-        seed = resetSeed();
-        seedRef.current       = seed;
-        nextCursorRef.current = "0";
-        cursor = "0";
-      }
-
+      const cursor = overrideCursor ?? "0";
+      const seed   = overrideSeed   ?? seedRef.current ?? 0;
       const genres = activeGenresRef.current;
       const res = await getFeed(
         parseInt(cursor, 10), 20, seed,
         genres.length > 0 ? genres : undefined,
       );
-
-      if (overrideCursor === "0") {
-        allItemsRef.current   = res.items;
-        currentIdxRef.current = 0;
-        setCurrentIndex(0);
-        setIsEmpty(res.items.length === 0);
-        setCurrentGenres(res.items[0]?.genres ?? []);
-      } else {
-        allItemsRef.current = [...allItemsRef.current, ...res.items];
-      }
-
+      allItemsRef.current   = res.items;
       nextCursorRef.current = res.next_cursor;
-      updateWindow(currentIdxRef.current);
+      currentIdxRef.current = 0;
+      setCurrentIndex(0);
+      setIsEmpty(res.items.length === 0);
+      setCurrentGenres(res.items[0]?.genres ?? []);
+      updateWindow(0);
     } catch (e) {
-      console.error("fetchMore failed", e);
+      console.error("fetchInitial failed", e);
     } finally {
       isFetchingRef.current = false;
       setIsLoading(false);
     }
   }, [updateWindow]);
 
-  /**
-   * バックグラウンドフェッチ。
-   * PromiseをbgFetchPromiseRefに保持し、goNextがawaitできるようにする。
-   */
+  /** バックグラウンドフェッチ: Promise を ref に保持 */
   const fetchBackground = useCallback((genres: string[]) => {
     pendingItemsRef.current  = null;
     pendingCursorRef.current = null;
@@ -134,12 +115,6 @@ export default function FeedClient() {
     return promise;
   }, []);
 
-  /**
-   * タグ選択:
-   * 1. UI即時反映
-   * 2. バックグラウンドフェッチ開始（Promiseをrefに保持）
-   * 3. 現在動画は不動
-   */
   const handleGenreToggle = useCallback((tag: string) => {
     const current = activeGenresRef.current;
     const next = current.includes(tag)
@@ -153,55 +128,61 @@ export default function FeedClient() {
   useEffect(() => {
     const seed = getOrCreateSeed();
     seedRef.current = seed;
-    fetchMore("0", seed);
+    fetchInitial("0", seed);
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   /**
    * goNext:
-   * - bgFetchPromiseがある（タグ選択済）場合は完了を待ってからpendingに切替
-   * - pendingがなければ通常遷移
+   * - bgFetchPromise があれば await して pending に切替
+   * - pending の中から現在再生中と同じ動画を除外
+   * - 無限スクロールなし（末尾で止まる）
    */
   const goNext = useCallback(async () => {
     const all = allItemsRef.current;
+    const currentItem = all[currentIdxRef.current];
 
-    // バックグラウンドフェッチ中ならawait
     if (bgFetchPromiseRef.current) {
       await bgFetchPromiseRef.current;
       bgFetchPromiseRef.current = null;
     }
 
     if (pendingItemsRef.current && pendingItemsRef.current.length > 0) {
-      const item = all[currentIdxRef.current];
-      if (item) markSeen(item.id);
+      if (currentItem) markSeen(currentItem.id);
 
-      // 現在動画を先頭に残し、以降をpendingリストで上書き
-      allItemsRef.current   = [all[currentIdxRef.current], ...pendingItemsRef.current];
-      nextCursorRef.current = pendingCursorRef.current;
-      seedRef.current       = pendingSeedRef.current;
-      pendingItemsRef.current  = null;
-      pendingCursorRef.current = null;
-      pendingSeedRef.current   = null;
-      isFetchingRef.current    = false;
+      // 現在再生中と同じ動画を pending から除外
+      const filtered = pendingItemsRef.current.filter(
+        (item) => item.id !== currentItem?.id
+      );
 
-      currentIdxRef.current = 1;
-      setCurrentIndex(1);
-      updateWindow(1);
-      return;
+      if (filtered.length === 0) {
+        // pending が全部同じ動画だった場合は通常遷移
+        pendingItemsRef.current = null;
+      } else {
+        allItemsRef.current   = filtered;
+        nextCursorRef.current = pendingCursorRef.current;
+        seedRef.current       = pendingSeedRef.current;
+        pendingItemsRef.current  = null;
+        pendingCursorRef.current = null;
+        pendingSeedRef.current   = null;
+        isFetchingRef.current    = false;
+
+        currentIdxRef.current = 0;
+        setCurrentIndex(0);
+        updateWindow(0);
+        return;
+      }
     }
 
-    // 通常遷移
+    // 通常遷移（末尾で止まる）
     const nextIdx = currentIdxRef.current + 1;
-    if (all.length - nextIdx <= PREFETCH_AHEAD) fetchMore();
     if (nextIdx >= all.length) return;
 
-    const item = all[currentIdxRef.current];
-    if (item) markSeen(item.id);
-
+    if (currentItem) markSeen(currentItem.id);
     currentIdxRef.current = nextIdx;
     setCurrentIndex(nextIdx);
     updateWindow(nextIdx);
-  }, [fetchMore, updateWindow]);
+  }, [updateWindow]);
 
   const goPrev = useCallback(() => {
     const next = Math.max(0, currentIdxRef.current - 1);
@@ -239,8 +220,8 @@ export default function FeedClient() {
   }, [goNext, goPrev]);
 
   useEffect(() => {
-    if (windowItems.length === 0 && !isFetchingRef.current && !isEmpty) fetchMore();
-  }, [windowItems, fetchMore, isEmpty]);
+    if (windowItems.length === 0 && !isFetchingRef.current && !isEmpty) fetchInitial();
+  }, [windowItems, fetchInitial, isEmpty]);
 
   const showEmpty   = isEmpty && !isLoading;
   const showLoading = isLoading || (windowItems.length === 0 && !isEmpty);

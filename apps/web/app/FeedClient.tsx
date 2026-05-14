@@ -101,11 +101,7 @@ export default function FeedClient() {
     }
   }, [updateWindow]);
 
-  /**
-   * タグ選択: リロードなし。
-   * activeGenresを更新するだけ。
-   * 次のfetchMore（スクロール時など）から自動的に絞り込める。
-   */
+  /** タグ選択: リロードなし。次のfetchMoreから自動的に絞り込まれる */
   const handleGenreToggle = useCallback((tag: string) => {
     const current = activeGenresRef.current;
     const next = current.includes(tag)
@@ -178,7 +174,7 @@ export default function FeedClient() {
 
   return (
     <>
-      {/* 上部ジャンルバー: 1行固定、横スクロール */}
+      {/* 上部ジャンルバー: 現在動画のジャンルを折り返し全件表示 */}
       <div className="genre-bar" role="toolbar" aria-label="ジャンル絞り込み">
         {currentGenres.length > 0 ? (
           currentGenres.map((tag) => (
@@ -268,24 +264,18 @@ const spinnerStyle = `
     color: rgba(255,255,255,0.5);
   }
 
-  /* ジャンルバー: 1行固定 + 横スクロール */
+  /* ジャンルバー: 折り返しあり、全件表示 */
   .genre-bar {
     position: fixed;
     top: 52px;
     left: 0; right: 0;
     z-index: 100;
     display: flex;
-    flex-wrap: nowrap;            /* 折り返し禁止 = 1行 */
+    flex-wrap: wrap;
     gap: 6px;
     padding: 8px 12px 10px;
-    overflow-x: auto;             /* 多い時は横スクロール */
-    -webkit-overflow-scrolling: touch;
-    scrollbar-width: none;        /* Firefox */
     background: linear-gradient(to bottom, rgba(0,0,0,0.75) 0%, rgba(0,0,0,0) 100%);
-    /* スクロールバーを消す */
   }
-  .genre-bar::-webkit-scrollbar { display: none; }
-
   .genre-chip {
     flex-shrink: 0;
     padding: 5px 13px;
@@ -302,6 +292,7 @@ const spinnerStyle = `
     transition: background 0.15s, color 0.15s, border-color 0.15s;
     -webkit-tap-highlight-color: transparent;
     line-height: 1.4;
+    min-height: 30px;
   }
   .genre-chip.active {
     background: #e91e63;
@@ -309,7 +300,6 @@ const spinnerStyle = `
     color: #fff;
   }
   .genre-chip:active { opacity: 0.75; }
-
   .genre-chip-skeleton {
     flex-shrink: 0;
     height: 28px;
@@ -321,9 +311,8 @@ const spinnerStyle = `
     0%, 100% { opacity: 0.5; }
     50%       { opacity: 1; }
   }
-
   @media (min-width: 640px) {
     .genre-bar { padding: 10px 20px 12px; gap: 8px; }
-    .genre-chip { font-size: 13px; padding: 6px 16px; }
+    .genre-chip { font-size: 13px; padding: 6px 16px; min-height: 34px; }
   }
 `;

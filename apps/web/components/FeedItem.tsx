@@ -212,9 +212,7 @@ export default function FeedItem({ item, isFirst, isSecond = false, activeGenres
     });
   }, []);
 
-  useLayoutEffect(() => {
-    calcVideoArea();
-  }, [calcVideoArea]);
+  useLayoutEffect(() => { calcVideoArea(); }, [calcVideoArea]);
 
   useEffect(() => {
     const cta = ctaRef.current;
@@ -272,7 +270,6 @@ export default function FeedItem({ item, isFirst, isSecond = false, activeGenres
   useEffect(() => {
     const video = videoRef.current;
     if (!video) return;
-
     const playObserver = new IntersectionObserver(([entry]) => {
       if (entry.isIntersecting) {
         playVideo(video, false);
@@ -289,7 +286,6 @@ export default function FeedItem({ item, isFirst, isSecond = false, activeGenres
         setMuteBadge(false);
       }
     }, { threshold: PLAY_THRESHOLD });
-
     playObserver.observe(video);
     return () => { playObserver.disconnect(); };
   }, [playVideo, setVideoReady, setPauseBadge, setFastBadge, setMuteBadge]);
@@ -306,11 +302,10 @@ export default function FeedItem({ item, isFirst, isSecond = false, activeGenres
     const video   = videoRef.current;
     const section = sectionRef.current;
     if (!video || !section) return;
-    const rect  = section.getBoundingClientRect();
+    const rect   = section.getBoundingClientRect();
     const isLeft = clientX - rect.left < rect.width / 2;
     if (isLeft) video.currentTime = Math.max(0, video.currentTime - SKIP_SEC);
     else        video.currentTime = Math.min(video.duration || Infinity, video.currentTime + SKIP_SEC);
-
     const ripple = document.createElement("div");
     ripple.className = "skip-ripple";
     ripple.style.left = `${clientX - rect.left}px`;
@@ -442,30 +437,8 @@ export default function FeedItem({ item, isFirst, isSecond = false, activeGenres
 
   const preloadAttr = isFirst || isSecond ? "auto" : "metadata";
 
-  // ジャンルバッジのクリック: イベント伝播を止めてFeedClientに通知
-  const handleGenreClick = useCallback((e: React.MouseEvent | React.TouchEvent, genre: string) => {
-    e.stopPropagation();
-    e.preventDefault();
-    onGenreClick?.(genre);
-  }, [onGenreClick]);
-
   return (
     <section ref={sectionRef} className="feed-item" data-movie-id={item.id}>
-      {/* 左上: ジャンルバッジ（タップで検索） */}
-      <div className="genre-badges-top">
-        {item.genres.slice(0, 4).map((g) => (
-          <button
-            key={g}
-            className={`genre-badge-btn${activeGenres.includes(g) ? " genre-badge-btn--active" : ""}`}
-            onTouchEnd={(e) => handleGenreClick(e, g)}
-            onClick={(e) => handleGenreClick(e, g)}
-            aria-label={`${g}で絞り込む`}
-          >
-            {g}
-          </button>
-        ))}
-      </div>
-
       {item.sample_movie_url ? (
         <div
           ref={containerRef}
@@ -492,11 +465,7 @@ export default function FeedItem({ item, isFirst, isSecond = false, activeGenres
             onLoadedMetadata={handleMetadata}
             onLoadedData={() => setVideoReady(true)}
             onCanPlay={() => setVideoReady(true)}
-            style={{
-              position: "absolute",
-              opacity: 0,
-              transition: "opacity 0.3s ease",
-            }}
+            style={{ position: "absolute", opacity: 0, transition: "opacity 0.3s ease" }}
           />
 
           <div style={wrapStyle}>
@@ -513,7 +482,6 @@ export default function FeedItem({ item, isFirst, isSecond = false, activeGenres
                 </svg>
               </span>
             </div>
-
             <div ref={pauseBadgeRef} className="pause-badge" aria-hidden="true" style={{ display: "none" }}>
               <svg width="40" height="40" viewBox="0 0 48 48" fill="none">
                 <rect x="12" y="8" width="10" height="32" rx="2" fill="white"/>
@@ -583,41 +551,6 @@ export default function FeedItem({ item, isFirst, isSecond = false, activeGenres
 }
 
 const itemStyle = `
-  .genre-badges-top {
-    position: absolute;
-    top: 60px;
-    left: 12px;
-    z-index: 30;
-    display: flex;
-    flex-wrap: wrap;
-    gap: 6px;
-    max-width: 60%;
-    pointer-events: auto;
-  }
-  .genre-badge-btn {
-    padding: 4px 10px;
-    border-radius: 999px;
-    border: 1px solid rgba(255,255,255,0.4);
-    background: rgba(0,0,0,0.45);
-    color: rgba(255,255,255,0.85);
-    font-size: 11px;
-    font-weight: 600;
-    cursor: pointer;
-    white-space: nowrap;
-    backdrop-filter: blur(6px);
-    -webkit-backdrop-filter: blur(6px);
-    transition: background 0.15s, border-color 0.15s, color 0.15s;
-    -webkit-tap-highlight-color: transparent;
-  }
-  .genre-badge-btn--active {
-    background: #e91e63;
-    border-color: #e91e63;
-    color: #fff;
-  }
-  .genre-badge-btn:active {
-    opacity: 0.75;
-  }
-
   .shimmer {
     position: absolute;
     top: ${V_PADDING_TOP}px;
@@ -645,7 +578,6 @@ const itemStyle = `
     0%   { background-position: 200% 0; }
     100% { background-position: -200% 0; }
   }
-
   .video-bg--interactive {
     cursor: pointer;
     -webkit-tap-highlight-color: transparent;
@@ -654,7 +586,6 @@ const itemStyle = `
     user-select: none;
     touch-action: pan-y;
   }
-
   .action-overlay {
     position: absolute;
     inset: 0;
@@ -677,7 +608,6 @@ const itemStyle = `
     70%  { opacity: 0.8; transform: scale(1); }
     100% { opacity: 0; transform: scale(1); }
   }
-
   .pause-badge {
     position: absolute;
     inset: 0;
@@ -688,7 +618,6 @@ const itemStyle = `
     pointer-events: none;
     filter: drop-shadow(0 2px 6px rgba(0,0,0,0.6));
   }
-
   .fast-badge {
     position: absolute;
     top: 12px;
@@ -706,7 +635,6 @@ const itemStyle = `
     -webkit-backdrop-filter: blur(6px);
     text-shadow: 0 1px 4px rgba(0,0,0,0.5);
   }
-
   .mute-badge {
     position: absolute;
     bottom: 80px;
@@ -734,7 +662,6 @@ const itemStyle = `
     letter-spacing: 0.02em;
     text-shadow: 0 1px 3px rgba(0,0,0,0.6);
   }
-
   .scroll-hint {
     position: absolute;
     bottom: 180px;
@@ -750,18 +677,12 @@ const itemStyle = `
     transition: opacity 0.5s ease;
     animation: bounce 2s ease-in-out infinite;
   }
-  .scroll-hint--hidden {
-    opacity: 0;
-    animation: none;
-  }
-  .scroll-arrow {
-    font-size: 18px;
-  }
+  .scroll-hint--hidden { opacity: 0; animation: none; }
+  .scroll-arrow { font-size: 18px; }
   @keyframes bounce {
     0%, 100% { transform: translateY(0); }
     50%       { transform: translateY(6px); }
   }
-
   .skip-ripple {
     position: absolute;
     transform: translate(-50%, -50%);
@@ -790,7 +711,6 @@ const itemStyle = `
     40%  { opacity: 1; transform: translate(-50%, -50%) scale(1.1); }
     100% { opacity: 0; transform: translate(-50%, -50%) scale(1.35); }
   }
-
   @media (prefers-reduced-motion: reduce) {
     .shimmer-inner  { animation: none; }
     .scroll-hint    { animation: none; }

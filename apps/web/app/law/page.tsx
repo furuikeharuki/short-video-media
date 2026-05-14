@@ -15,7 +15,7 @@ export default function LawPage() {
         </nav>
 
         <h1 style={styles.h1}>特定商取引法に基づく表記</h1>
-        <p style={styles.updated}>最終更新日：2026年5月13日</p>
+        <p style={styles.updated}>最終更新日：2026年5月14日</p>
 
         <table style={styles.table}>
           <tbody>
@@ -23,13 +23,13 @@ export default function LawPage() {
               <p>各販売事業者（FANZA等）</p>
             </Row>
             <Row label="所在地">
-              <p>東京都</p>
+              <p>開示請求があった場合、遅滞なく提供いたします。</p>
             </Row>
             <Row label="メールアドレス">
               <a href="mailto:avshorts0512@gmail.com" style={styles.link}>avshorts0512@gmail.com</a>
             </Row>
             <Row label="運営責任者">
-              <p>サイト運営者</p>
+              <p>開示請求があった場合、遅滞なく提供いたします。</p>
             </Row>
             <Row label="サイトURL">
               <p>{process.env.NEXT_PUBLIC_SITE_URL ?? "本サイト"}</p>

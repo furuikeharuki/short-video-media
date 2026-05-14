@@ -1,7 +1,6 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { useRouter } from "next/navigation";
 import FeedItem from "@/components/FeedItem";
 import { markSeen, getOrCreateSeed } from "@/lib/feedOrder";
 import { getFeed } from "@/lib/api/feed";
@@ -24,8 +23,6 @@ function prefetchVideo(url: string, abortSignal: AbortSignal) {
 }
 
 export default function FeedClient() {
-  const router = useRouter();
-
   const allItemsRef     = useRef<MovieCard[]>([]);
   const nextCursorRef   = useRef<string | null>(null);
   const seedRef         = useRef<number | null>(null);
@@ -37,7 +34,6 @@ export default function FeedClient() {
 
   const [currentIndex, setCurrentIndex] = useState(0);
   const [windowItems, setWindowItems]   = useState<MovieCard[]>([]);
-  const [currentGenres, setCurrentGenres] = useState<string[]>([]);
   const [isEmpty, setIsEmpty]           = useState(false);
   const [isLoading, setIsLoading]       = useState(false);
   const windowStartRef = useRef(0);
@@ -52,7 +48,6 @@ export default function FeedClient() {
     const end   = Math.min(all.length, idx + WINDOW_SIZE + 1);
     windowStartRef.current = start;
     setWindowItems(all.slice(start, end));
-    setCurrentGenres(all[idx]?.genres ?? []);
 
     preloadAbortRef.current?.abort();
     const controller = new AbortController();
@@ -75,7 +70,6 @@ export default function FeedClient() {
       currentIdxRef.current = 0;
       setCurrentIndex(0);
       setIsEmpty(res.items.length === 0);
-      setCurrentGenres(res.items[0]?.genres ?? []);
       updateWindow(0);
     } catch (e) {
       console.error("fetchInitial failed", e);
@@ -84,11 +78,6 @@ export default function FeedClient() {
       setIsLoading(false);
     }
   }, [updateWindow]);
-
-  /** タグチップタップ → 検索画面へ遷移するだけ */
-  const handleGenreClick = useCallback((tag: string) => {
-    router.push(`/search?genre=${encodeURIComponent(tag)}`);
-  }, [router]);
 
   useEffect(() => {
     const seed = getOrCreateSeed();
@@ -120,9 +109,6 @@ export default function FeedClient() {
     const el = containerRef.current;
     if (!el) return;
 
-    const isAtEnd = () => currentIdxRef.current >= allItemsRef.current.length - 1;
-    const isAtTop = () => currentIdxRef.current <= 0;
-
     let startY = 0;
     let startTime = 0;
 
@@ -137,7 +123,9 @@ export default function FeedClient() {
     const onTouchMove = (e: TouchEvent) => {
       if (!isDragging.current) return;
       const dy = e.touches[0].clientY - dragStartY.current;
-      if ((dy > 0 && isAtEnd()) || (dy < 0 && isAtTop())) {
+      const atEnd = currentIdxRef.current >= allItemsRef.current.length - 1;
+      const atTop = currentIdxRef.current <= 0;
+      if ((dy > 0 && atEnd) || (dy < 0 && atTop)) {
         setDragPx(dy * 0.35);
       } else {
         setDragPx(0);
@@ -191,74 +179,48 @@ export default function FeedClient() {
   const showLoading = isLoading || (windowItems.length === 0 && !isEmpty);
 
   return (
-    <>
-      <div className="genre-bar" role="toolbar" aria-label="ジャンル">
-        {currentGenres.length > 0 ? (
-          currentGenres.map((tag) => (
-            <button
-              key={tag}
-              className="genre-chip"
-              onClick={() => handleGenreClick(tag)}
+    <div ref={containerRef} className="feed-container">
+      {showEmpty ? (
+        <div className="feed-empty">
+          <p className="feed-empty-text">該当する作品が見つかりませんでした</p>
+        </div>
+      ) : showLoading ? (
+        <div className="feed-loading">
+          <div className="feed-spinner" />
+        </div>
+      ) : (
+        windowItems.map((item, i) => {
+          const absIndex = windowStartRef.current + i;
+          const offset   = absIndex - currentIndex;
+          const isActive = offset === 0;
+          const transform = isActive
+            ? `translateY(calc(${offset * 100}% + ${dragPx}px))`
+            : `translateY(${offset * 100}%)`;
+          return (
+            <div
+              key={`${item.id}-${absIndex}`}
+              className="feed-slide"
+              style={{
+                transform,
+                transition: isActive && dragPx === 0
+                  ? "transform 0.35s cubic-bezier(0.25,1,0.5,1)"
+                  : isActive ? "none" : undefined,
+                zIndex:        isActive ? 2 : 1,
+                pointerEvents: isActive ? "auto" : "none",
+                visibility:    isActive ? "visible" : "hidden",
+              }}
             >
-              {tag}
-            </button>
-          ))
-        ) : (
-          !showEmpty && (
-            <>
-              <div className="genre-chip-skeleton" style={{ width: 52 }} />
-              <div className="genre-chip-skeleton" style={{ width: 44 }} />
-              <div className="genre-chip-skeleton" style={{ width: 60 }} />
-            </>
-          )
-        )}
-      </div>
-
-      <div ref={containerRef} className="feed-container">
-        {showEmpty ? (
-          <div className="feed-empty">
-            <p className="feed-empty-text">該当する作品が見つかりませんでした</p>
-          </div>
-        ) : showLoading ? (
-          <div className="feed-loading">
-            <div className="feed-spinner" />
-          </div>
-        ) : (
-          windowItems.map((item, i) => {
-            const absIndex = windowStartRef.current + i;
-            const offset   = absIndex - currentIndex;
-            const isActive = offset === 0;
-            const transform = isActive
-              ? `translateY(calc(${offset * 100}% + ${dragPx}px))`
-              : `translateY(${offset * 100}%)`;
-            return (
-              <div
-                key={`${item.id}-${absIndex}`}
-                className="feed-slide"
-                style={{
-                  transform,
-                  transition: isActive && dragPx === 0
-                    ? "transform 0.35s cubic-bezier(0.25,1,0.5,1)"
-                    : isActive ? "none" : undefined,
-                  zIndex:        isActive ? 2 : 1,
-                  pointerEvents: isActive ? "auto" : "none",
-                  visibility:    isActive ? "visible" : "hidden",
-                }}
-              >
-                <FeedItem
-                  item={item}
-                  isFirst={absIndex === 0}
-                  isSecond={absIndex === 1}
-                  activeGenres={[]}
-                  onGenreClick={handleGenreClick}
-                />
-              </div>
-            );
-          })
-        )}
-        <style>{spinnerStyle}</style>
-      </div>
-    </>
+              <FeedItem
+                item={item}
+                isFirst={absIndex === 0}
+                isSecond={absIndex === 1}
+              />
+            </div>
+          );
+        })
+      )}
+      <style>{spinnerStyle}</style>
+    </div>
   );
 }
 
@@ -284,53 +246,5 @@ const spinnerStyle = `
   .feed-empty-text {
     font-size: 15px;
     color: rgba(255,255,255,0.5);
-  }
-  .genre-bar {
-    position: fixed;
-    top: 52px;
-    left: 0; right: 0;
-    z-index: 100;
-    display: flex;
-    flex-wrap: nowrap;
-    overflow-x: auto;
-    gap: 6px;
-    padding: 8px 12px 10px;
-    background: linear-gradient(to bottom, rgba(0,0,0,0.75) 0%, rgba(0,0,0,0) 100%);
-    scrollbar-width: none;
-  }
-  .genre-bar::-webkit-scrollbar { display: none; }
-  .genre-chip {
-    flex-shrink: 0;
-    padding: 5px 13px;
-    border-radius: 999px;
-    border: 1px solid rgba(255,255,255,0.3);
-    background: rgba(255,255,255,0.1);
-    color: rgba(255,255,255,0.8);
-    font-size: 12px;
-    font-weight: 600;
-    cursor: pointer;
-    white-space: nowrap;
-    backdrop-filter: blur(6px);
-    -webkit-backdrop-filter: blur(6px);
-    transition: background 0.15s, color 0.15s, border-color 0.15s;
-    -webkit-tap-highlight-color: transparent;
-    line-height: 1.4;
-    min-height: 30px;
-  }
-  .genre-chip:active { opacity: 0.75; }
-  .genre-chip-skeleton {
-    flex-shrink: 0;
-    height: 28px;
-    border-radius: 999px;
-    background: rgba(255,255,255,0.1);
-    animation: skel-pulse 1.2s ease-in-out infinite;
-  }
-  @keyframes skel-pulse {
-    0%, 100% { opacity: 0.5; }
-    50%       { opacity: 1; }
-  }
-  @media (min-width: 640px) {
-    .genre-bar { padding: 10px 20px 12px; gap: 8px; }
-    .genre-chip { font-size: 13px; padding: 6px 16px; min-height: 34px; }
   }
 `;

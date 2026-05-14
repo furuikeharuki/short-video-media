@@ -2,6 +2,7 @@
 
 import { useEffect, useLayoutEffect, useRef, useCallback, useState } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import type { MovieCard } from "@/lib/api/feed";
 
 interface Props {
@@ -66,7 +67,9 @@ function calcRenderedRect(
   return { top, left, width: renderedW, height: renderedH };
 }
 
-export default function FeedItem({ item, isFirst, isSecond = false, activeGenres = [], onGenreClick }: Props) {
+export default function FeedItem({ item, isFirst, isSecond = false }: Props) {
+  const router = useRouter();
+
   const videoRef      = useRef<HTMLVideoElement>(null);
   const ctaRef        = useRef<HTMLDivElement>(null);
   const sectionRef    = useRef<HTMLElement>(null);
@@ -524,6 +527,19 @@ export default function FeedItem({ item, isFirst, isSecond = false, activeGenres
       )}
 
       <div className="info-overlay">
+        {item.genres && item.genres.length > 0 && (
+          <div className="genre-chips" onClick={(e) => e.stopPropagation()}>
+            {item.genres.map((tag) => (
+              <button
+                key={tag}
+                className="genre-chip"
+                onClick={() => router.push(`/search?genre=${encodeURIComponent(tag)}`)}
+              >
+                {tag}
+              </button>
+            ))}
+          </div>
+        )}
         <h2 className="item-title">{item.title}</h2>
         {item.actresses.length > 0 && (
           <p className="item-actress">👤 {item.actresses.join(" / ")}</p>
@@ -662,6 +678,29 @@ const itemStyle = `
     letter-spacing: 0.02em;
     text-shadow: 0 1px 3px rgba(0,0,0,0.6);
   }
+  .genre-chips {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 5px;
+    margin-bottom: 8px;
+  }
+  .genre-chip {
+    padding: 3px 10px;
+    border-radius: 999px;
+    border: 1px solid rgba(255,255,255,0.35);
+    background: rgba(255,255,255,0.12);
+    color: rgba(255,255,255,0.9);
+    font-size: 11px;
+    font-weight: 600;
+    cursor: pointer;
+    white-space: nowrap;
+    backdrop-filter: blur(6px);
+    -webkit-backdrop-filter: blur(6px);
+    -webkit-tap-highlight-color: transparent;
+    line-height: 1.5;
+    transition: background 0.15s;
+  }
+  .genre-chip:active { background: rgba(255,255,255,0.25); }
   .scroll-hint {
     position: absolute;
     bottom: 180px;

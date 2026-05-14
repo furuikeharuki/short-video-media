@@ -33,11 +33,6 @@ export default function FeedClient() {
   const preloadAbortRef = useRef<AbortController | null>(null);
   const activeGenresRef = useRef<string[]>([]);
 
-  const bgFetchPromiseRef = useRef<Promise<void> | null>(null);
-  const pendingItemsRef   = useRef<MovieCard[] | null>(null);
-  const pendingCursorRef  = useRef<string | null>(null);
-  const pendingSeedRef    = useRef<number | null>(null);
-
   const [currentIndex, setCurrentIndex] = useState(0);
   const [windowItems, setWindowItems]   = useState<MovieCard[]>([]);
   const [activeGenres, setActiveGenres] = useState<string[]>([]);
@@ -46,10 +41,10 @@ export default function FeedClient() {
   const [isLoading, setIsLoading]       = useState(false);
   const windowStartRef = useRef(0);
 
-  // ラバーバンド用: アクティブスライドの追加オフセット(px)
-  const [dragPx, setDragPx]   = useState(0);
-  const dragStartY  = useRef(0);
-  const isDragging  = useRef(false);
+  // ラバーバンド用
+  const [dragPx, setDragPx] = useState(0);
+  const dragStartY = useRef(0);
+  const isDragging = useRef(false);
 
   const updateWindow = useCallback((idx: number) => {
     const all   = allItemsRef.current;
@@ -94,39 +89,45 @@ export default function FeedClient() {
     }
   }, [updateWindow]);
 
-  const fetchBackground = useCallback((genres: string[]) => {
-    pendingItemsRef.current  = null;
-    pendingCursorRef.current = null;
-    pendingSeedRef.current   = null;
-
-    const promise = (async () => {
-      try {
-        const seed = resetSeed();
-        pendingSeedRef.current = seed;
-        const res = await getFeed(
-          0, 20, seed,
-          genres.length > 0 ? genres : undefined,
-        );
-        pendingItemsRef.current  = res.items;
-        pendingCursorRef.current = res.next_cursor;
-      } catch (e) {
-        console.error("fetchBackground failed", e);
-      }
-    })();
-
-    bgFetchPromiseRef.current = promise;
-    return promise;
-  }, []);
-
-  const handleGenreToggle = useCallback((tag: string) => {
+  /**
+   * タグ切替時に呼ぶ:
+   * 1. 今見ている動画(currentItem)を index=0 に固定
+   * 2. バックグラウンドで絞り込みフェッチ → 完了次第 index=1 以降を差し替え
+   *    (画面は切り替わらない・リロードしない)
+   */
+  const handleGenreToggle = useCallback(async (tag: string) => {
     const current = activeGenresRef.current;
     const next = current.includes(tag)
       ? current.filter((g) => g !== tag)
       : [...current, tag];
     activeGenresRef.current = next;
     setActiveGenres([...next]);
-    fetchBackground(next);
-  }, [fetchBackground]);
+
+    // 今見ている動画を確保
+    const currentItem = allItemsRef.current[currentIdxRef.current];
+
+    // バックグラウンドフェッチ（await しない → UIブロックしない）
+    // 完了後に allItemsRef を [currentItem, ...filtered] で上書き
+    ;(async () => {
+      try {
+        const seed = resetSeed();
+        const res = await getFeed(
+          0, 20, seed,
+          next.length > 0 ? next : undefined,
+        );
+        const filtered = res.items.filter((item) => item.id !== currentItem?.id);
+        allItemsRef.current   = currentItem ? [currentItem, ...filtered] : filtered;
+        nextCursorRef.current = res.next_cursor;
+        // index は動かさない（= 0 のまま currentItem を表示し続ける）
+        currentIdxRef.current = 0;
+        setCurrentIndex(0);
+        setIsEmpty(filtered.length === 0 && !currentItem);
+        updateWindow(0);
+      } catch (e) {
+        console.error("handleGenreToggle fetch failed", e);
+      }
+    })();
+  }, [updateWindow]);
 
   useEffect(() => {
     const seed = getOrCreateSeed();
@@ -139,33 +140,8 @@ export default function FeedClient() {
     const all = allItemsRef.current;
     const currentItem = all[currentIdxRef.current];
 
-    if (bgFetchPromiseRef.current) {
-      await bgFetchPromiseRef.current;
-      bgFetchPromiseRef.current = null;
-    }
-
-    if (pendingItemsRef.current && pendingItemsRef.current.length > 0) {
-      const filtered = pendingItemsRef.current.filter(
-        (item) => item.id !== currentItem?.id
-      );
-      pendingItemsRef.current  = null;
-      pendingCursorRef.current = null;
-      pendingSeedRef.current   = null;
-      isFetchingRef.current    = false;
-
-      if (filtered.length > 0) {
-        allItemsRef.current   = currentItem ? [currentItem, ...filtered] : filtered;
-        nextCursorRef.current = null;
-        if (currentItem) markSeen(currentItem.id);
-        currentIdxRef.current = 1;
-        setCurrentIndex(1);
-        updateWindow(1);
-        return;
-      }
-    }
-
     const nextIdx = currentIdxRef.current + 1;
-    if (nextIdx >= all.length) return; // 末尾では何もしない（ラバーバンドは touchイベント側で実装）
+    if (nextIdx >= all.length) return; // 末尾: ラバーバンドは touch 側
 
     if (currentItem) markSeen(currentItem.id);
     currentIdxRef.current = nextIdx;
@@ -181,29 +157,27 @@ export default function FeedClient() {
     updateWindow(next);
   }, [updateWindow]);
 
-  // タッチイベント: 末尾・先頭のみラバーバンド、それ以外は遷移
   useEffect(() => {
     const el = containerRef.current;
     if (!el) return;
 
-    const isAtEnd  = () => currentIdxRef.current >= allItemsRef.current.length - 1;
-    const isAtTop  = () => currentIdxRef.current <= 0;
+    const isAtEnd = () => currentIdxRef.current >= allItemsRef.current.length - 1;
+    const isAtTop = () => currentIdxRef.current <= 0;
 
     let startY = 0;
     let startTime = 0;
 
     const onTouchStart = (e: TouchEvent) => {
-      startY    = e.touches[0].clientY;
+      startY = e.touches[0].clientY;
       startTime = Date.now();
-      isDragging.current  = true;
-      dragStartY.current  = startY;
+      isDragging.current = true;
+      dragStartY.current = startY;
       setDragPx(0);
     };
 
     const onTouchMove = (e: TouchEvent) => {
       if (!isDragging.current) return;
       const dy = e.touches[0].clientY - dragStartY.current;
-      // 末尾で下に引っ張る(プラスdy) / 先頭で上に引っ張る(マイナスdy) のみラバーバンド
       if ((dy > 0 && isAtEnd()) || (dy < 0 && isAtTop())) {
         setDragPx(dy * 0.35);
       } else {
@@ -214,7 +188,7 @@ export default function FeedClient() {
     const onTouchEnd = (e: TouchEvent) => {
       if (!isDragging.current) return;
       isDragging.current = false;
-      setDragPx(0); // スプリングで戻る
+      setDragPx(0);
 
       const dy = e.changedTouches[0].clientY - startY;
       const dt = Date.now() - startTime;
@@ -297,7 +271,6 @@ export default function FeedClient() {
             const absIndex = windowStartRef.current + i;
             const offset   = absIndex - currentIndex;
             const isActive = offset === 0;
-            // アクティブスライドにのみラバーバンドオフセットを足す
             const transform = isActive
               ? `translateY(calc(${offset * 100}% + ${dragPx}px))`
               : `translateY(${offset * 100}%)`;
@@ -307,11 +280,9 @@ export default function FeedClient() {
                 className="feed-slide"
                 style={{
                   transform,
-                  transition:    isActive && dragPx === 0
+                  transition: isActive && dragPx === 0
                     ? "transform 0.35s cubic-bezier(0.25,1,0.5,1)"
-                    : isActive
-                    ? "none"
-                    : undefined,
+                    : isActive ? "none" : undefined,
                   zIndex:        isActive ? 2 : 1,
                   pointerEvents: isActive ? "auto" : "none",
                   visibility:    isActive ? "visible" : "hidden",

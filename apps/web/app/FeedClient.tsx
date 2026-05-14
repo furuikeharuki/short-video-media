@@ -34,12 +34,11 @@ export default function FeedClient() {
   const preloadAbortRef = useRef<AbortController | null>(null);
   const activeGenresRef = useRef<string[]>([]);
 
-  // ジャンル変更時にバックグラウンドで取得しておくキュー
-  // 「現在の動画 + バックグラウンド取得分」を持つ
+  // バックグラウンドフェッチのPromiseを保持。goNextはこれをawaitする
+  const bgFetchPromiseRef  = useRef<Promise<void> | null>(null);
   const pendingItemsRef    = useRef<MovieCard[] | null>(null);
   const pendingCursorRef   = useRef<string | null>(null);
   const pendingSeedRef     = useRef<number | null>(null);
-  const isBgFetchingRef    = useRef(false);
 
   const [currentIndex, setCurrentIndex] = useState(0);
   const [windowItems, setWindowItems]   = useState<MovieCard[]>([]);
@@ -66,7 +65,7 @@ export default function FeedClient() {
     }
   }, []);
 
-  /** 通常のフィード取得（初期ロード & ページ増加） */
+  /** 通常フィード取得（初期ロード & ページ増加） */
   const fetchMore = useCallback(async (overrideCursor?: string, overrideSeed?: number) => {
     if (isFetchingRef.current) return;
     isFetchingRef.current = true;
@@ -108,31 +107,38 @@ export default function FeedClient() {
   }, [updateWindow]);
 
   /**
-   * バックグラウンド取得: 現在動画はそのまま、次ページから絞り込み済みリストをpendingに保持
+   * バックグラウンドフェッチ。
+   * PromiseをbgFetchPromiseRefに保持し、goNextがawaitできるようにする。
    */
-  const fetchBackground = useCallback(async (genres: string[]) => {
-    if (isBgFetchingRef.current) return;
-    isBgFetchingRef.current = true;
-    try {
-      const seed = resetSeed();
-      pendingSeedRef.current = seed;
-      const res = await getFeed(
-        0, 20, seed,
-        genres.length > 0 ? genres : undefined,
-      );
-      pendingItemsRef.current  = res.items;
-      pendingCursorRef.current = res.next_cursor;
-    } catch (e) {
-      console.error("fetchBackground failed", e);
-    } finally {
-      isBgFetchingRef.current = false;
-    }
+  const fetchBackground = useCallback((genres: string[]) => {
+    pendingItemsRef.current  = null;
+    pendingCursorRef.current = null;
+    pendingSeedRef.current   = null;
+
+    const promise = (async () => {
+      try {
+        const seed = resetSeed();
+        pendingSeedRef.current = seed;
+        const res = await getFeed(
+          0, 20, seed,
+          genres.length > 0 ? genres : undefined,
+        );
+        pendingItemsRef.current  = res.items;
+        pendingCursorRef.current = res.next_cursor;
+      } catch (e) {
+        console.error("fetchBackground failed", e);
+      }
+    })();
+
+    bgFetchPromiseRef.current = promise;
+    return promise;
   }, []);
 
   /**
    * タグ選択:
-   * 1. activeGenresを即時更新（UI反映）
-   * 2. バックグラウンドで次ページ分を取得開始（現在動画は不動）
+   * 1. UI即時反映
+   * 2. バックグラウンドフェッチ開始（Promiseをrefに保持）
+   * 3. 現在動画は不動
    */
   const handleGenreToggle = useCallback((tag: string) => {
     const current = activeGenresRef.current;
@@ -141,10 +147,6 @@ export default function FeedClient() {
       : [...current, tag];
     activeGenresRef.current = next;
     setActiveGenres([...next]);
-    // pendingをリセットしてバックグラウンド取得
-    pendingItemsRef.current  = null;
-    pendingCursorRef.current = null;
-    pendingSeedRef.current   = null;
     fetchBackground(next);
   }, [fetchBackground]);
 
@@ -156,19 +158,24 @@ export default function FeedClient() {
   }, []);
 
   /**
-   * goNext: 次動画へ進む。
-   * pendingが準備できていれば、現在動画の次からpendingリストに切り替える。
+   * goNext:
+   * - bgFetchPromiseがある（タグ選択済）場合は完了を待ってからpendingに切替
+   * - pendingがなければ通常遷移
    */
-  const goNext = useCallback(() => {
-    const all  = allItemsRef.current;
-    const nextIdx = currentIdxRef.current + 1;
+  const goNext = useCallback(async () => {
+    const all = allItemsRef.current;
 
-    // pendingあり & 次の動画に進むタイミングでリストを切り替え
+    // バックグラウンドフェッチ中ならawait
+    if (bgFetchPromiseRef.current) {
+      await bgFetchPromiseRef.current;
+      bgFetchPromiseRef.current = null;
+    }
+
     if (pendingItemsRef.current && pendingItemsRef.current.length > 0) {
       const item = all[currentIdxRef.current];
       if (item) markSeen(item.id);
 
-      // 現在動画は残し、以降はpendingに切り替え
+      // 現在動画を先頭に残し、以降をpendingリストで上書き
       allItemsRef.current   = [all[currentIdxRef.current], ...pendingItemsRef.current];
       nextCursorRef.current = pendingCursorRef.current;
       seedRef.current       = pendingSeedRef.current;
@@ -183,6 +190,8 @@ export default function FeedClient() {
       return;
     }
 
+    // 通常遷移
+    const nextIdx = currentIdxRef.current + 1;
     if (all.length - nextIdx <= PREFETCH_AHEAD) fetchMore();
     if (nextIdx >= all.length) return;
 

@@ -20,9 +20,7 @@ function prefetchVideo(url: string, abortSignal: AbortSignal) {
     method: "GET",
     headers: { Range: `bytes=0-${PRELOAD_BYTES - 1}` },
     signal: abortSignal,
-  }).catch(() => {
-    preloadCache.delete(url);
-  });
+  }).catch(() => { preloadCache.delete(url); });
 }
 
 export default function FeedClient() {
@@ -39,7 +37,7 @@ export default function FeedClient() {
   const [currentIndex, setCurrentIndex] = useState(0);
   const [windowItems, setWindowItems]   = useState<MovieCard[]>([]);
   const [activeGenres, setActiveGenres] = useState<string[]>([]);
-  const [currentGenres, setCurrentGenres] = useState<string[]>([]); // 表示中動画のジャンル
+  const [currentGenres, setCurrentGenres] = useState<string[]>([]);
   const [isEmpty, setIsEmpty]           = useState(false);
   const [isLoading, setIsLoading]       = useState(false);
   const windowStartRef = useRef(0);
@@ -50,27 +48,18 @@ export default function FeedClient() {
     const end   = Math.min(all.length, idx + WINDOW_SIZE + 1);
     windowStartRef.current = start;
     setWindowItems(all.slice(start, end));
-
-    // 現在の動画のジャンルをバーに反映
-    const current = all[idx];
-    setCurrentGenres(current?.genres ?? []);
+    setCurrentGenres(all[idx]?.genres ?? []);
 
     preloadAbortRef.current?.abort();
     const controller = new AbortController();
     preloadAbortRef.current = controller;
-
     for (let i = 1; i <= PRELOAD_AHEAD; i++) {
       const ahead = all[idx + i];
-      if (ahead?.sample_movie_url) {
-        prefetchVideo(ahead.sample_movie_url, controller.signal);
-      }
+      if (ahead?.sample_movie_url) prefetchVideo(ahead.sample_movie_url, controller.signal);
     }
   }, []);
 
-  const fetchMore = useCallback(async (
-    overrideCursor?: string,
-    overrideSeed?: number,
-  ) => {
+  const fetchMore = useCallback(async (overrideCursor?: string, overrideSeed?: number) => {
     if (isFetchingRef.current) return;
     isFetchingRef.current = true;
     try {
@@ -78,7 +67,7 @@ export default function FeedClient() {
       let seed   = overrideSeed   ?? seedRef.current ?? 0;
 
       if (cursor === null) {
-        seed   = resetSeed();
+        seed = resetSeed();
         seedRef.current       = seed;
         nextCursorRef.current = "0";
         cursor = "0";
@@ -112,29 +101,19 @@ export default function FeedClient() {
     }
   }, [updateWindow]);
 
+  /**
+   * タグ選択: リロードなし。
+   * activeGenresを更新するだけ。
+   * 次のfetchMore（スクロール時など）から自動的に絞り込める。
+   */
   const handleGenreToggle = useCallback((tag: string) => {
     const current = activeGenresRef.current;
     const next = current.includes(tag)
       ? current.filter((g) => g !== tag)
       : [...current, tag];
-
     activeGenresRef.current = next;
-    setActiveGenres(next);
-    setIsEmpty(false);
-    setIsLoading(true);
-
-    allItemsRef.current   = [];
-    nextCursorRef.current = null;
-    currentIdxRef.current = 0;
-    isFetchingRef.current = false;
-    setCurrentIndex(0);
-    setWindowItems([]);
-    setCurrentGenres([]);
-
-    const seed = resetSeed();
-    seedRef.current = seed;
-    fetchMore("0", seed);
-  }, [fetchMore]);
+    setActiveGenres([...next]);
+  }, []);
 
   useEffect(() => {
     const seed = getOrCreateSeed();
@@ -146,13 +125,10 @@ export default function FeedClient() {
   const goNext = useCallback(() => {
     const all  = allItemsRef.current;
     const next = currentIdxRef.current + 1;
-
     if (all.length - next <= PREFETCH_AHEAD) fetchMore();
     if (next >= all.length) return;
-
     const item = all[currentIdxRef.current];
     if (item) markSeen(item.id);
-
     currentIdxRef.current = next;
     setCurrentIndex(next);
     updateWindow(next);
@@ -170,7 +146,6 @@ export default function FeedClient() {
     const el = containerRef.current;
     if (!el) return;
     let startY = 0, startTime = 0;
-
     const onTouchStart = (e: TouchEvent) => { startY = e.touches[0].clientY; startTime = Date.now(); };
     const onTouchEnd   = (e: TouchEvent) => {
       const dy = startY - e.changedTouches[0].clientY;
@@ -184,7 +159,6 @@ export default function FeedClient() {
       setTimeout(() => { wheelLockRef.current = false; }, 300);
       if (e.deltaY > 0) goNext(); else goPrev();
     };
-
     el.addEventListener("touchstart", onTouchStart, { passive: true });
     el.addEventListener("touchend",   onTouchEnd,   { passive: true });
     el.addEventListener("wheel",      onWheel,      { passive: false });
@@ -204,7 +178,7 @@ export default function FeedClient() {
 
   return (
     <>
-      {/* 上部ジャンルバー: 現在表示中の動画のジャンルを表示 */}
+      {/* 上部ジャンルバー: 1行固定、横スクロール */}
       <div className="genre-bar" role="toolbar" aria-label="ジャンル絞り込み">
         {currentGenres.length > 0 ? (
           currentGenres.map((tag) => (
@@ -218,7 +192,6 @@ export default function FeedClient() {
             </button>
           ))
         ) : (
-          // ロード中はスケルトン表示
           !showEmpty && (
             <>
               <div className="genre-chip-skeleton" style={{ width: 52 }} />
@@ -294,18 +267,25 @@ const spinnerStyle = `
     font-size: 15px;
     color: rgba(255,255,255,0.5);
   }
+
+  /* ジャンルバー: 1行固定 + 横スクロール */
   .genre-bar {
     position: fixed;
     top: 52px;
     left: 0; right: 0;
     z-index: 100;
     display: flex;
-    flex-wrap: wrap;
+    flex-wrap: nowrap;            /* 折り返し禁止 = 1行 */
     gap: 6px;
     padding: 8px 12px 10px;
-    background: linear-gradient(to bottom, rgba(0,0,0,0.85) 0%, rgba(0,0,0,0) 100%);
-    /* スクロールなし・折り返し対応 */
+    overflow-x: auto;             /* 多い時は横スクロール */
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: none;        /* Firefox */
+    background: linear-gradient(to bottom, rgba(0,0,0,0.75) 0%, rgba(0,0,0,0) 100%);
+    /* スクロールバーを消す */
   }
+  .genre-bar::-webkit-scrollbar { display: none; }
+
   .genre-chip {
     flex-shrink: 0;
     padding: 5px 13px;
@@ -313,7 +293,7 @@ const spinnerStyle = `
     border: 1px solid rgba(255,255,255,0.3);
     background: rgba(255,255,255,0.1);
     color: rgba(255,255,255,0.8);
-    font-size: clamp(11px, 1.8vw, 13px);
+    font-size: 12px;
     font-weight: 600;
     cursor: pointer;
     white-space: nowrap;
@@ -328,7 +308,10 @@ const spinnerStyle = `
     border-color: #e91e63;
     color: #fff;
   }
+  .genre-chip:active { opacity: 0.75; }
+
   .genre-chip-skeleton {
+    flex-shrink: 0;
     height: 28px;
     border-radius: 999px;
     background: rgba(255,255,255,0.1);
@@ -338,8 +321,9 @@ const spinnerStyle = `
     0%, 100% { opacity: 0.5; }
     50%       { opacity: 1; }
   }
+
   @media (min-width: 640px) {
     .genre-bar { padding: 10px 20px 12px; gap: 8px; }
-    .genre-chip { padding: 6px 16px; }
+    .genre-chip { font-size: 13px; padding: 6px 16px; }
   }
 `;

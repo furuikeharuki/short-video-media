@@ -54,6 +54,7 @@ export default function FeedClient() {
     setWindowItems(all.slice(start, end));
     setCurrentGenres(all[idx]?.genres ?? []);
 
+    // 旧プリフェッチをキャンセルして再走
     preloadAbortRef.current?.abort();
     const controller = new AbortController();
     preloadAbortRef.current = controller;
@@ -89,12 +90,6 @@ export default function FeedClient() {
     }
   }, [updateWindow]);
 
-  /**
-   * タグ切替時に呼ぶ:
-   * 1. 今見ている動画(currentItem)を index=0 に固定
-   * 2. バックグラウンドで絞り込みフェッチ → 完了次第 index=1 以降を差し替え
-   *    (画面は切り替わらない・リロードしない)
-   */
   const handleGenreToggle = useCallback(async (tag: string) => {
     const current = activeGenresRef.current;
     const next = current.includes(tag)
@@ -106,8 +101,9 @@ export default function FeedClient() {
     // 今見ている動画を確保
     const currentItem = allItemsRef.current[currentIdxRef.current];
 
-    // バックグラウンドフェッチ（await しない → UIブロックしない）
-    // 完了後に allItemsRef を [currentItem, ...filtered] で上書き
+    // 旧プリフェッチを即座にキャンセル（タグ切替時点で不要になった動画の先読みを捨てる）
+    preloadAbortRef.current?.abort();
+
     ;(async () => {
       try {
         const seed = resetSeed();
@@ -118,10 +114,10 @@ export default function FeedClient() {
         const filtered = res.items.filter((item) => item.id !== currentItem?.id);
         allItemsRef.current   = currentItem ? [currentItem, ...filtered] : filtered;
         nextCursorRef.current = res.next_cursor;
-        // index は動かさない（= 0 のまま currentItem を表示し続ける）
         currentIdxRef.current = 0;
         setCurrentIndex(0);
         setIsEmpty(filtered.length === 0 && !currentItem);
+        // updateWindow 内で prefetchVideo も再走する
         updateWindow(0);
       } catch (e) {
         console.error("handleGenreToggle fetch failed", e);
@@ -141,7 +137,7 @@ export default function FeedClient() {
     const currentItem = all[currentIdxRef.current];
 
     const nextIdx = currentIdxRef.current + 1;
-    if (nextIdx >= all.length) return; // 末尾: ラバーバンドは touch 側
+    if (nextIdx >= all.length) return;
 
     if (currentItem) markSeen(currentItem.id);
     currentIdxRef.current = nextIdx;

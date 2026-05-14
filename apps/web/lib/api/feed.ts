@@ -37,12 +37,14 @@ export async function getFeed(
   offset = 0,
   limit = 20,
   seed?: number,
+  genre?: string,
 ): Promise<FeedResponse> {
   const params = new URLSearchParams({
     offset: String(offset),
     limit: String(limit),
   });
   if (seed !== undefined) params.set("seed", String(seed));
+  if (genre) params.set("genre", genre);
 
   const res = await fetch(`${API_BASE_URL}/api/v1/feed?${params}`, {
     cache: "no-store",

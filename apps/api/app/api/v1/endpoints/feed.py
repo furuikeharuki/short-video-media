@@ -13,6 +13,7 @@ async def feed(
     offset: int = Query(default=0, ge=0),
     limit: int = Query(default=20, ge=1, le=100),
     seed: int | None = Query(default=None),
+    genre: str | None = Query(default=None, description="ジャンル名で絞り込み"),
     db: AsyncSession = Depends(get_db),
 ) -> FeedResponse:
-    return await get_feed_paginated(db, offset=offset, limit=limit, seed=seed)
+    return await get_feed_paginated(db, offset=offset, limit=limit, seed=seed, genre=genre)

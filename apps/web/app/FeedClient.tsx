@@ -8,12 +8,14 @@ import type { MovieCard } from "@/lib/api/feed";
 
 const WINDOW_SIZE    = 2;
 const PREFETCH_AHEAD = 8;
-const PRELOAD_AHEAD  = 2;   // 先読み枚数
-const PRELOAD_BYTES  = 2 * 1024 * 1024; // 最初の2MBのみRange取得
+const PRELOAD_AHEAD  = 2;
+const PRELOAD_BYTES  = 2 * 1024 * 1024;
 
-// ブラウザのHTTPキャッシュに載せるためfetchでプリロード
-// AbortControllerでキャンセルできるが、キャッシュは残るので次回再生時に即返り
-// CORSngの場合はno-corsでキャッシュに載せる（レスポンスは読めないがキャッシュは有効）
+const GENRE_TAGS = [
+  "ビーナス", "素人", "美少女", "巨乳", "中出し",
+  "OL", "ハード系", "VR", "耶婦", "プロ作品",
+];
+
 const preloadCache = new Set<string>();
 
 function prefetchVideo(url: string, abortSignal: AbortSignal) {
@@ -23,9 +25,7 @@ function prefetchVideo(url: string, abortSignal: AbortSignal) {
     method: "GET",
     headers: { Range: `bytes=0-${PRELOAD_BYTES - 1}` },
     signal: abortSignal,
-    // credentialsなし・CORSエラーでも無視
   }).catch(() => {
-    // CORSやキャンセルは無視。キャッシュへの書き込みはブラウザが行う
     preloadCache.delete(url);
   });
 }
@@ -42,6 +42,7 @@ export default function FeedClient() {
 
   const [currentIndex, setCurrentIndex] = useState(0);
   const [windowItems, setWindowItems]   = useState<MovieCard[]>([]);
+  const [activeGenre, setActiveGenre]   = useState<string | null>(null);
   const windowStartRef = useRef(0);
 
   const updateWindow = useCallback((idx: number) => {
@@ -51,7 +52,6 @@ export default function FeedClient() {
     windowStartRef.current = start;
     setWindowItems(all.slice(start, end));
 
-    // 前のプリロードをキャンセルして新しいセットを開始
     preloadAbortRef.current?.abort();
     const controller = new AbortController();
     preloadAbortRef.current = controller;
@@ -64,7 +64,11 @@ export default function FeedClient() {
     }
   }, []);
 
-  const fetchMore = useCallback(async (overrideCursor?: string, overrideSeed?: number) => {
+  const fetchMore = useCallback(async (
+    overrideCursor?: string,
+    overrideSeed?: number,
+    genre?: string | null,
+  ) => {
     if (isFetchingRef.current) return;
     isFetchingRef.current = true;
     try {
@@ -78,7 +82,13 @@ export default function FeedClient() {
         cursor = "0";
       }
 
-      const res = await getFeed(parseInt(cursor, 10), 20, seed);
+      const currentGenre = genre !== undefined ? genre : activeGenre;
+      const res = await getFeed(
+        parseInt(cursor, 10),
+        20,
+        seed,
+        currentGenre ?? undefined,
+      );
 
       if (overrideCursor === "0") {
         allItemsRef.current   = res.items;
@@ -95,12 +105,39 @@ export default function FeedClient() {
     } finally {
       isFetchingRef.current = false;
     }
+  }, [updateWindow, activeGenre]);
+
+  // タグ選択時にフィードをリセット
+  const handleGenreSelect = useCallback((genre: string | null) => {
+    setActiveGenre(genre);
+    allItemsRef.current   = [];
+    nextCursorRef.current = null;
+    currentIdxRef.current = 0;
+    setCurrentIndex(0);
+    setWindowItems([]);
+
+    const seed = resetSeed();
+    seedRef.current = seed;
+    // fetchMoreはactiveGenreの更新を待たず直接genreを渡す
+    isFetchingRef.current = false;
+
+    const params = new URLSearchParams({ offset: "0", limit: "20", seed: String(seed) });
+    if (genre) params.set("genre", genre);
+    const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL || "http://127.0.0.1:8000";
+    fetch(`${API_BASE_URL}/api/v1/feed?${params}`, { cache: "no-store" })
+      .then((r) => r.json())
+      .then((res) => {
+        allItemsRef.current   = res.items;
+        nextCursorRef.current = res.next_cursor;
+        updateWindow(0);
+      })
+      .catch(console.error);
   }, [updateWindow]);
 
   useEffect(() => {
     const seed = getOrCreateSeed();
     seedRef.current = seed;
-    fetchMore("0", seed);
+    fetchMore("0", seed, null);
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -161,34 +198,55 @@ export default function FeedClient() {
   }, [windowItems, fetchMore]);
 
   return (
-    <div ref={containerRef} className="feed-container">
-      {windowItems.length === 0 ? (
-        <div className="feed-loading">
-          <div className="feed-spinner" />
-        </div>
-      ) : (
-        windowItems.map((item, i) => {
-          const absIndex = windowStartRef.current + i;
-          const offset   = absIndex - currentIndex;
-          const isActive = offset === 0;
-          return (
-            <div
-              key={`${item.id}-${absIndex}`}
-              className="feed-slide"
-              style={{
-                transform:     `translateY(${offset * 100}%)`,
-                zIndex:        isActive ? 2 : 1,
-                pointerEvents: isActive ? "auto" : "none",
-                visibility:    isActive ? "visible" : "hidden",
-              }}
-            >
-              <FeedItem item={item} isFirst={absIndex === 0} isSecond={absIndex === 1} />
-            </div>
-          );
-        })
-      )}
-      <style>{spinnerStyle}</style>
-    </div>
+    <>
+      {/* タグバー */}
+      <div className="genre-bar">
+        <button
+          className={`genre-chip${activeGenre === null ? " active" : ""}`}
+          onClick={() => handleGenreSelect(null)}
+        >
+          オール
+        </button>
+        {GENRE_TAGS.map((tag) => (
+          <button
+            key={tag}
+            className={`genre-chip${activeGenre === tag ? " active" : ""}`}
+            onClick={() => handleGenreSelect(tag)}
+          >
+            {tag}
+          </button>
+        ))}
+      </div>
+
+      <div ref={containerRef} className="feed-container">
+        {windowItems.length === 0 ? (
+          <div className="feed-loading">
+            <div className="feed-spinner" />
+          </div>
+        ) : (
+          windowItems.map((item, i) => {
+            const absIndex = windowStartRef.current + i;
+            const offset   = absIndex - currentIndex;
+            const isActive = offset === 0;
+            return (
+              <div
+                key={`${item.id}-${absIndex}`}
+                className="feed-slide"
+                style={{
+                  transform:     `translateY(${offset * 100}%)`,
+                  zIndex:        isActive ? 2 : 1,
+                  pointerEvents: isActive ? "auto" : "none",
+                  visibility:    isActive ? "visible" : "hidden",
+                }}
+              >
+                <FeedItem item={item} isFirst={absIndex === 0} isSecond={absIndex === 1} />
+              </div>
+            );
+          })
+        )}
+        <style>{spinnerStyle}</style>
+      </div>
+    </>
   );
 }
 
@@ -206,4 +264,37 @@ const spinnerStyle = `
     animation: spin 0.8s linear infinite;
   }
   @keyframes spin { to { transform: rotate(360deg); } }
+  .genre-bar {
+    position: fixed;
+    top: 52px;
+    left: 0; right: 0;
+    z-index: 100;
+    display: flex;
+    gap: 8px;
+    padding: 8px 12px;
+    overflow-x: auto;
+    background: linear-gradient(to bottom, rgba(0,0,0,0.85) 0%, rgba(0,0,0,0) 100%);
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: none;
+  }
+  .genre-bar::-webkit-scrollbar { display: none; }
+  .genre-chip {
+    flex-shrink: 0;
+    padding: 5px 14px;
+    border-radius: 999px;
+    border: 1px solid rgba(255,255,255,0.3);
+    background: rgba(255,255,255,0.1);
+    color: rgba(255,255,255,0.75);
+    font-size: 12px;
+    font-weight: 600;
+    cursor: pointer;
+    white-space: nowrap;
+    transition: background 0.15s, color 0.15s, border-color 0.15s;
+    -webkit-tap-highlight-color: transparent;
+  }
+  .genre-chip.active {
+    background: #e91e63;
+    border-color: #e91e63;
+    color: #fff;
+  }
 `;

@@ -44,10 +44,12 @@ export default function FeedClient() {
   const [currentGenres, setCurrentGenres] = useState<string[]>([]);
   const [isEmpty, setIsEmpty]           = useState(false);
   const [isLoading, setIsLoading]       = useState(false);
-  // バウンス用: 現在スライドに加える offset (0〜50%)
-  const [bounceOffset, setBounceOffset] = useState(0);
-  const isBouncing    = useRef(false);
   const windowStartRef = useRef(0);
+
+  // ラバーバンド用: アクティブスライドの追加オフセット(px)
+  const [dragPx, setDragPx]   = useState(0);
+  const dragStartY  = useRef(0);
+  const isDragging  = useRef(false);
 
   const updateWindow = useCallback((idx: number) => {
     const all   = allItemsRef.current;
@@ -133,19 +135,6 @@ export default function FeedClient() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  /** 末尾でバウンスさせる */
-  const triggerBounce = useCallback((direction: "next" | "prev") => {
-    if (isBouncing.current) return;
-    isBouncing.current = true;
-    // next → 上にスライド後戻る (-50%) / prev → 下にスライド後戻る (+50%)
-    const peak = direction === "next" ? -40 : 40;
-    setBounceOffset(peak);
-    setTimeout(() => {
-      setBounceOffset(0);
-      setTimeout(() => { isBouncing.current = false; }, 400);
-    }, 250);
-  }, []);
-
   const goNext = useCallback(async () => {
     const all = allItemsRef.current;
     const currentItem = all[currentIdxRef.current];
@@ -176,120 +165,68 @@ export default function FeedClient() {
     }
 
     const nextIdx = currentIdxRef.current + 1;
-    if (nextIdx >= all.length) {
-      triggerBounce("next");
-      return;
-    }
+    if (nextIdx >= all.length) return; // 末尾では何もしない（ラバーバンドは touchイベント側で実装）
 
     if (currentItem) markSeen(currentItem.id);
     currentIdxRef.current = nextIdx;
     setCurrentIndex(nextIdx);
     updateWindow(nextIdx);
-  }, [updateWindow, triggerBounce]);
+  }, [updateWindow]);
 
   const goPrev = useCallback(() => {
     const next = Math.max(0, currentIdxRef.current - 1);
-    if (next === currentIdxRef.current) {
-      triggerBounce("prev");
-      return;
-    }
+    if (next === currentIdxRef.current) return;
     currentIdxRef.current = next;
     setCurrentIndex(next);
     updateWindow(next);
-  }, [updateWindow, triggerBounce]);
+  }, [updateWindow]);
 
+  // タッチイベント: 末尾・先頭のみラバーバンド、それ以外は遷移
   useEffect(() => {
     const el = containerRef.current;
     if (!el) return;
 
-    let startY = 0;
-    let startTime = 0;
-    let dragging = false;
-    let dragOffset = 0; // px
-    const H = () => window.innerHeight;
-
     const isAtEnd  = () => currentIdxRef.current >= allItemsRef.current.length - 1;
     const isAtTop  = () => currentIdxRef.current <= 0;
 
-    // ドラッグ中: 末尾・先頭のときは▲絵屠が引っ張るように感じさせる
-    const clampDrag = (dy: number) => {
-      if ((dy < 0 && isAtEnd()) || (dy > 0 && isAtTop())) {
-        // 引っ張り感: dy の半分までのみ動かす
-        return dy * 0.35;
-      }
-      return dy;
-    };
-
-    const getSlidesInWindow = () =>
-      el.querySelectorAll<HTMLElement>(".feed-slide");
-
-    const applyDrag = (rawDy: number) => {
-      dragOffset = clampDrag(rawDy);
-      const pct = (dragOffset / H()) * 100;
-      getSlidesInWindow().forEach((slide) => {
-        const base = parseFloat(slide.style.transform.replace("translateY(", "").replace("%)", "")) || 0;
-        // base は現在の offset*100% なので、ドラッグは相対値を足す
-        // → 各スライドの元の位置に dragを足す
-        slide.style.transition = "none";
-        slide.style.transform  = `translateY(calc(${base}% + ${dragOffset}px))`;
-      });
-    };
-
-    const resetSlides = (animate: boolean) => {
-      getSlidesInWindow().forEach((slide) => {
-        slide.style.transition = animate ? "transform 0.35s cubic-bezier(0.25,1,0.5,1)" : "none";
-        // base を再計算
-        const transform = slide.dataset.baseTransform ?? slide.style.transform;
-        // baseは data-base-transform に保存してある前提で再使用
-        slide.style.transform = slide.dataset.baseTransform ?? `translateY(0%)`;
-      });
-      dragOffset = 0;
-    };
-
-    // 各スライドのベース transform を保存するため、MutationObserver で監視
-    // → ドラッグ applyDrag の前に必ず base を取得する
-    const getBase = (slide: HTMLElement) =>
-      parseFloat((slide.style.transform || "translateY(0%)").replace("translateY(", "").replace("%)", "")) || 0;
+    let startY = 0;
+    let startTime = 0;
 
     const onTouchStart = (e: TouchEvent) => {
-      startY   = e.touches[0].clientY;
+      startY    = e.touches[0].clientY;
       startTime = Date.now();
-      dragging  = true;
-      dragOffset = 0;
-      // 現在の base transform を保存
-      getSlidesInWindow().forEach((slide) => {
-        slide.dataset.baseTransform = slide.style.transform;
-      });
+      isDragging.current  = true;
+      dragStartY.current  = startY;
+      setDragPx(0);
     };
 
     const onTouchMove = (e: TouchEvent) => {
-      if (!dragging) return;
-      const dy = e.touches[0].clientY - startY;
-      applyDrag(dy);
+      if (!isDragging.current) return;
+      const dy = e.touches[0].clientY - dragStartY.current;
+      // 末尾で下に引っ張る(プラスdy) / 先頭で上に引っ張る(マイナスdy) のみラバーバンド
+      if ((dy > 0 && isAtEnd()) || (dy < 0 && isAtTop())) {
+        setDragPx(dy * 0.35);
+      } else {
+        setDragPx(0);
+      }
     };
 
     const onTouchEnd = (e: TouchEvent) => {
-      if (!dragging) return;
-      dragging = false;
+      if (!isDragging.current) return;
+      isDragging.current = false;
+      setDragPx(0); // スプリングで戻る
+
       const dy = e.changedTouches[0].clientY - startY;
       const dt = Date.now() - startTime;
-      const absDy = Math.abs(dy);
-
-      if (absDy > 60 && dt < 500) {
-        // スワイプ成立
-        resetSlides(false); // ドラッグをリセットしてから遷移は goNext/goPrev内でアニメーション
+      if (Math.abs(dy) > 60 && dt < 500) {
         if (dy < 0) goNext();
         else        goPrev();
-      } else {
-        // スワイプ不成立 → 元に戻る
-        resetSlides(true);
       }
     };
 
     const onTouchCancel = () => {
-      if (!dragging) return;
-      dragging = false;
-      resetSlides(true);
+      isDragging.current = false;
+      setDragPx(0);
     };
 
     const onWheel = (e: WheelEvent) => {
@@ -360,20 +297,24 @@ export default function FeedClient() {
             const absIndex = windowStartRef.current + i;
             const offset   = absIndex - currentIndex;
             const isActive = offset === 0;
-            // バウンス: アクティブスライドに bounceOffset(%)を加える
-            const translateY = offset === 0
-              ? `calc(${offset * 100}% + ${bounceOffset}vh)`
-              : `${offset * 100}%`;
+            // アクティブスライドにのみラバーバンドオフセットを足す
+            const transform = isActive
+              ? `translateY(calc(${offset * 100}% + ${dragPx}px))`
+              : `translateY(${offset * 100}%)`;
             return (
               <div
                 key={`${item.id}-${absIndex}`}
                 className="feed-slide"
                 style={{
-                  transform:     `translateY(${offset * 100}%)`,
+                  transform,
+                  transition:    isActive && dragPx === 0
+                    ? "transform 0.35s cubic-bezier(0.25,1,0.5,1)"
+                    : isActive
+                    ? "none"
+                    : undefined,
                   zIndex:        isActive ? 2 : 1,
                   pointerEvents: isActive ? "auto" : "none",
                   visibility:    isActive ? "visible" : "hidden",
-                  transition:    bounceOffset !== 0 ? "transform 0.25s ease-out" : "transform 0.4s cubic-bezier(0.25,1,0.5,1)",
                 }}
               >
                 <FeedItem
@@ -465,8 +406,5 @@ const spinnerStyle = `
   @media (min-width: 640px) {
     .genre-bar { padding: 10px 20px 12px; gap: 8px; }
     .genre-chip { font-size: 13px; padding: 6px 16px; min-height: 34px; }
-  }
-  .feed-slide {
-    transition: transform 0.4s cubic-bezier(0.25,1,0.5,1);
   }
 `;

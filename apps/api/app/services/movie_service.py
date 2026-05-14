@@ -1,10 +1,25 @@
+import json
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.cache import get_redis
 from app.repositories.movie_repository import get_movie_by_slug
 from app.schemas.movie import MovieDetail, PriceList
 
+MOVIE_DETAIL_TTL = 1800  # 30分
+MOVIE_DETAIL_KEY_PREFIX = "movie:detail:"
+
 
 async def get_movie_by_slug_service(db: AsyncSession, slug: str) -> MovieDetail | None:
+    redis = get_redis()
+    key = f"{MOVIE_DETAIL_KEY_PREFIX}{slug}"
+
+    # Redisキャッシュ確認
+    if redis is not None:
+        cached = await redis.get(key)
+        if cached:
+            return MovieDetail.model_validate(json.loads(cached))
+
+    # DBから取得
     movie = await get_movie_by_slug(db, slug)
     if movie is None:
         return None
@@ -13,7 +28,7 @@ async def get_movie_by_slug_service(db: AsyncSession, slug: str) -> MovieDetail 
     if movie.price_list:
         price_list = PriceList.model_validate(movie.price_list)
 
-    return MovieDetail(
+    detail = MovieDetail(
         id=str(movie.id),
         content_id=movie.content_id,
         product_id=movie.product_id,
@@ -42,3 +57,9 @@ async def get_movie_by_slug_service(db: AsyncSession, slug: str) -> MovieDetail 
         genres=[g.name for g in movie.genres],
         series_name=movie.series.name if movie.series else None,
     )
+
+    # Redisに保存
+    if redis is not None:
+        await redis.set(key, json.dumps(detail.model_dump()), ex=MOVIE_DETAIL_TTL)
+
+    return detail

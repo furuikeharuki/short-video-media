@@ -608,6 +608,12 @@ export default function FeedItem({ item, isFirst, isSecond = false }: Props) {
 }
 
 const itemStyle = `
+  .video-bg {
+    position: absolute;
+    inset: 0;
+    overflow: hidden;
+    background: #000;
+  }
   .shimmer {
     position: absolute;
     top: ${V_PADDING_TOP}px;

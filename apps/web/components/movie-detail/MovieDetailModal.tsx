@@ -118,12 +118,14 @@ export default function MovieDetailModal({ slug, onClose }: Props) {
 
   return (
     <>
+      {/* Backdrop: ヘッダー下からのみ覆う */}
       <div
         className={`mdm-backdrop ${visible ? "mdm-backdrop--visible" : ""}`}
         onClick={handleClose}
         aria-hidden="true"
       />
 
+      {/* Sheet: ヘッダー下から画面下端まで */}
       <div
         ref={sheetRef}
         role="dialog"
@@ -134,11 +136,12 @@ export default function MovieDetailModal({ slug, onClose }: Props) {
         onTouchMove={onTouchMove}
         onTouchEnd={onTouchEnd}
       >
+        {/* ドラッグハンドル */}
         <div className="mdm-handle-wrap">
           <div className="mdm-handle" />
         </div>
 
-        {/* 戻るボタン: BackButtonと同じ円形/blur/矢印スタイル */}
+        {/* 戻るボタン: BackButtonと同じスタイル */}
         <button
           className="mdm-back"
           onClick={handleClose}
@@ -148,15 +151,6 @@ export default function MovieDetailModal({ slug, onClose }: Props) {
             stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
             <path d="M19 12H5M12 5l-7 7 7 7" />
           </svg>
-        </button>
-
-        {/* 閉じるボタン */}
-        <button
-          className="mdm-close"
-          onClick={handleClose}
-          aria-label="閉じる"
-        >
-          ✕
         </button>
 
         <div ref={scrollRef} className="mdm-scroll">
@@ -179,7 +173,10 @@ export default function MovieDetailModal({ slug, onClose }: Props) {
 
       <style>{`
         .mdm-backdrop {
-          position: fixed; inset: 0; z-index: 900;
+          position: fixed;
+          top: var(--header-h, 52px);
+          left: 0; right: 0; bottom: 0;
+          z-index: 200;
           background: rgba(0,0,0,0);
           transition: background 0.3s ease;
         }
@@ -187,9 +184,9 @@ export default function MovieDetailModal({ slug, onClose }: Props) {
 
         .mdm-sheet {
           position: fixed;
+          top: var(--header-h, 52px);
           left: 0; right: 0; bottom: 0;
-          z-index: 901;
-          height: 92dvh;
+          z-index: 201;
           background: #0a0a0a;
           border-radius: 16px 16px 0 0;
           display: flex;
@@ -213,7 +210,7 @@ export default function MovieDetailModal({ slug, onClose }: Props) {
           border-radius: 999px;
         }
 
-        /* BackButtonと完全一致のスタイル */
+        /* BackButtonと完全一致 */
         .mdm-back {
           position: absolute;
           top: 16px;
@@ -234,17 +231,6 @@ export default function MovieDetailModal({ slug, onClose }: Props) {
           transition: background 0.15s;
         }
         .mdm-back:hover { background: rgba(0,0,0,0.7); }
-
-        .mdm-close {
-          position: absolute; top: 10px; right: 14px;
-          background: rgba(255,255,255,0.1);
-          border: none; color: #fff; font-size: 14px;
-          width: 30px; height: 30px; border-radius: 50%;
-          display: flex; align-items: center; justify-content: center;
-          cursor: pointer; z-index: 10;
-          transition: background 0.15s;
-        }
-        .mdm-close:hover { background: rgba(255,255,255,0.2); }
 
         .mdm-scroll {
           flex: 1;

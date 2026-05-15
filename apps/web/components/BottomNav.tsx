@@ -68,8 +68,8 @@ export default function BottomNav() {
   const pathname    = usePathname();
   const isShortPage = pathname === "/" || pathname.startsWith("/search/feed");
 
-  const trackRef     = useRef<HTMLDivElement>(null);
-  const isDragging   = useRef(false);
+  const trackRef   = useRef<HTMLDivElement>(null);
+  const isDragging = useRef(false);
   const [progress, setProgress] = useState(0);
 
   useEffect(() => {
@@ -187,7 +187,7 @@ const navStyle = `
 
   .seekbar-track {
     position: absolute;
-    top: -10px;
+    top: -14px;
     left: 0;
     right: 0;
     height: 20px;

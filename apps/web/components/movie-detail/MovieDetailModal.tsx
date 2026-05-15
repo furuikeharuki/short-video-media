@@ -22,7 +22,6 @@ export default function MovieDetailModal({ slug, onClose }: Props) {
   const currentYRef = useRef(0);
   const isDraggingRef = useRef(false);
 
-  // マウント後アニメ開始 + FeedViewerにモーダル開くことを通知
   useEffect(() => {
     window.dispatchEvent(new Event("modal-open"));
     const t = requestAnimationFrame(() => setVisible(true));
@@ -32,7 +31,6 @@ export default function MovieDetailModal({ slug, onClose }: Props) {
     };
   }, []);
 
-  // データ取得
   useEffect(() => {
     let cancelled = false;
     setState("loading");
@@ -53,14 +51,12 @@ export default function MovieDetailModal({ slug, onClose }: Props) {
     return () => { cancelled = true; };
   }, [slug]);
 
-  // Escキー
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") handleClose(); };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   });
 
-  // history pushState
   useEffect(() => {
     const prev = window.location.pathname + window.location.search;
     window.history.pushState({ modalSlug: slug }, "", `/movies/${slug}`);
@@ -72,7 +68,6 @@ export default function MovieDetailModal({ slug, onClose }: Props) {
     };
   }, [slug]);
 
-  // body scroll lock
   useEffect(() => {
     const prev = document.body.style.overflow;
     document.body.style.overflow = "hidden";
@@ -84,19 +79,17 @@ export default function MovieDetailModal({ slug, onClose }: Props) {
     setTimeout(onClose, 300);
   }, [onClose]);
 
-  // ドラッグ: スクロール領域の一番上からさらに上に引っ張ったときのみ閉じる
   const onTouchStart = useCallback((e: React.TouchEvent<HTMLDivElement>) => {
     const scroll = scrollRef.current;
     if (scroll && scroll.contains(e.target as Node)) {
-      // スクロール領域内: 一番上のときのみドラッグ中断を許可
       if (scroll.scrollTop === 0) {
-        startYRef.current   = e.touches[0].clientY;
+        startYRef.current = e.touches[0].clientY;
         isDraggingRef.current = true;
       } else {
         isDraggingRef.current = false;
       }
     } else {
-      startYRef.current   = e.touches[0].clientY;
+      startYRef.current = e.touches[0].clientY;
       isDraggingRef.current = true;
     }
     currentYRef.current = 0;
@@ -125,14 +118,12 @@ export default function MovieDetailModal({ slug, onClose }: Props) {
 
   return (
     <>
-      {/* Backdrop */}
       <div
         className={`mdm-backdrop ${visible ? "mdm-backdrop--visible" : ""}`}
         onClick={handleClose}
         aria-hidden="true"
       />
 
-      {/* Sheet */}
       <div
         ref={sheetRef}
         role="dialog"
@@ -143,21 +134,20 @@ export default function MovieDetailModal({ slug, onClose }: Props) {
         onTouchMove={onTouchMove}
         onTouchEnd={onTouchEnd}
       >
-        {/* ドラッグハンドル */}
         <div className="mdm-handle-wrap">
           <div className="mdm-handle" />
         </div>
 
-        {/* 戻るボタン */}
+        {/* 戻るボタン: BackButtonと同じ円形/blur/矢印スタイル */}
         <button
           className="mdm-back"
           onClick={handleClose}
-          aria-label="戻る"
+          aria-label="フィードに戻る"
         >
-          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-            <polyline points="15 18 9 12 15 6" />
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none"
+            stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M19 12H5M12 5l-7 7 7 7" />
           </svg>
-          戻る
         </button>
 
         {/* 閉じるボタン */}
@@ -223,17 +213,27 @@ export default function MovieDetailModal({ slug, onClose }: Props) {
           border-radius: 999px;
         }
 
+        /* BackButtonと完全一致のスタイル */
         .mdm-back {
-          position: absolute; top: 8px; left: 12px;
-          background: transparent;
-          border: none; color: #fff;
-          font-size: 13px; font-weight: 600;
-          display: flex; align-items: center; gap: 4px;
-          padding: 6px 8px; border-radius: 8px;
-          cursor: pointer; z-index: 10;
+          position: absolute;
+          top: 16px;
+          left: 16px;
+          z-index: 10;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          width: 40px;
+          height: 40px;
+          border-radius: 50%;
+          background: rgba(0,0,0,0.5);
+          backdrop-filter: blur(8px);
+          -webkit-backdrop-filter: blur(8px);
+          color: #fff;
+          border: 1px solid rgba(255,255,255,0.15);
+          cursor: pointer;
           transition: background 0.15s;
         }
-        .mdm-back:hover { background: rgba(255,255,255,0.1); }
+        .mdm-back:hover { background: rgba(0,0,0,0.7); }
 
         .mdm-close {
           position: absolute; top: 10px; right: 14px;

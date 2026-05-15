@@ -150,6 +150,17 @@ export default function MovieDetailContent({ movie }: Props) {
           margin-bottom: 28px;
         }
         .mdc-cta { display: flex; flex-direction: column; gap: 12px; }
+
+        /* page.tsxの pageCSS と完全一致の購入ボタンスタイル */
+        .affiliate-btn {
+          display: flex; align-items: center; justify-content: center;
+          width: 100%; min-height: 52px; padding: 0 16px;
+          background: #e91e63; color: #fff; font-size: 16px; font-weight: 700;
+          border-radius: 12px; text-align: center; text-decoration: none;
+          transition: opacity 0.15s ease, transform 0.15s ease; box-sizing: border-box;
+        }
+        .affiliate-btn:active { opacity: 0.75; transform: scale(0.98); }
+        @media (hover: hover) { .affiliate-btn:hover { opacity: 0.88; } }
       `}</style>
     </div>
   );

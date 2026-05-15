@@ -80,7 +80,6 @@ export default async function MovieDetailPage({ params }: PageProps) {
       { label: "メーカー品番", value: movie.maker_product ?? NA },
     ];
 
-    // JSON-LD 構造化データ（VideoObject）
     const jsonLd = {
       "@context": "https://schema.org",
       "@type": "VideoObject",
@@ -192,6 +191,7 @@ const styles: Record<string, React.CSSProperties> = {
     background: '#0a0a0a',
     color: '#fff',
     fontFamily: "-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif",
+    paddingBottom: 'var(--bottom-nav-h, 56px)',
   },
   heroWrap: {
     position: 'relative', width: '100%', height: '55svh' as unknown as string,

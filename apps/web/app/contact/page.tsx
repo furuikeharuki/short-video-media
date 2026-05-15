@@ -38,10 +38,12 @@ export default function ContactPage() {
 const styles: Record<string, React.CSSProperties> = {
   main: {
     minHeight: "100dvh",
-    paddingTop: "calc(52px + 32px + 28px)", // header + affiliateNotice + 余白
+    paddingTop: "calc(52px + 32px)",
+    paddingBottom: "var(--bottom-nav-h, 56px)",
     background: "#0a0a0a",
     color: "#fff",
     fontFamily: "-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif",
+    boxSizing: "border-box",
   },
   inner: {
     maxWidth: "560px",

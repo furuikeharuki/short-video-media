@@ -16,13 +16,15 @@ export default function NotFoundPage() {
 const styles: Record<string, React.CSSProperties> = {
   main: {
     minHeight: "100dvh",
-    paddingTop: "calc(52px + 40px)",
+    paddingTop: "calc(var(--header-h, 52px) + 40px)",
+    paddingBottom: "var(--bottom-nav-h, 56px)",
     display: "flex",
     alignItems: "flex-start",
     justifyContent: "center",
     background: "#0a0a0a",
     color: "#fff",
     fontFamily: "-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif",
+    boxSizing: "border-box",
   },
   inner: {
     textAlign: "center" as const,

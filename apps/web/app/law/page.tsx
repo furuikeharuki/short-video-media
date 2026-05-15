@@ -79,9 +79,12 @@ function Row({ label, children }: { label: string; children: React.ReactNode }) 
 const styles: Record<string, React.CSSProperties> = {
   main: {
     minHeight: "100dvh",
+    paddingTop: "var(--header-h, 52px)",
+    paddingBottom: "var(--bottom-nav-h, 56px)",
     background: "#0a0a0a",
     color: "#e0e0e0",
     fontFamily: "-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif",
+    boxSizing: "border-box",
   },
   container: {
     maxWidth: "720px",

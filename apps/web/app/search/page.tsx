@@ -10,7 +10,6 @@ export default async function SearchPage({ searchParams }: Props) {
   const query  = q?.trim() ?? "";
   const genreTag = genre?.trim() ?? "";
 
-  // タグ指定時: ジャンルフィルターでフィードを取得
   if (genreTag) {
     let items: MovieCard[] = [];
     try {
@@ -34,7 +33,6 @@ export default async function SearchPage({ searchParams }: Props) {
     );
   }
 
-  // テキスト検索
   if (!query) {
     return (
       <main style={styles.main}>
@@ -73,7 +71,7 @@ const styles: Record<string, React.CSSProperties> = {
     top: "52px",
     left: 0,
     right: 0,
-    bottom: 0,
+    bottom: "var(--bottom-nav-h, 56px)" as unknown as string,
     overflowY: "auto" as const,
     background: "#0a0a0a",
     color: "#fff",

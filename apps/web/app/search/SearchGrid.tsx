@@ -1,44 +1,23 @@
 "use client";
 
-import { useEffect } from "react";
 import { useRouter } from "next/navigation";
 import type { MovieCard } from "@/lib/api/feed";
 
-const STORAGE_KEY     = "search_feed_items";
-const STORAGE_KEY_IDX = "search_feed_index";
-const STORAGE_KEY_Q   = "search_feed_query";
+const STORAGE_KEY = "search_feed_items";
 
 interface Props {
   items: MovieCard[];
-  /** 検索条件を表す一意なキー（genre 名 or テキストクエリ） */
-  queryKey: string;
 }
 
-export default function SearchGrid({ items, queryKey }: Props) {
+export default function SearchGrid({ items }: Props) {
   const router = useRouter();
-
-  // マウント時：検索条件が変わっていたら保存済みインデックスをリセット
-  useEffect(() => {
-    try {
-      const prevQuery = sessionStorage.getItem(STORAGE_KEY_Q);
-      if (prevQuery !== queryKey) {
-        // 検索条件が変わったので順番・位置をリセット
-        sessionStorage.setItem(STORAGE_KEY, JSON.stringify(items));
-        sessionStorage.setItem(STORAGE_KEY_Q, queryKey);
-        sessionStorage.removeItem(STORAGE_KEY_IDX);
-      }
-      // 同じ条件ならすでに保存済みの items/index をそのまま活かす（上書きしない）
-    } catch { /* ignore */ }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
 
   const handleClick = (item: MovieCard) => {
     try {
-      // グリッドからタップした場合は選択した id を渡し、インデックスをリセット
       sessionStorage.setItem(STORAGE_KEY, JSON.stringify(items));
-      sessionStorage.setItem(STORAGE_KEY_Q, queryKey);
-      sessionStorage.removeItem(STORAGE_KEY_IDX); // SearchFeedPage 側で id から解決させる
-    } catch { /* ignore */ }
+    } catch {
+      // sessionStorage 使用不可な環境では無視
+    }
     router.push(`/search/feed?id=${encodeURIComponent(item.id)}`);
   };
 
@@ -69,8 +48,6 @@ export default function SearchGrid({ items, queryKey }: Props) {
     </div>
   );
 }
-
-export { STORAGE_KEY, STORAGE_KEY_IDX, STORAGE_KEY_Q };
 
 const cardStyle: React.CSSProperties = {
   display: "block",

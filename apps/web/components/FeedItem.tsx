@@ -20,30 +20,6 @@ const PLAY_THRESHOLD = 0.85;
 
 let globalUserGestured = false;
 
-// ロードオーバーレイを即座に表示・非表示するユーティリティ
-function showLoadingOverlay() {
-  let el = document.getElementById("__feed-nav-loading");
-  if (!el) {
-    el = document.createElement("div");
-    el.id = "__feed-nav-loading";
-    el.style.cssText = [
-      "position:fixed","inset:0","z-index:9999",
-      "background:rgba(0,0,0,0.55)",
-      "display:flex","align-items:center","justify-content:center",
-      "backdrop-filter:blur(2px)",
-      "-webkit-backdrop-filter:blur(2px)",
-    ].join(";");
-    el.innerHTML = `<div style="width:40px;height:40px;border:3px solid rgba(255,255,255,0.2);border-top-color:#fff;border-radius:50%;animation:__fnl-spin 0.8s linear infinite"></div><style>@keyframes __fnl-spin{to{transform:rotate(360deg)}}</style>`;
-    document.body.appendChild(el);
-  }
-  el.style.display = "flex";
-}
-
-function hideLoadingOverlay() {
-  const el = document.getElementById("__feed-nav-loading");
-  if (el) el.style.display = "none";
-}
-
 export default function FeedItem({ item, isFirst, isSecond = false }: Props) {
   const router = useRouter();
 
@@ -71,25 +47,6 @@ export default function FeedItem({ item, isFirst, isSecond = false }: Props) {
 
   const [isMuted,      setIsMuted]      = useState(true);
   const [isBookmarked, setIsBookmarked] = useState(false);
-
-  // モーダルが開いたらオーバーレイを消す（popstateまたのpageshowで検知）
-  useEffect(() => {
-    const hide = () => hideLoadingOverlay();
-    window.addEventListener("popstate", hide);
-    // スクロールコンテナが変われたら消す（MutationObserverで@modalの描画完了を検知）
-    const observer = new MutationObserver(() => {
-      if (document.getElementById("__feed-nav-loading")?.style.display !== "none") {
-        // @modal層に何か追加されたら消す
-        const modalSlot = document.querySelector("[data-modal-slot], [role='dialog']");
-        if (modalSlot) hideLoadingOverlay();
-      }
-    });
-    observer.observe(document.body, { childList: true, subtree: true });
-    return () => {
-      window.removeEventListener("popstate", hide);
-      observer.disconnect();
-    };
-  }, []);
 
   const setVideoReady = useCallback((ready: boolean) => {
     const video   = videoRef.current;
@@ -265,7 +222,6 @@ export default function FeedItem({ item, isFirst, isSecond = false }: Props) {
   const handleDetail = useCallback((e: React.MouseEvent | React.TouchEvent) => {
     e.stopPropagation();
     e.preventDefault();
-    showLoadingOverlay();
     router.push(`/movies/${item.slug}`);
   }, [router, item.slug]);
 
@@ -444,17 +400,7 @@ export default function FeedItem({ item, isFirst, isSecond = false }: Props) {
           )}
           <h2 className="item-title">{item.title}</h2>
           {item.actresses.length > 0 && (
-            <div className="actress-chips" onClick={(e) => e.stopPropagation()}>
-              {item.actresses.map((name) => (
-                <button
-                  key={name}
-                  className="actress-chip"
-                  onClick={() => router.push(`/search?actress=${encodeURIComponent(name)}`)}
-                >
-                  👤 {name}
-                </button>
-              ))}
-            </div>
+            <p className="item-actress">👤 {item.actresses.join(" / ")}</p>
           )}
         </div>
 
@@ -675,30 +621,15 @@ const itemStyle = `
     overflow: hidden;
     word-break: break-all;
   }
-  .actress-chips {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 4px;
-    margin-top: 4px;
-  }
-  .actress-chip {
-    padding: 3px 10px;
-    border-radius: 999px;
-    border: 1px solid rgba(255,255,255,0.25);
-    background: rgba(255,255,255,0.08);
-    color: rgba(255,255,255,0.85);
-    font-size: clamp(10px, 2.5vw, 12px);
-    font-weight: 500;
-    cursor: pointer;
+  .item-actress {
+    font-size: clamp(11px, 2.8vw, 13px);
+    color: rgba(255,255,255,0.75);
+    text-shadow: 0 1px 4px rgba(0,0,0,0.7);
+    margin: 0;
     white-space: nowrap;
-    flex-shrink: 0;
-    backdrop-filter: blur(6px);
-    -webkit-backdrop-filter: blur(6px);
-    -webkit-tap-highlight-color: transparent;
-    line-height: 1.5;
-    transition: background 0.15s;
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
-  .actress-chip:active { background: rgba(255,255,255,0.2); }
   .genre-chips {
     display: flex;
     flex-wrap: wrap;
@@ -813,6 +744,6 @@ const itemStyle = `
     }
     .side-btn svg { width: 28px; height: 28px; }
     .item-title   { font-size: 17px; }
-    .actress-chip { font-size: 14px; }
+    .item-actress { font-size: 14px; }
   }
 `;

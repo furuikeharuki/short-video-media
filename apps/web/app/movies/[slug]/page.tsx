@@ -209,7 +209,7 @@ const styles: Record<string, React.CSSProperties> = {
   },
   content: {
     padding: '20px 16px',
-    paddingBottom: 'calc(var(--bottom-nav-h, 56px) + env(safe-area-inset-bottom, 0px) + 24px)' as unknown as string,
+    paddingBottom: 'calc(var(--bottom-nav-h, 56px) + env(safe-area-inset-bottom, 0px) + 10px)' as unknown as string,
     width: '100%',
     boxSizing: 'border-box' as const,
   },

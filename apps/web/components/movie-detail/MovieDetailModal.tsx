@@ -118,14 +118,14 @@ export default function MovieDetailModal({ slug, onClose }: Props) {
 
   return (
     <>
-      {/* Backdrop: ヘッダー下からのみ覆う */}
+      {/* Backdrop: 画面全体を暗くするがヘッダーはクリック不可 */}
       <div
         className={`mdm-backdrop ${visible ? "mdm-backdrop--visible" : ""}`}
         onClick={handleClose}
         aria-hidden="true"
       />
 
-      {/* Sheet: ヘッダー下から画面下端まで */}
+      {/* Sheet: ヘッダー直下から下端まで */}
       <div
         ref={sheetRef}
         role="dialog"
@@ -136,12 +136,10 @@ export default function MovieDetailModal({ slug, onClose }: Props) {
         onTouchMove={onTouchMove}
         onTouchEnd={onTouchEnd}
       >
-        {/* ドラッグハンドル */}
         <div className="mdm-handle-wrap">
           <div className="mdm-handle" />
         </div>
 
-        {/* 戻るボタン: BackButtonと同じスタイル */}
         <button
           className="mdm-back"
           onClick={handleClose}
@@ -174,19 +172,23 @@ export default function MovieDetailModal({ slug, onClose }: Props) {
       <style>{`
         .mdm-backdrop {
           position: fixed;
-          top: var(--header-h, 52px);
-          left: 0; right: 0; bottom: 0;
-          z-index: 200;
+          inset: 0;
+          z-index: 500;
           background: rgba(0,0,0,0);
           transition: background 0.3s ease;
+          pointer-events: none;
         }
-        .mdm-backdrop--visible { background: rgba(0,0,0,0.6); }
+        .mdm-backdrop--visible {
+          background: rgba(0,0,0,0.5);
+          pointer-events: auto;
+        }
 
         .mdm-sheet {
           position: fixed;
+          /* ヘッダー直下から下端まで全画面を占有 */
           top: var(--header-h, 52px);
           left: 0; right: 0; bottom: 0;
-          z-index: 201;
+          z-index: 501;
           background: #0a0a0a;
           border-radius: 16px 16px 0 0;
           display: flex;
@@ -210,7 +212,6 @@ export default function MovieDetailModal({ slug, onClose }: Props) {
           border-radius: 999px;
         }
 
-        /* BackButtonと完全一致 */
         .mdm-back {
           position: absolute;
           top: 16px;

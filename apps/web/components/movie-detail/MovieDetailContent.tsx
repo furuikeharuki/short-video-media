@@ -110,8 +110,7 @@ export default function MovieDetailContent({ movie }: Props) {
           display: block; border-radius: 8px;
         }
         .mdc-body {
-          padding: 20px 16px;
-          padding-bottom: calc(var(--bottom-nav-h, 56px) + env(safe-area-inset-bottom, 0px) + 10px);
+          padding: 20px 16px 24px;
         }
         .mdc-genres { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 14px; }
         .mdc-badge {
@@ -147,11 +146,10 @@ export default function MovieDetailContent({ movie }: Props) {
         }
         .mdc-description {
           font-size: 14px; line-height: 1.8; color: rgba(255,255,255,0.6);
-          margin-bottom: 28px;
+          margin-bottom: 20px;
         }
         .mdc-cta { display: flex; flex-direction: column; gap: 12px; }
 
-        /* page.tsxの pageCSS と完全一致の購入ボタンスタイル */
         .affiliate-btn {
           display: flex; align-items: center; justify-content: center;
           width: 100%; min-height: 52px; padding: 0 16px;

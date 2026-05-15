@@ -78,7 +78,6 @@ export default function FeedItem({ item, isFirst, isSecond = false }: Props) {
     if (el) el.style.display = visible ? "block" : "none";
   }, []);
 
-  // RAF で進捗を定期発火
   const startProgressLoop = useCallback(() => {
     const tick = () => {
       const video = videoRef.current;
@@ -98,7 +97,6 @@ export default function FeedItem({ item, isFirst, isSecond = false }: Props) {
     }
   }, []);
 
-  // BottomNav シークバーからのシークイベントを listen
   useEffect(() => {
     const handler = (e: CustomEvent<{ ratio: number }>) => {
       const video = videoRef.current;
@@ -153,7 +151,6 @@ export default function FeedItem({ item, isFirst, isSecond = false }: Props) {
         setVideoReady(false);
         setPauseBadge(false);
         setFastBadge(false);
-        // 非アクティブの画面は進捗リセット
         window.dispatchEvent(new CustomEvent("video-progress", { detail: { progress: 0 } }));
       }
     }, { threshold: PLAY_THRESHOLD });
@@ -184,7 +181,7 @@ export default function FeedItem({ item, isFirst, isSecond = false }: Props) {
     ripple.className = "skip-ripple";
     ripple.style.left = `${clientX - rect.left}px`;
     ripple.style.top  = `${clientY - rect.top}px`;
-    ripple.innerHTML  = `<span class="skip-icon">${isLeft ? "« -5s" : "+5s »"}</span>`;
+    ripple.innerHTML  = `<span class="skip-icon">${isLeft ? "\u00ab -5s" : "+5s \u00bb"}</span>`;
     containerRef.current?.appendChild(ripple);
     setTimeout(() => ripple.remove(), 700);
   }, []);
@@ -753,6 +750,13 @@ const itemStyle = `
   @media (max-width: 767px) {
     .feed-video {
       padding-bottom: 60px;
+    }
+    .overlay-wrap {
+      bottom: 60px;
+    }
+    .pause-badge {
+      bottom: 60px;
+      top: 0;
     }
   }
   @media (min-width: 768px) {

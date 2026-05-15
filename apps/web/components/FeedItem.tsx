@@ -22,13 +22,6 @@ const LONG_PRESS_MS = 500;
 const TAP_MOVE_THRESHOLD = 10;
 const PLAY_THRESHOLD = 0.85;
 
-// side-actions の右端からの占有幅:
-// right: 4px + width: 56px + gap: 8px = 68px
-const SIDE_ACTIONS_RIGHT = 4;
-const SIDE_ACTIONS_WIDTH = 56;
-const INFO_RIGHT = SIDE_ACTIONS_RIGHT + SIDE_ACTIONS_WIDTH + 8; // 68px
-const INFO_LEFT = 12;
-
 const isLandscapeScreen = () => window.innerWidth > window.innerHeight;
 
 let globalUserGestured = false;
@@ -528,109 +521,113 @@ export default function FeedItem({ item, isFirst, isSecond = false }: Props) {
         </div>
       )}
 
-      {/* 右下縦並びアクションボタン */}
-      <div className="side-actions" onClick={(e) => e.stopPropagation()} onTouchStart={(e) => e.stopPropagation()}>
-        <button
-          className="side-btn"
-          aria-label={isMuted ? "音声ON" : "ミュート"}
-          onTouchEnd={handleToggleMute}
-          onClick={handleToggleMute}
-        >
-          {isMuted ? (
-            <svg width="26" height="26" viewBox="0 0 24 24" fill="none">
-              <path d="M11 5L6 9H2v6h4l5 4V5z" fill="white"/>
-              <line x1="23" y1="9" x2="17" y2="15" stroke="white" strokeWidth="2.2" strokeLinecap="round"/>
-              <line x1="17" y1="9" x2="23" y2="15" stroke="white" strokeWidth="2.2" strokeLinecap="round"/>
-            </svg>
-          ) : (
-            <svg width="26" height="26" viewBox="0 0 24 24" fill="none">
-              <path d="M11 5L6 9H2v6h4l5 4V5z" fill="white"/>
-              <path d="M15.54 8.46a5 5 0 0 1 0 7.07" stroke="white" strokeWidth="2" strokeLinecap="round"/>
-              <path d="M19.07 4.93a10 10 0 0 1 0 14.14" stroke="white" strokeWidth="2" strokeLinecap="round"/>
-            </svg>
+      {/* ===== 下部レイアウト: Grid で info と side-actions を並べる ===== */}
+      <div className="bottom-bar">
+
+        {/* 左: 情報エリア */}
+        <div className="info-overlay" onClick={(e) => e.stopPropagation()}>
+          {item.genres && item.genres.length > 0 && (
+            <div className="genre-chips" onClick={(e) => e.stopPropagation()}>
+              {item.genres.map((tag) => (
+                <button
+                  key={tag}
+                  className="genre-chip"
+                  onClick={() => router.push(`/search?genre=${encodeURIComponent(tag)}`)}
+                >
+                  {tag}
+                </button>
+              ))}
+            </div>
           )}
-          <span className="side-btn-label">{isMuted ? "音声OFF" : "音声ON"}</span>
-        </button>
+          <h2 className="item-title">{item.title}</h2>
+          {item.actresses.length > 0 && (
+            <p className="item-actress">👤 {item.actresses.join(" / ")}</p>
+          )}
+          <div ref={ctaRef} className="cta-anchor" />
+        </div>
 
-        <button
-          className={`side-btn${isBookmarked ? " side-btn--active" : ""}`}
-          aria-label="ブックマーク"
-          onTouchEnd={(e) => { e.stopPropagation(); e.preventDefault(); setIsBookmarked(b => !b); }}
-          onClick={(e) => { e.stopPropagation(); setIsBookmarked(b => !b); }}
-        >
-          <svg width="24" height="24" viewBox="0 0 24 24" fill={isBookmarked ? "white" : "none"} stroke="white" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-            <path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"/>
-          </svg>
-          <span className="side-btn-label">保存</span>
-        </button>
+        {/* 右: アクションボタン縦並び */}
+        <div className="side-actions" onClick={(e) => e.stopPropagation()} onTouchStart={(e) => e.stopPropagation()}>
+          <button
+            className="side-btn"
+            aria-label={isMuted ? "音声ON" : "ミュート"}
+            onTouchEnd={handleToggleMute}
+            onClick={handleToggleMute}
+          >
+            {isMuted ? (
+              <svg width="26" height="26" viewBox="0 0 24 24" fill="none">
+                <path d="M11 5L6 9H2v6h4l5 4V5z" fill="white"/>
+                <line x1="23" y1="9" x2="17" y2="15" stroke="white" strokeWidth="2.2" strokeLinecap="round"/>
+                <line x1="17" y1="9" x2="23" y2="15" stroke="white" strokeWidth="2.2" strokeLinecap="round"/>
+              </svg>
+            ) : (
+              <svg width="26" height="26" viewBox="0 0 24 24" fill="none">
+                <path d="M11 5L6 9H2v6h4l5 4V5z" fill="white"/>
+                <path d="M15.54 8.46a5 5 0 0 1 0 7.07" stroke="white" strokeWidth="2" strokeLinecap="round"/>
+                <path d="M19.07 4.93a10 10 0 0 1 0 14.14" stroke="white" strokeWidth="2" strokeLinecap="round"/>
+              </svg>
+            )}
+            <span className="side-btn-label">{isMuted ? "音声OFF" : "音声ON"}</span>
+          </button>
 
-        <button
-          className="side-btn"
-          aria-label="共有"
-          onTouchEnd={handleShare}
-          onClick={handleShare}
-        >
-          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-            <circle cx="18" cy="5" r="3"/>
-            <circle cx="6" cy="12" r="3"/>
-            <circle cx="18" cy="19" r="3"/>
-            <line x1="8.59" y1="13.51" x2="15.42" y2="17.49"/>
-            <line x1="15.41" y1="6.51" x2="8.59" y2="10.49"/>
-          </svg>
-          <span className="side-btn-label">共有</span>
-        </button>
+          <button
+            className={`side-btn${isBookmarked ? " side-btn--active" : ""}`}
+            aria-label="ブックマーク"
+            onTouchEnd={(e) => { e.stopPropagation(); e.preventDefault(); setIsBookmarked(b => !b); }}
+            onClick={(e) => { e.stopPropagation(); setIsBookmarked(b => !b); }}
+          >
+            <svg width="24" height="24" viewBox="0 0 24 24" fill={isBookmarked ? "white" : "none"} stroke="white" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"/>
+            </svg>
+            <span className="side-btn-label">保存</span>
+          </button>
 
-        <Link
-          href={`/movies/${item.slug}`}
-          className="side-btn"
-          aria-label="詳細を見る"
-          onClick={(e) => e.stopPropagation()}
-        >
-          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-            <circle cx="12" cy="12" r="10"/>
-            <line x1="12" y1="8" x2="12" y2="12"/>
-            <line x1="12" y1="16" x2="12.01" y2="16"/>
-          </svg>
-          <span className="side-btn-label">詳細</span>
-        </Link>
+          <button
+            className="side-btn"
+            aria-label="共有"
+            onTouchEnd={handleShare}
+            onClick={handleShare}
+          >
+            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <circle cx="18" cy="5" r="3"/>
+              <circle cx="6" cy="12" r="3"/>
+              <circle cx="18" cy="19" r="3"/>
+              <line x1="8.59" y1="13.51" x2="15.42" y2="17.49"/>
+              <line x1="15.41" y1="6.51" x2="8.59" y2="10.49"/>
+            </svg>
+            <span className="side-btn-label">共有</span>
+          </button>
 
-        <a
-          href={item.affiliate_url}
-          target="_blank"
-          rel="noopener noreferrer"
-          className="side-btn side-btn--buy"
-          aria-label="購入する"
-          onClick={(e) => e.stopPropagation()}
-        >
-          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-            <circle cx="9" cy="21" r="1"/>
-            <circle cx="20" cy="21" r="1"/>
-            <path d="M1 1h4l2.68 13.39a2 2 0 0 0 2 1.61h9.72a2 2 0 0 0 2-1.61L23 6H6"/>
-          </svg>
-          <span className="side-btn-label">購入</span>
-        </a>
-      </div>
+          <Link
+            href={`/movies/${item.slug}`}
+            className="side-btn"
+            aria-label="詳細を見る"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <circle cx="12" cy="12" r="10"/>
+              <line x1="12" y1="8" x2="12" y2="12"/>
+              <line x1="12" y1="16" x2="12.01" y2="16"/>
+            </svg>
+            <span className="side-btn-label">詳細</span>
+          </Link>
 
-      {/* 左下情報エリア */}
-      <div className="info-overlay">
-        {item.genres && item.genres.length > 0 && (
-          <div className="genre-chips" onClick={(e) => e.stopPropagation()}>
-            {item.genres.map((tag) => (
-              <button
-                key={tag}
-                className="genre-chip"
-                onClick={() => router.push(`/search?genre=${encodeURIComponent(tag)}`)}
-              >
-                {tag}
-              </button>
-            ))}
-          </div>
-        )}
-        <h2 className="item-title">{item.title}</h2>
-        {item.actresses.length > 0 && (
-          <p className="item-actress">👤 {item.actresses.join(" / ")}</p>
-        )}
-        <div ref={ctaRef} className="cta-anchor" />
+          <a
+            href={item.affiliate_url}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="side-btn side-btn--buy"
+            aria-label="購入する"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <circle cx="9" cy="21" r="1"/>
+              <circle cx="20" cy="21" r="1"/>
+              <path d="M1 1h4l2.68 13.39a2 2 0 0 0 2 1.61h9.72a2 2 0 0 0 2-1.61L23 6H6"/>
+            </svg>
+            <span className="side-btn-label">購入</span>
+          </a>
+        </div>
       </div>
 
       {isFirst && (
@@ -731,64 +728,27 @@ const itemStyle = `
     text-shadow: 0 1px 4px rgba(0,0,0,0.5);
   }
 
-  /* ===== 右下縦並びアクションボタン ===== */
-  .side-actions {
+  /* ===== 下部レイアウトコンテナ (Grid) ===== */
+  .bottom-bar {
     position: absolute;
-    right: ${SIDE_ACTIONS_RIGHT}px;
     bottom: clamp(16px, 4vh, 32px);
-    width: ${SIDE_ACTIONS_WIDTH}px;
-    display: flex;
-    flex-direction: column;
-    justify-content: flex-end;
-    align-items: center;
-    gap: clamp(16px, 2.5vh, 28px);
+    left: 0;
+    right: 0;
+    display: grid;
+    grid-template-columns: 1fr auto;
+    align-items: end;
     z-index: 30;
-  }
-  .side-btn {
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    gap: 4px;
-    background: none;
-    border: none;
-    cursor: pointer;
-    padding: 0;
-    width: 100%;
-    -webkit-tap-highlight-color: transparent;
-    touch-action: none;
-    text-decoration: none;
-    filter: drop-shadow(0 1px 4px rgba(0,0,0,0.8));
-    transition: transform 0.1s ease, opacity 0.1s ease;
-  }
-  .side-btn:active { transform: scale(0.88); opacity: 0.7; }
-  .side-btn--active svg { filter: drop-shadow(0 0 6px rgba(255,255,255,0.8)); }
-  .side-btn--buy svg { stroke: #ff4d7d; }
-  .side-btn-label {
-    color: #fff;
-    font-size: 10px;
-    font-weight: 600;
-    letter-spacing: 0.02em;
-    text-shadow: 0 1px 3px rgba(0,0,0,0.9);
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    max-width: 100%;
+    padding: 0 4px 0 12px;
+    box-sizing: border-box;
+    pointer-events: none;
   }
 
-  /* ===== 左下情報エリア ===== */
-  /*
-   * left + right を両方指定すれば position:absolute の幅は自動決定される。
-   * width: calc(...) は二重指定になり余分なスペースの原因になるため削除。
-   */
+  /* ===== 左: 情報エリア ===== */
   .info-overlay {
-    position: absolute;
-    bottom: clamp(16px, 4vh, 32px);
-    left: ${INFO_LEFT}px;
-    right: ${INFO_RIGHT}px;
-    box-sizing: border-box;
-    z-index: 30;
-    pointer-events: auto;
+    min-width: 0;
     overflow: hidden;
+    pointer-events: auto;
+    padding-right: 8px;
   }
   .item-title {
     font-size: clamp(13px, 3.5vw, 16px);
@@ -845,11 +805,53 @@ const itemStyle = `
   }
   .genre-chip:active { background: rgba(255,255,255,0.25); }
 
+  /* ===== 右: アクションボタン縦並び ===== */
+  .side-actions {
+    width: 56px;
+    display: flex;
+    flex-direction: column;
+    justify-content: flex-end;
+    align-items: center;
+    gap: clamp(16px, 2.5vh, 28px);
+    pointer-events: auto;
+    flex-shrink: 0;
+  }
+  .side-btn {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 4px;
+    background: none;
+    border: none;
+    cursor: pointer;
+    padding: 0;
+    width: 100%;
+    -webkit-tap-highlight-color: transparent;
+    touch-action: none;
+    text-decoration: none;
+    filter: drop-shadow(0 1px 4px rgba(0,0,0,0.8));
+    transition: transform 0.1s ease, opacity 0.1s ease;
+  }
+  .side-btn:active { transform: scale(0.88); opacity: 0.7; }
+  .side-btn--active svg { filter: drop-shadow(0 0 6px rgba(255,255,255,0.8)); }
+  .side-btn--buy svg { stroke: #ff4d7d; }
+  .side-btn-label {
+    color: #fff;
+    font-size: 10px;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+    text-shadow: 0 1px 3px rgba(0,0,0,0.9);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 100%;
+  }
+
   /* ===== スクロールヒント ===== */
   .scroll-hint {
     position: absolute;
     bottom: clamp(100px, 18vh, 160px);
-    right: ${INFO_RIGHT}px;
+    left: 12px;
     display: flex;
     flex-direction: column;
     align-items: center;
@@ -908,20 +910,16 @@ const itemStyle = `
 
   /* ===== タブレット以上(768px+) ===== */
   @media (min-width: 768px) {
-    .side-actions {
-      right: 8px;
+    .bottom-bar {
       bottom: 40px;
+      padding: 0 8px 0 20px;
+    }
+    .side-actions {
       width: 60px;
       gap: 24px;
     }
     .side-btn svg { width: 28px; height: 28px; }
-    .info-overlay {
-      bottom: 40px;
-      left: 20px;
-      right: 76px;
-    }
     .item-title   { font-size: 17px; }
     .item-actress { font-size: 14px; }
-    .scroll-hint  { right: 76px; }
   }
 `;

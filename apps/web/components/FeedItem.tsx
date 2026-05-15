@@ -67,10 +67,6 @@ function calcRenderedRect(
   return { top, left, width: renderedW, height: renderedH };
 }
 
-/* side-actionsの合計幅: アイコン26px + ラベル最大40px + 右マージン12px = 80px
-   この値をCSS変数として一元管理する */
-const SIDE_ACTIONS_W = 80;
-
 export default function FeedItem({ item, isFirst, isSecond = false }: Props) {
   const router = useRouter();
 
@@ -608,7 +604,7 @@ export default function FeedItem({ item, isFirst, isSecond = false }: Props) {
         </a>
       </div>
 
-      {/* 左下情報エリア */}
+      {/* 左下情報エリア：アイコン列の左に収まる */}
       <div className="info-overlay">
         {item.genres && item.genres.length > 0 && (
           <div className="genre-chips" onClick={(e) => e.stopPropagation()}>
@@ -728,13 +724,11 @@ const itemStyle = `
     text-shadow: 0 1px 4px rgba(0,0,0,0.5);
   }
 
-  /* ===== 右下アクションボタン ===== */
-  /* 属性値の根拠: アイコン26px + ラベル最大各40px + 右マージン12px = ${SIDE_ACTIONS_W}px */
+  /* ===== 右下縦並びアクションボタン ===== */
   .side-actions {
     position: absolute;
-    right: 12px;
+    right: clamp(8px, 2vw, 16px);
     bottom: clamp(16px, 4vh, 32px);
-    width: ${SIDE_ACTIONS_W - 12}px;
     display: flex;
     flex-direction: column;
     align-items: center;
@@ -750,7 +744,6 @@ const itemStyle = `
     border: none;
     cursor: pointer;
     padding: 0;
-    width: 100%;
     -webkit-tap-highlight-color: transparent;
     touch-action: none;
     text-decoration: none;
@@ -762,7 +755,7 @@ const itemStyle = `
   .side-btn--buy svg { stroke: #ff4d7d; }
   .side-btn-label {
     color: #fff;
-    font-size: 10px;
+    font-size: clamp(9px, 1.1vw, 11px);
     font-weight: 600;
     letter-spacing: 0.02em;
     text-shadow: 0 1px 3px rgba(0,0,0,0.9);
@@ -770,12 +763,12 @@ const itemStyle = `
   }
 
   /* ===== 左下情報エリア ===== */
-  /* right = side-actionsのright(12px) + side-actionsの幅(${SIDE_ACTIONS_W - 12}px) + 間蹝(8px) = ${SIDE_ACTIONS_W + 8}px */
+  /* side-actionsの幅(24px icon + 8px margin両側) = 約 56px を避ける */
   .info-overlay {
     position: absolute;
     bottom: clamp(16px, 4vh, 32px);
-    left: 12px;
-    right: ${SIDE_ACTIONS_W + 8}px;
+    left: clamp(10px, 3vw, 20px);
+    right: calc(clamp(8px, 2vw, 16px) + 44px);
     z-index: 30;
     pointer-events: auto;
   }
@@ -834,7 +827,7 @@ const itemStyle = `
   .scroll-hint {
     position: absolute;
     bottom: clamp(100px, 18vh, 160px);
-    right: ${SIDE_ACTIONS_W + 8}px;
+    right: calc(clamp(8px, 2vw, 16px) + 52px);
     display: flex;
     flex-direction: column;
     align-items: center;
@@ -891,22 +884,23 @@ const itemStyle = `
     .action-overlay { animation: none; opacity: 0; }
   }
 
-  /* ===== タブレット以上(768px+) ===== */
+  /* ===== タブレット以上(768px以上)の追加調整 ===== */
   @media (min-width: 768px) {
     .side-actions {
-      right: 16px;
+      right: 20px;
       bottom: 40px;
-      width: 60px;
       gap: 24px;
     }
-    .side-btn svg { width: 28px; height: 28px; }
+    .side-btn svg {
+      width: 28px;
+      height: 28px;
+    }
     .info-overlay {
       bottom: 40px;
-      left: 20px;
-      right: 88px;
+      left: 24px;
+      right: calc(20px + 52px);
     }
     .item-title   { font-size: 17px; }
     .item-actress { font-size: 14px; }
-    .scroll-hint  { right: 88px; }
   }
 `;

@@ -255,10 +255,22 @@ html, body {
   color: #fff;
 }
 
-/* ━━━ メインコンテンツ ━━━━━━━━━━━━━━━━━━━━━━━ */
+/* ━━━ メインコンテンツ（共通ラッパー） ━━━━━━━━━━━━━━━━━━━━━━━ */
 
 .main-content {
   padding-top: var(--header-h);
+}
+
+/*
+  .page-content
+  ショート以外の全ページで使う共通ラッパー。
+  ヘッダー（上）とボトムナブ（下）の高さ分だけ余白を確保する。
+*/
+.page-content {
+  padding-top: var(--header-h);
+  padding-bottom: var(--bottom-nav-h);
+  min-height: 100dvh;
+  box-sizing: border-box;
 }
 
 /* ━━━ フィードレイアウト ━━━━━━━━━━━━━━━━━━━━━ */

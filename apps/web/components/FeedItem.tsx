@@ -23,10 +23,11 @@ const TAP_MOVE_THRESHOLD = 10;
 const PLAY_THRESHOLD = 0.85;
 
 // side-actions の右端からの占有幅:
-// right: 4px + width: 56px(icon26 + padding余白) + gap: 8px = 68px
+// right: 4px + width: 56px + gap: 8px = 68px
 const SIDE_ACTIONS_RIGHT = 4;
 const SIDE_ACTIONS_WIDTH = 56;
 const INFO_RIGHT = SIDE_ACTIONS_RIGHT + SIDE_ACTIONS_WIDTH + 8; // 68px
+const INFO_LEFT = 12;
 
 const isLandscapeScreen = () => window.innerWidth > window.innerHeight;
 
@@ -610,7 +611,7 @@ export default function FeedItem({ item, isFirst, isSecond = false }: Props) {
         </a>
       </div>
 
-      {/* 左下情報エリア：side-actionsの左端までに収まる */}
+      {/* 左下情報エリア */}
       <div className="info-overlay">
         {item.genres && item.genres.length > 0 && (
           <div className="genre-chips" onClick={(e) => e.stopPropagation()}>
@@ -774,14 +775,23 @@ const itemStyle = `
   }
 
   /* ===== 左下情報エリア ===== */
-  /* right = side-actions right(${SIDE_ACTIONS_RIGHT}px) + width(${SIDE_ACTIONS_WIDTH}px) + 隙間8px = ${INFO_RIGHT}px */
+  /*
+   * ここがkey修正:
+   * position:absoluteの要素はleft+rightだけでは変な子要素に幅を伝えられないケースがある。
+   * left+rightを指定すると同時にmax-widthも設定し、
+   * 子要素は100%から決してはみ出ないようにmin-width:0を設定する。
+   */
   .info-overlay {
     position: absolute;
     bottom: clamp(16px, 4vh, 32px);
-    left: 12px;
+    left: ${INFO_LEFT}px;
     right: ${INFO_RIGHT}px;
+    /* widthを明示することで子要素が迷わずに折り返せるようになる */
+    width: calc(100% - ${INFO_LEFT}px - ${INFO_RIGHT}px);
+    box-sizing: border-box;
     z-index: 30;
     pointer-events: auto;
+    /* 子要素が相対化されたときに幅を超えないように */
     overflow: hidden;
   }
   .item-title {
@@ -795,6 +805,8 @@ const itemStyle = `
     -webkit-line-clamp: 3;
     -webkit-box-orient: vertical;
     overflow: hidden;
+    /* 幅を親に呪縛する */
+    width: 100%;
     word-break: break-all;
   }
   .item-actress {
@@ -805,6 +817,7 @@ const itemStyle = `
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
+    width: 100%;
   }
   .cta-anchor {
     height: 0;
@@ -817,7 +830,9 @@ const itemStyle = `
     flex-wrap: wrap;
     gap: 4px;
     margin-bottom: 6px;
-    max-height: calc(1.8em * 4 + 4px * 3);
+    /* 幅を親の100%に拘束し、タグが超えた分は折り返す */
+    width: 100%;
+    max-height: calc(1.8em * 3 + 4px * 2);
     overflow: hidden;
   }
   .genre-chip {
@@ -829,7 +844,9 @@ const itemStyle = `
     font-size: clamp(10px, 2.5vw, 12px);
     font-weight: 600;
     cursor: pointer;
+    /* タグ内の文字は折り返さない、タグ列全体は親幅で折り返す */
     white-space: nowrap;
+    flex-shrink: 0;
     backdrop-filter: blur(6px);
     -webkit-backdrop-filter: blur(6px);
     -webkit-tap-highlight-color: transparent;
@@ -911,7 +928,8 @@ const itemStyle = `
     .info-overlay {
       bottom: 40px;
       left: 20px;
-      right: 76px; /* 8px + 60px + 8px */
+      right: 76px;
+      width: calc(100% - 20px - 76px);
     }
     .item-title   { font-size: 17px; }
     .item-actress { font-size: 14px; }

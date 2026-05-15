@@ -191,7 +191,6 @@ const styles: Record<string, React.CSSProperties> = {
     background: '#0a0a0a',
     color: '#fff',
     fontFamily: "-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif",
-    paddingBottom: 'var(--bottom-nav-h, 56px)',
   },
   heroWrap: {
     position: 'relative', width: '100%', height: '55svh' as unknown as string,
@@ -208,7 +207,12 @@ const styles: Record<string, React.CSSProperties> = {
     height: '100%', maxWidth: 'calc(100% - 60px)' as unknown as string,
     objectFit: 'contain', display: 'block', borderRadius: '8px',
   },
-  content: { padding: '20px 16px 48px', width: '100%', boxSizing: 'border-box' },
+  content: {
+    padding: '20px 16px',
+    paddingBottom: 'calc(var(--bottom-nav-h, 56px) + 32px)' as unknown as string,
+    width: '100%',
+    boxSizing: 'border-box' as const,
+  },
   genreList: { display: 'flex', flexWrap: 'wrap', gap: '6px', marginBottom: '14px' },
   badge: {
     display: 'inline-block', background: 'rgba(255,255,255,0.1)',

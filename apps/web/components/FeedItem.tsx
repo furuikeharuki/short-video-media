@@ -15,12 +15,15 @@ interface Props {
 
 const H_PADDING = 4;
 const V_PADDING_TOP = 4;
-const V_PADDING_BOTTOM = 16;
 const SKIP_SEC = 5;
 const DBL_TAP_MS = 300;
 const LONG_PRESS_MS = 500;
 const TAP_MOVE_THRESHOLD = 10;
 const PLAY_THRESHOLD = 0.85;
+
+// 動画領域の下端 = 画面下部から VIDEO_BOTTOM_OFFSET 分あける
+// bottom-bar の高さ(タグ2行+タイトル3行+女優名+gap) ≒ 180px を想定
+const VIDEO_BOTTOM_OFFSET = 190;
 
 const isLandscapeScreen = () => window.innerWidth > window.innerHeight;
 
@@ -71,13 +74,13 @@ export default function FeedItem({ item, isFirst, isSecond = false }: Props) {
   const router = useRouter();
 
   const videoRef      = useRef<HTMLVideoElement>(null);
-  const ctaRef        = useRef<HTMLDivElement>(null);
   const sectionRef    = useRef<HTMLElement>(null);
   const containerRef  = useRef<HTMLDivElement>(null);
   const shimmerRef    = useRef<HTMLDivElement>(null);
   const pauseBadgeRef = useRef<HTMLDivElement>(null);
   const fastBadgeRef  = useRef<HTMLDivElement>(null);
   const overlayRef    = useRef<HTMLDivElement>(null);
+  const bottomBarRef  = useRef<HTMLDivElement>(null);
 
   const objectFitRef             = useRef<"cover" | "contain">("cover");
   const isPlayingRef             = useRef(false);
@@ -145,21 +148,17 @@ export default function FeedItem({ item, isFirst, isSecond = false }: Props) {
 
   const calcVideoArea = useCallback((fit?: "cover" | "contain") => {
     const resolvedFit = fit ?? objectFitRef.current;
-    const cta     = ctaRef.current;
-    const section = sectionRef.current;
-    const video   = videoRef.current;
-    if (!cta || !section || !video) return;
+    const section   = sectionRef.current;
+    const video     = videoRef.current;
+    const bottomBar = bottomBarRef.current;
+    if (!section || !video) return;
 
-    const sectionRect = section.getBoundingClientRect();
-    const ctaRect     = cta.getBoundingClientRect();
-    if (ctaRect.top === 0 && ctaRect.height === 0) {
-      requestAnimationFrame(() => calcVideoArea(resolvedFit));
-      return;
-    }
+    // bottom-bar の実高さを測って動画の下端オフセットを決定
+    const bottomBarH = bottomBar ? bottomBar.offsetHeight : VIDEO_BOTTOM_OFFSET;
+    const bottomOffset = bottomBarH + 16; // 16px = bottom-bar の bottom値(最小)
 
-    const ctaTopInSection = ctaRect.top - sectionRect.top;
     const videoTop    = V_PADDING_TOP;
-    const videoHeight = Math.max(ctaTopInSection - videoTop - V_PADDING_BOTTOM, 0);
+    const videoHeight = Math.max(section.offsetHeight - videoTop - bottomOffset, 0);
     const videoWidth  = section.offsetWidth - H_PADDING * 2;
 
     const objPosition = resolvedFit === "contain" ? "center 30%" : "center center";
@@ -214,10 +213,10 @@ export default function FeedItem({ item, isFirst, isSecond = false }: Props) {
   useLayoutEffect(() => { calcVideoArea(); }, [calcVideoArea]);
 
   useEffect(() => {
-    const cta = ctaRef.current;
-    if (!cta) return;
+    const bottomBar = bottomBarRef.current;
+    if (!bottomBar) return;
     const ro = new ResizeObserver(() => calcVideoArea());
-    ro.observe(cta);
+    ro.observe(bottomBar);
     return () => ro.disconnect();
   }, [calcVideoArea]);
 
@@ -522,7 +521,7 @@ export default function FeedItem({ item, isFirst, isSecond = false }: Props) {
       )}
 
       {/* ===== 下部レイアウト: Grid で info と side-actions を並べる ===== */}
-      <div className="bottom-bar">
+      <div ref={bottomBarRef} className="bottom-bar">
 
         {/* 左: 情報エリア */}
         <div className="info-overlay" onClick={(e) => e.stopPropagation()}>
@@ -543,7 +542,6 @@ export default function FeedItem({ item, isFirst, isSecond = false }: Props) {
           {item.actresses.length > 0 && (
             <p className="item-actress">👤 {item.actresses.join(" / ")}</p>
           )}
-          <div ref={ctaRef} className="cta-anchor" />
         </div>
 
         {/* 右: アクションボタン縦並び */}
@@ -729,6 +727,11 @@ const itemStyle = `
   }
 
   /* ===== 下部レイアウトコンテナ (Grid) ===== */
+  /*
+   * position:absolute で feed-item 内の下部に固定。
+   * Grid 列: [info-overlay = 1fr] [side-actions = auto]
+   * align-items:end で両列の底辺を揃える。
+   */
   .bottom-bar {
     position: absolute;
     bottom: clamp(16px, 4vh, 32px);
@@ -743,9 +746,9 @@ const itemStyle = `
     pointer-events: none;
   }
 
-  /* ===== 左: 情報エリア ===== */
+  /* ===== 左列: 情報エリア ===== */
   .info-overlay {
-    min-width: 0;
+    min-width: 0;          /* Grid 内テキスト折り返しに必須 */
     overflow: hidden;
     pointer-events: auto;
     padding-right: 8px;
@@ -756,7 +759,7 @@ const itemStyle = `
     line-height: 1.35;
     color: #fff;
     text-shadow: 0 1px 6px rgba(0,0,0,0.8);
-    margin-bottom: 4px;
+    margin: 0 0 4px;
     display: -webkit-box;
     -webkit-line-clamp: 3;
     -webkit-box-orient: vertical;
@@ -767,14 +770,10 @@ const itemStyle = `
     font-size: clamp(11px, 2.8vw, 13px);
     color: rgba(255,255,255,0.75);
     text-shadow: 0 1px 4px rgba(0,0,0,0.7);
-    margin-bottom: 6px;
+    margin: 0;
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
-  }
-  .cta-anchor {
-    height: 0;
-    visibility: hidden;
   }
 
   /* ===== ジャンルタグ ===== */
@@ -783,7 +782,7 @@ const itemStyle = `
     flex-wrap: wrap;
     gap: 4px;
     margin-bottom: 6px;
-    max-height: calc(1.8em * 3 + 4px * 2);
+    max-height: calc(1.8em * 2 + 4px);
     overflow: hidden;
   }
   .genre-chip {
@@ -805,14 +804,13 @@ const itemStyle = `
   }
   .genre-chip:active { background: rgba(255,255,255,0.25); }
 
-  /* ===== 右: アクションボタン縦並び ===== */
+  /* ===== 右列: アクションボタン縦並び ===== */
   .side-actions {
     width: 56px;
     display: flex;
     flex-direction: column;
-    justify-content: flex-end;
     align-items: center;
-    gap: clamp(16px, 2.5vh, 28px);
+    gap: clamp(14px, 2.2vh, 24px);
     pointer-events: auto;
     flex-shrink: 0;
   }
@@ -916,7 +914,7 @@ const itemStyle = `
     }
     .side-actions {
       width: 60px;
-      gap: 24px;
+      gap: 20px;
     }
     .side-btn svg { width: 28px; height: 28px; }
     .item-title   { font-size: 17px; }

@@ -211,7 +211,7 @@ export default function FeedItem({ item, isFirst, isSecond = false }: Props) {
   const handleShare = useCallback((e: React.MouseEvent | React.TouchEvent) => {
     e.stopPropagation();
     e.preventDefault();
-    const url = `${window.location.origin}/movies/${item.slug}`;
+    const url = `${window.location.origin}/?v=${item.slug}`;
     if (navigator.share) {
       navigator.share({ title: item.title, url }).catch(() => {});
     } else {

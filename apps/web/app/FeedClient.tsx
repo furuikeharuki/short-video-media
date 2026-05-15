@@ -1,10 +1,13 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import { useSearchParams } from "next/navigation";
 import FeedViewer from "@/components/FeedViewer";
 import { markSeen, getOrCreateSeed } from "@/lib/feedOrder";
 import { getFeed } from "@/lib/api/feed";
+import { getMovieBySlug } from "@/lib/api/movies";
 import type { MovieCard } from "@/lib/api/feed";
+import type { MovieDetail } from "@/lib/api/movies";
 
 const FEED_SEED_KEY  = "feed_seed";
 const FEED_INDEX_KEY = "feed_index";
@@ -32,18 +35,37 @@ function loadSession(): { seed: number; index: number; items: object[] } | null 
   } catch { return null; }
 }
 
-/** ブラウザのリロード（再読み込み）かどうかを判定 */
 function isPageReload(): boolean {
   try {
     const entries = performance.getEntriesByType("navigation") as PerformanceNavigationTiming[];
     if (entries.length > 0) return entries[0].type === "reload";
-    // fallback for older browsers
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     return (performance as any).navigation?.type === 1;
   } catch { return false; }
 }
 
+function movieDetailToCard(m: MovieDetail): MovieCard {
+  return {
+    id: m.id,
+    content_id: m.content_id,
+    title: m.title,
+    slug: m.slug,
+    image_url_list: m.image_url_list,
+    image_url_large: m.image_url_large,
+    sample_movie_url: m.sample_movie_url,
+    affiliate_url: m.affiliate_url,
+    price_list: m.price_list,
+    price_min: m.price_min,
+    review_count: m.review_count,
+    review_average: m.review_average,
+    actresses: m.actresses,
+    genres: m.genres,
+    series_name: m.series_name,
+  };
+}
+
 export default function FeedClient() {
+  const searchParams  = useSearchParams();
   const seedRef       = useRef<number | null>(null);
   const isFetchingRef = useRef(false);
   const nextCursorRef = useRef<string | null>(null);
@@ -53,17 +75,29 @@ export default function FeedClient() {
   const [isEmpty,      setIsEmpty]      = useState(false);
   const [isLoading,    setIsLoading]    = useState(true);
 
-  const fetchInitial = useCallback(async (seed: number, startIndex = 0) => {
+  const fetchInitial = useCallback(async (seed: number, startIndex = 0, prependSlug?: string) => {
     if (isFetchingRef.current) return;
     isFetchingRef.current = true;
     try {
-      const res = await getFeed(0, 20, seed);
-      const idx = Math.min(startIndex, res.items.length - 1);
-      setItems(res.items);
+      const [res, pinnedMovie] = await Promise.all([
+        getFeed(0, 20, seed),
+        prependSlug ? getMovieBySlug(prependSlug).catch(() => null) : Promise.resolve(null),
+      ]);
+
+      let feedItems = res.items;
+
+      if (pinnedMovie) {
+        const card = movieDetailToCard(pinnedMovie);
+        // 重複排除して先頭に差し込む
+        feedItems = [card, ...feedItems.filter((i) => i.slug !== card.slug)];
+      }
+
+      const idx = Math.min(startIndex, feedItems.length - 1);
+      setItems(feedItems);
       setInitialIndex(idx);
-      setIsEmpty(res.items.length === 0);
+      setIsEmpty(feedItems.length === 0);
       nextCursorRef.current = res.next_cursor;
-      saveSession(seed, idx, res.items);
+      saveSession(seed, idx, feedItems);
     } catch (e) {
       console.error("fetchInitial failed", e);
     } finally {
@@ -73,9 +107,22 @@ export default function FeedClient() {
   }, []);
 
   useEffect(() => {
-    // リロード時はsessionStorageを破棄して新しいシードで取得
+    const vSlug = searchParams.get("v") ?? undefined;
+
+    // ?v= がある場合は常に新鮮なフィードを取得（先頭に該当動画を差し込む）
+    if (vSlug) {
+      const seed = getOrCreateSeed();
+      seedRef.current = seed;
+      fetchInitial(seed, 0, vSlug);
+      return;
+    }
+
     if (isPageReload()) {
-      try { sessionStorage.removeItem(FEED_SEED_KEY); sessionStorage.removeItem(FEED_INDEX_KEY); sessionStorage.removeItem(FEED_ITEMS_KEY); } catch { /* ignore */ }
+      try {
+        sessionStorage.removeItem(FEED_SEED_KEY);
+        sessionStorage.removeItem(FEED_INDEX_KEY);
+        sessionStorage.removeItem(FEED_ITEMS_KEY);
+      } catch { /* ignore */ }
       const seed = getOrCreateSeed();
       seedRef.current = seed;
       fetchInitial(seed, 0);

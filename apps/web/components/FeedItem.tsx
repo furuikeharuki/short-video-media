@@ -21,8 +21,7 @@ const LONG_PRESS_MS = 500;
 const TAP_MOVE_THRESHOLD = 10;
 const PLAY_THRESHOLD = 0.85;
 
-// 動画領域の下端 = 画面下部から VIDEO_BOTTOM_OFFSET 分あける
-// bottom-bar の高さ(タグ2行+タイトル3行+女優名+gap) ≒ 180px を想定
+// 動画領域の下端オフセットのフォールバック値
 const VIDEO_BOTTOM_OFFSET = 190;
 
 const isLandscapeScreen = () => window.innerWidth > window.innerHeight;
@@ -153,9 +152,9 @@ export default function FeedItem({ item, isFirst, isSecond = false }: Props) {
     const bottomBar = bottomBarRef.current;
     if (!section || !video) return;
 
-    // bottom-bar の実高さを測って動画の下端オフセットを決定
-    const bottomBarH = bottomBar ? bottomBar.offsetHeight : VIDEO_BOTTOM_OFFSET;
-    const bottomOffset = bottomBarH + 16; // 16px = bottom-bar の bottom値(最小)
+    const bottomBarH   = bottomBar ? bottomBar.offsetHeight : VIDEO_BOTTOM_OFFSET;
+    // bottom-bar は bottom:0 に居るのでオフセット = そのままの高さ
+    const bottomOffset = bottomBarH;
 
     const videoTop    = V_PADDING_TOP;
     const videoHeight = Math.max(section.offsetHeight - videoTop - bottomOffset, 0);
@@ -728,27 +727,26 @@ const itemStyle = `
 
   /* ===== 下部レイアウトコンテナ (Grid) ===== */
   /*
-   * position:absolute で feed-item 内の下部に固定。
-   * Grid 列: [info-overlay = 1fr] [side-actions = auto]
-   * align-items:end で両列の底辺を揃える。
+   * bottom:0 に固定して、padding-bottom で画面下端からの遠ざかりを確保。
+   * 高さは内容に応じて自然に伸びるのでタグが何行になっても下が切れない。
    */
   .bottom-bar {
     position: absolute;
-    bottom: clamp(16px, 4vh, 32px);
+    bottom: 0;
     left: 0;
     right: 0;
     display: grid;
     grid-template-columns: 1fr auto;
     align-items: end;
     z-index: 30;
-    padding: 0 4px 0 12px;
+    padding: 0 4px clamp(16px, 4vh, 32px) 12px;
     box-sizing: border-box;
     pointer-events: none;
   }
 
   /* ===== 左列: 情報エリア ===== */
   .info-overlay {
-    min-width: 0;          /* Grid 内テキスト折り返しに必須 */
+    min-width: 0;
     overflow: hidden;
     pointer-events: auto;
     padding-right: 8px;
@@ -777,13 +775,15 @@ const itemStyle = `
   }
 
   /* ===== ジャンルタグ ===== */
+  /*
+   * max-height 制限を撤廃し、何行でも全表示。
+   * bottom-bar を bottom:0 に置いたので下が切れることはない。
+   */
   .genre-chips {
     display: flex;
     flex-wrap: wrap;
     gap: 4px;
     margin-bottom: 6px;
-    max-height: calc(1.8em * 2 + 4px);
-    overflow: hidden;
   }
   .genre-chip {
     padding: 3px 10px;
@@ -909,8 +909,7 @@ const itemStyle = `
   /* ===== タブレット以上(768px+) ===== */
   @media (min-width: 768px) {
     .bottom-bar {
-      bottom: 40px;
-      padding: 0 8px 0 20px;
+      padding: 0 8px clamp(20px, 5vh, 40px) 20px;
     }
     .side-actions {
       width: 60px;

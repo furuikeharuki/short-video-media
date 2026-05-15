@@ -19,7 +19,7 @@ const DBL_TAP_MS = 300;
 const LONG_PRESS_MS = 500;
 const TAP_MOVE_THRESHOLD = 10;
 const PLAY_THRESHOLD = 0.85;
-const LOADING_DELAY_MS = 150;
+const LOADING_DELAY_MS = 300;
 
 let globalUserGestured = false;
 

@@ -14,10 +14,10 @@ let globalIsMuted = true;
 interface UseFeedPlaybackOptions {
   slug: string;
   title: string;
-  onNavigate: (path: string) => void;
+  onOpenModal: (slug: string) => void;
 }
 
-export function useFeedPlayback({ slug, title, onNavigate }: UseFeedPlaybackOptions) {
+export function useFeedPlayback({ slug, title, onOpenModal }: UseFeedPlaybackOptions) {
   const videoRef     = useRef<HTMLVideoElement>(null);
   const sectionRef   = useRef<HTMLElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -232,11 +232,18 @@ export function useFeedPlayback({ slug, title, onNavigate }: UseFeedPlaybackOpti
     }
   }, [slug, title]);
 
+  // 詳細ボタン: video を pause してモーダルを開く
   const handleDetail = useCallback((e: React.MouseEvent | React.TouchEvent) => {
     e.stopPropagation();
     e.preventDefault();
-    onNavigate(`/movies/${slug}`);
-  }, [onNavigate, slug]);
+    const video = videoRef.current;
+    if (video && !video.paused) {
+      video.pause();
+      isPlayingRef.current = false;
+      stopProgressLoop();
+    }
+    onOpenModal(slug);
+  }, [slug, onOpenModal, stopProgressLoop]);
 
   const startLongPress = useCallback(() => {
     isLongPressRef.current = false;

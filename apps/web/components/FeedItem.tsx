@@ -3,6 +3,7 @@
 import { useEffect, useRef, useCallback, useState } from "react";
 import { useRouter } from "next/navigation";
 import type { MovieCard } from "@/lib/api/feed";
+import ModalLoading from "@/app/@modal/(.)movies/[slug]/loading";
 
 interface Props {
   item: MovieCard;
@@ -47,6 +48,21 @@ export default function FeedItem({ item, isFirst, isSecond = false }: Props) {
 
   const [isMuted,      setIsMuted]      = useState(true);
   const [isBookmarked, setIsBookmarked] = useState(false);
+  const [navigating,   setNavigating]   = useState(false);
+
+  // モーダルが実際に描画されたら（Next.jsがナビ完了したら）フラグを落とす
+  useEffect(() => {
+    if (!navigating) return;
+    const observer = new MutationObserver(() => {
+      const dialog = document.querySelector("[role='dialog']");
+      if (dialog) {
+        setNavigating(false);
+        observer.disconnect();
+      }
+    });
+    observer.observe(document.body, { childList: true, subtree: true });
+    return () => observer.disconnect();
+  }, [navigating]);
 
   const setVideoReady = useCallback((ready: boolean) => {
     const video   = videoRef.current;
@@ -222,6 +238,7 @@ export default function FeedItem({ item, isFirst, isSecond = false }: Props) {
   const handleDetail = useCallback((e: React.MouseEvent | React.TouchEvent) => {
     e.stopPropagation();
     e.preventDefault();
+    setNavigating(true);
     router.push(`/movies/${item.slug}`);
   }, [router, item.slug]);
 
@@ -322,173 +339,176 @@ export default function FeedItem({ item, isFirst, isSecond = false }: Props) {
   const preloadAttr = isFirst || isSecond ? "auto" : "metadata";
 
   return (
-    <section ref={sectionRef} className="feed-item" data-movie-id={item.id}>
-      {item.sample_movie_url ? (
-        <div
-          ref={containerRef}
-          className="video-bg video-bg--interactive"
-          onTouchStart={handleTouchStart}
-          onTouchEnd={handleTouchEnd}
-          onTouchCancel={handleTouchCancel}
-          onMouseDown={handleMouseDown}
-          onMouseUp={handleMouseUpWithFlag}
-          onMouseLeave={handleMouseLeaveWithFlag}
-          onClick={handlePcClick}
-        >
-          <div ref={shimmerRef} className="shimmer" aria-hidden="true">
-            <div className="shimmer-inner" />
-          </div>
-
-          <video
-            ref={videoRef}
-            src={item.sample_movie_url}
-            muted
-            loop
-            playsInline
-            preload={preloadAttr}
-            onLoadedData={() => setVideoReady(true)}
-            onCanPlay={() => setVideoReady(true)}
-            className="feed-video"
-            style={{ opacity: 0, transition: "opacity 0.3s ease" }}
-          />
-
-          <div className="overlay-wrap">
-            <div ref={overlayRef} className="action-overlay" aria-hidden="true" style={{ display: "none" }}>
-              <span className="action-icon action-icon--pause" style={{ display: "none" }}>
-                <svg width="48" height="48" viewBox="0 0 48 48" fill="none">
-                  <rect x="12" y="8" width="10" height="32" rx="2" fill="white"/>
-                  <rect x="26" y="8" width="10" height="32" rx="2" fill="white"/>
-                </svg>
-              </span>
-              <span className="action-icon action-icon--play" style={{ display: "none" }}>
-                <svg width="48" height="48" viewBox="0 0 48 48" fill="none">
-                  <path d="M14 8L40 24L14 40V8Z" fill="white"/>
-                </svg>
-              </span>
-            </div>
-          </div>
-
-          <div ref={fastBadgeRef} className="fast-badge" aria-hidden="true" style={{ display: "none" }}>2×</div>
-        </div>
-      ) : (
-        <div className="thumbnail-bg">
-          <img
-            src={item.image_url_large ?? item.image_url_list ?? ""}
-            alt={item.title}
-            className="thumbnail-img"
-            loading={isFirst ? "eager" : "lazy"}
-            width={720}
-            height={1280}
-          />
-        </div>
-      )}
-
-      <div className="bottom-bar">
-        <div className="info-overlay" onClick={(e) => e.stopPropagation()}>
-          {item.genres && item.genres.length > 0 && (
-            <div className="genre-chips" onClick={(e) => e.stopPropagation()}>
-              {item.genres.map((tag) => (
-                <button
-                  key={tag}
-                  className="genre-chip"
-                  onClick={() => router.push(`/search?genre=${encodeURIComponent(tag)}`)}
-                >
-                  {tag}
-                </button>
-              ))}
-            </div>
-          )}
-          <h2 className="item-title">{item.title}</h2>
-          {item.actresses.length > 0 && (
-            <p className="item-actress">👤 {item.actresses.join(" / ")}</p>
-          )}
-        </div>
-
-        <div className="side-actions" onClick={(e) => e.stopPropagation()} onTouchStart={(e) => e.stopPropagation()}>
-          <button
-            className="side-btn"
-            aria-label={isMuted ? "音声ON" : "ミュート"}
-            onTouchEnd={handleToggleMute}
-            onClick={handleToggleMute}
+    <>
+      {navigating && <ModalLoading />}
+      <section ref={sectionRef} className="feed-item" data-movie-id={item.id}>
+        {item.sample_movie_url ? (
+          <div
+            ref={containerRef}
+            className="video-bg video-bg--interactive"
+            onTouchStart={handleTouchStart}
+            onTouchEnd={handleTouchEnd}
+            onTouchCancel={handleTouchCancel}
+            onMouseDown={handleMouseDown}
+            onMouseUp={handleMouseUpWithFlag}
+            onMouseLeave={handleMouseLeaveWithFlag}
+            onClick={handlePcClick}
           >
-            {isMuted ? (
-              <svg width="26" height="26" viewBox="0 0 24 24" fill="none">
-                <path d="M11 5L6 9H2v6h4l5 4V5z" fill="white"/>
-                <line x1="23" y1="9" x2="17" y2="15" stroke="white" strokeWidth="2.2" strokeLinecap="round"/>
-                <line x1="17" y1="9" x2="23" y2="15" stroke="white" strokeWidth="2.2" strokeLinecap="round"/>
-              </svg>
-            ) : (
-              <svg width="26" height="26" viewBox="0 0 24 24" fill="none">
-                <path d="M11 5L6 9H2v6h4l5 4V5z" fill="white"/>
-                <path d="M15.54 8.46a5 5 0 0 1 0 7.07" stroke="white" strokeWidth="2" strokeLinecap="round"/>
-                <path d="M19.07 4.93a10 10 0 0 1 0 14.14" stroke="white" strokeWidth="2" strokeLinecap="round"/>
-              </svg>
+            <div ref={shimmerRef} className="shimmer" aria-hidden="true">
+              <div className="shimmer-inner" />
+            </div>
+
+            <video
+              ref={videoRef}
+              src={item.sample_movie_url}
+              muted
+              loop
+              playsInline
+              preload={preloadAttr}
+              onLoadedData={() => setVideoReady(true)}
+              onCanPlay={() => setVideoReady(true)}
+              className="feed-video"
+              style={{ opacity: 0, transition: "opacity 0.3s ease" }}
+            />
+
+            <div className="overlay-wrap">
+              <div ref={overlayRef} className="action-overlay" aria-hidden="true" style={{ display: "none" }}>
+                <span className="action-icon action-icon--pause" style={{ display: "none" }}>
+                  <svg width="48" height="48" viewBox="0 0 48 48" fill="none">
+                    <rect x="12" y="8" width="10" height="32" rx="2" fill="white"/>
+                    <rect x="26" y="8" width="10" height="32" rx="2" fill="white"/>
+                  </svg>
+                </span>
+                <span className="action-icon action-icon--play" style={{ display: "none" }}>
+                  <svg width="48" height="48" viewBox="0 0 48 48" fill="none">
+                    <path d="M14 8L40 24L14 40V8Z" fill="white"/>
+                  </svg>
+                </span>
+              </div>
+            </div>
+
+            <div ref={fastBadgeRef} className="fast-badge" aria-hidden="true" style={{ display: "none" }}>2×</div>
+          </div>
+        ) : (
+          <div className="thumbnail-bg">
+            <img
+              src={item.image_url_large ?? item.image_url_list ?? ""}
+              alt={item.title}
+              className="thumbnail-img"
+              loading={isFirst ? "eager" : "lazy"}
+              width={720}
+              height={1280}
+            />
+          </div>
+        )}
+
+        <div className="bottom-bar">
+          <div className="info-overlay" onClick={(e) => e.stopPropagation()}>
+            {item.genres && item.genres.length > 0 && (
+              <div className="genre-chips" onClick={(e) => e.stopPropagation()}>
+                {item.genres.map((tag) => (
+                  <button
+                    key={tag}
+                    className="genre-chip"
+                    onClick={() => router.push(`/search?genre=${encodeURIComponent(tag)}`)}
+                  >
+                    {tag}
+                  </button>
+                ))}
+              </div>
             )}
-            <span className="side-btn-label">{isMuted ? "音声OFF" : "音声ON"}</span>
-          </button>
+            <h2 className="item-title">{item.title}</h2>
+            {item.actresses.length > 0 && (
+              <p className="item-actress">👤 {item.actresses.join(" / ")}</p>
+            )}
+          </div>
 
-          <button
-            className={`side-btn${isBookmarked ? " side-btn--active" : ""}`}
-            aria-label="ブックマーク"
-            onTouchEnd={(e) => { e.stopPropagation(); e.preventDefault(); setIsBookmarked(b => !b); }}
-            onClick={(e) => { e.stopPropagation(); setIsBookmarked(b => !b); }}
-          >
-            <svg width="24" height="24" viewBox="0 0 24 24" fill={isBookmarked ? "white" : "none"} stroke="white" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"/>
-            </svg>
-            <span className="side-btn-label">保存</span>
-          </button>
+          <div className="side-actions" onClick={(e) => e.stopPropagation()} onTouchStart={(e) => e.stopPropagation()}>
+            <button
+              className="side-btn"
+              aria-label={isMuted ? "音声ON" : "ミュート"}
+              onTouchEnd={handleToggleMute}
+              onClick={handleToggleMute}
+            >
+              {isMuted ? (
+                <svg width="26" height="26" viewBox="0 0 24 24" fill="none">
+                  <path d="M11 5L6 9H2v6h4l5 4V5z" fill="white"/>
+                  <line x1="23" y1="9" x2="17" y2="15" stroke="white" strokeWidth="2.2" strokeLinecap="round"/>
+                  <line x1="17" y1="9" x2="23" y2="15" stroke="white" strokeWidth="2.2" strokeLinecap="round"/>
+                </svg>
+              ) : (
+                <svg width="26" height="26" viewBox="0 0 24 24" fill="none">
+                  <path d="M11 5L6 9H2v6h4l5 4V5z" fill="white"/>
+                  <path d="M15.54 8.46a5 5 0 0 1 0 7.07" stroke="white" strokeWidth="2" strokeLinecap="round"/>
+                  <path d="M19.07 4.93a10 10 0 0 1 0 14.14" stroke="white" strokeWidth="2" strokeLinecap="round"/>
+                </svg>
+              )}
+              <span className="side-btn-label">{isMuted ? "音声OFF" : "音声ON"}</span>
+            </button>
 
-          <button
-            className="side-btn"
-            aria-label="共有"
-            onTouchEnd={handleShare}
-            onClick={handleShare}
-          >
-            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <circle cx="18" cy="5" r="3"/>
-              <circle cx="6" cy="12" r="3"/>
-              <circle cx="18" cy="19" r="3"/>
-              <line x1="8.59" y1="13.51" x2="15.42" y2="17.49"/>
-              <line x1="15.41" y1="6.51" x2="8.59" y2="10.49"/>
-            </svg>
-            <span className="side-btn-label">共有</span>
-          </button>
+            <button
+              className={`side-btn${isBookmarked ? " side-btn--active" : ""}`}
+              aria-label="ブックマーク"
+              onTouchEnd={(e) => { e.stopPropagation(); e.preventDefault(); setIsBookmarked(b => !b); }}
+              onClick={(e) => { e.stopPropagation(); setIsBookmarked(b => !b); }}
+            >
+              <svg width="24" height="24" viewBox="0 0 24 24" fill={isBookmarked ? "white" : "none"} stroke="white" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"/>
+              </svg>
+              <span className="side-btn-label">保存</span>
+            </button>
 
-          <button
-            className="side-btn"
-            aria-label="詳細を見る"
-            onTouchEnd={handleDetail}
-            onClick={handleDetail}
-          >
-            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <circle cx="12" cy="12" r="10"/>
-              <line x1="12" y1="8" x2="12" y2="12"/>
-              <line x1="12" y1="16" x2="12.01" y2="16"/>
-            </svg>
-            <span className="side-btn-label">詳細</span>
-          </button>
+            <button
+              className="side-btn"
+              aria-label="共有"
+              onTouchEnd={handleShare}
+              onClick={handleShare}
+            >
+              <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <circle cx="18" cy="5" r="3"/>
+                <circle cx="6" cy="12" r="3"/>
+                <circle cx="18" cy="19" r="3"/>
+                <line x1="8.59" y1="13.51" x2="15.42" y2="17.49"/>
+                <line x1="15.41" y1="6.51" x2="8.59" y2="10.49"/>
+              </svg>
+              <span className="side-btn-label">共有</span>
+            </button>
 
-          <a
-            href={item.affiliate_url}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="side-btn side-btn--buy"
-            aria-label="購入する"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <circle cx="9" cy="21" r="1"/>
-              <circle cx="20" cy="21" r="1"/>
-              <path d="M1 1h4l2.68 13.39a2 2 0 0 0 2 1.61h9.72a2 2 0 0 0 2-1.61L23 6H6"/>
-            </svg>
-            <span className="side-btn-label">購入</span>
-          </a>
+            <button
+              className="side-btn"
+              aria-label="詳細を見る"
+              onTouchEnd={handleDetail}
+              onClick={handleDetail}
+            >
+              <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <circle cx="12" cy="12" r="10"/>
+                <line x1="12" y1="8" x2="12" y2="12"/>
+                <line x1="12" y1="16" x2="12.01" y2="16"/>
+              </svg>
+              <span className="side-btn-label">詳細</span>
+            </button>
+
+            <a
+              href={item.affiliate_url}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="side-btn side-btn--buy"
+              aria-label="購入する"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <circle cx="9" cy="21" r="1"/>
+                <circle cx="20" cy="21" r="1"/>
+                <path d="M1 1h4l2.68 13.39a2 2 0 0 0 2 1.61h9.72a2 2 0 0 0 2-1.61L23 6H6"/>
+              </svg>
+              <span className="side-btn-label">購入</span>
+            </a>
+          </div>
         </div>
-      </div>
 
-      <style>{itemStyle}</style>
-    </section>
+        <style>{itemStyle}</style>
+      </section>
+    </>
   );
 }
 

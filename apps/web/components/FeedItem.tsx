@@ -31,6 +31,8 @@ export default function FeedItem({ item, isFirst, isSecond = false }: Props) {
   const pauseBadgeRef = useRef<HTMLDivElement>(null);
   const fastBadgeRef  = useRef<HTMLDivElement>(null);
   const overlayRef    = useRef<HTMLDivElement>(null);
+  const rafRef        = useRef<number | null>(null);
+  const isActiveRef   = useRef(false);
 
   const isPlayingRef             = useRef(false);
   const isMutedRef               = useRef(true);
@@ -76,6 +78,38 @@ export default function FeedItem({ item, isFirst, isSecond = false }: Props) {
     if (el) el.style.display = visible ? "block" : "none";
   }, []);
 
+  // RAF で進捗を定期発火
+  const startProgressLoop = useCallback(() => {
+    const tick = () => {
+      const video = videoRef.current;
+      if (!video || !isActiveRef.current) return;
+      const progress = video.duration > 0 ? video.currentTime / video.duration : 0;
+      window.dispatchEvent(new CustomEvent("video-progress", { detail: { progress } }));
+      rafRef.current = requestAnimationFrame(tick);
+    };
+    if (rafRef.current) cancelAnimationFrame(rafRef.current);
+    rafRef.current = requestAnimationFrame(tick);
+  }, []);
+
+  const stopProgressLoop = useCallback(() => {
+    if (rafRef.current) {
+      cancelAnimationFrame(rafRef.current);
+      rafRef.current = null;
+    }
+  }, []);
+
+  // BottomNav シークバーからのシークイベントを listen
+  useEffect(() => {
+    const handler = (e: CustomEvent<{ ratio: number }>) => {
+      const video = videoRef.current;
+      if (!video || !isActiveRef.current) return;
+      const target = e.detail.ratio * (video.duration || 0);
+      video.currentTime = target;
+    };
+    window.addEventListener("video-seek", handler);
+    return () => window.removeEventListener("video-seek", handler);
+  }, []);
+
   const playVideo = useCallback(async (video: HTMLVideoElement, withGesture = false) => {
     if (withGesture) globalUserGestured = true;
     video.muted = isMutedRef.current;
@@ -84,6 +118,7 @@ export default function FeedItem({ item, isFirst, isSecond = false }: Props) {
         await video.play();
         isPlayingRef.current = true;
         setPauseBadge(false);
+        startProgressLoop();
         return;
       } catch { /* fall through to muted retry */ }
     }
@@ -94,16 +129,20 @@ export default function FeedItem({ item, isFirst, isSecond = false }: Props) {
       await video.play();
       isPlayingRef.current = true;
       setPauseBadge(false);
+      startProgressLoop();
     } catch { /* ignore */ }
-  }, [setPauseBadge]);
+  }, [setPauseBadge, startProgressLoop]);
 
   useEffect(() => {
     const video = videoRef.current;
     if (!video) return;
     const playObserver = new IntersectionObserver(([entry]) => {
       if (entry.isIntersecting) {
+        isActiveRef.current = true;
         playVideo(video, false);
       } else {
+        isActiveRef.current = false;
+        stopProgressLoop();
         video.pause();
         video.currentTime = 0;
         video.playbackRate = 1;
@@ -114,11 +153,16 @@ export default function FeedItem({ item, isFirst, isSecond = false }: Props) {
         setVideoReady(false);
         setPauseBadge(false);
         setFastBadge(false);
+        // 非アクティブの画面は進捗リセット
+        window.dispatchEvent(new CustomEvent("video-progress", { detail: { progress: 0 } }));
       }
     }, { threshold: PLAY_THRESHOLD });
     playObserver.observe(video);
-    return () => { playObserver.disconnect(); };
-  }, [playVideo, setVideoReady, setPauseBadge, setFastBadge]);
+    return () => {
+      playObserver.disconnect();
+      stopProgressLoop();
+    };
+  }, [playVideo, setVideoReady, setPauseBadge, setFastBadge, stopProgressLoop]);
 
   useEffect(() => {
     const el = containerRef.current;
@@ -154,10 +198,11 @@ export default function FeedItem({ item, isFirst, isSecond = false }: Props) {
     } else {
       video.pause();
       isPlayingRef.current = false;
+      stopProgressLoop();
       setPauseBadge(true);
       showOverlay("pause");
     }
-  }, [playVideo, showOverlay, setPauseBadge]);
+  }, [playVideo, showOverlay, setPauseBadge, stopProgressLoop]);
 
   const handleToggleMute = useCallback((e: React.MouseEvent | React.TouchEvent) => {
     e.stopPropagation();
@@ -169,13 +214,13 @@ export default function FeedItem({ item, isFirst, isSecond = false }: Props) {
       video.muted = false;
       isMutedRef.current = false;
       setIsMuted(false);
-      if (video.paused) { video.play().catch(() => {}); isPlayingRef.current = true; setPauseBadge(false); }
+      if (video.paused) { video.play().catch(() => {}); isPlayingRef.current = true; setPauseBadge(false); startProgressLoop(); }
     } else {
       video.muted = true;
       isMutedRef.current = true;
       setIsMuted(true);
     }
-  }, [setPauseBadge]);
+  }, [setPauseBadge, startProgressLoop]);
 
   const handleShare = useCallback((e: React.MouseEvent | React.TouchEvent) => {
     e.stopPropagation();

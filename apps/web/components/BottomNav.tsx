@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+import { useEffect, useRef, useCallback, useState } from "react";
 
 const NAV_ITEMS = [
   {
@@ -56,37 +57,120 @@ const NAV_ITEMS = [
   },
 ];
 
+// FeedItem から発火されるカスタムイベントの型定義
+declare global {
+  interface WindowEventMap {
+    "video-progress": CustomEvent<{ progress: number }>;
+    "video-seek": CustomEvent<{ ratio: number }>;
+  }
+}
+
 export default function BottomNav() {
-  const pathname = usePathname();
+  const pathname    = usePathname();
+  const isShortPage = pathname === "/" || pathname.startsWith("/search/feed");
+
+  const barRef       = useRef<HTMLDivElement>(null);
+  const trackRef     = useRef<HTMLDivElement>(null);
+  const isDragging   = useRef(false);
+  const [progress, setProgress] = useState(0);
+
+  // FeedItem からの進捗イベントを listen
+  useEffect(() => {
+    if (!isShortPage) return;
+    const handler = (e: CustomEvent<{ progress: number }>) => {
+      if (!isDragging.current) {
+        setProgress(e.detail.progress);
+      }
+    };
+    window.addEventListener("video-progress", handler);
+    return () => window.removeEventListener("video-progress", handler);
+  }, [isShortPage]);
+
+  // ドラッグ/タップでシークする共通処理
+  const seek = useCallback((clientX: number) => {
+    const track = trackRef.current;
+    if (!track) return;
+    const rect  = track.getBoundingClientRect();
+    const ratio = Math.min(1, Math.max(0, (clientX - rect.left) / rect.width));
+    setProgress(ratio);
+    window.dispatchEvent(new CustomEvent("video-seek", { detail: { ratio } }));
+  }, []);
+
+  // マウス ドラッグ
+  const handleMouseDown = useCallback((e: React.MouseEvent) => {
+    if (!isShortPage) return;
+    isDragging.current = true;
+    seek(e.clientX);
+    const onMove = (ev: MouseEvent) => seek(ev.clientX);
+    const onUp   = () => { isDragging.current = false; window.removeEventListener("mousemove", onMove); window.removeEventListener("mouseup", onUp); };
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onUp);
+  }, [isShortPage, seek]);
+
+  // タッチ ドラッグ
+  const handleTouchStart = useCallback((e: React.TouchEvent) => {
+    if (!isShortPage) return;
+    e.stopPropagation();
+    isDragging.current = true;
+    seek(e.touches[0].clientX);
+  }, [isShortPage, seek]);
+
+  const handleTouchMove = useCallback((e: React.TouchEvent) => {
+    if (!isDragging.current) return;
+    e.stopPropagation();
+    seek(e.touches[0].clientX);
+  }, [seek]);
+
+  const handleTouchEnd = useCallback(() => {
+    isDragging.current = false;
+  }, []);
 
   return (
     <nav className="bottom-nav" aria-label="メインナビゲーション">
+
+      {/* シークバー：ショート画面のみ表示 */}
+      {isShortPage && (
+        <div
+          ref={trackRef}
+          className="seekbar-track"
+          onMouseDown={handleMouseDown}
+          onTouchStart={handleTouchStart}
+          onTouchMove={handleTouchMove}
+          onTouchEnd={handleTouchEnd}
+          aria-label="再生位置"
+          role="slider"
+          aria-valuemin={0}
+          aria-valuemax={100}
+          aria-valuenow={Math.round(progress * 100)}
+        >
+          <div
+            ref={barRef}
+            className="seekbar-fill"
+            style={{ width: `${progress * 100}%` }}
+          />
+          <div
+            className="seekbar-thumb"
+            style={{ left: `${progress * 100}%` }}
+          />
+        </div>
+      )}
+
       {NAV_ITEMS.map((item) => {
         const isActive =
           (item.href === "/" ? pathname === "/" : pathname.startsWith(item.href)) ||
           item.extraActive.some((p) => pathname.startsWith(p));
-
         const icon = isActive ? item.iconFilled : item.iconOutline;
 
         if (isActive) {
           return (
-            <span
-              key={item.href}
-              className="bottom-nav-item bottom-nav-item--active"
-              aria-current="page"
-            >
+            <span key={item.href} className="bottom-nav-item bottom-nav-item--active" aria-current="page">
               <span className="bottom-nav-icon">{icon}</span>
               <span className="bottom-nav-label">{item.label}</span>
             </span>
           );
         }
-
         return (
-          <Link
-            key={item.href}
-            href={item.href}
-            className="bottom-nav-item"
-          >
+          <Link key={item.href} href={item.href} className="bottom-nav-item">
             <span className="bottom-nav-icon">{icon}</span>
             <span className="bottom-nav-label">{item.label}</span>
           </Link>
@@ -113,6 +197,76 @@ const navStyle = `
     -webkit-backdrop-filter: blur(12px);
     border-top: 1px solid rgba(255, 255, 255, 0.08);
     padding-bottom: 5px;
+  }
+
+  /* シークバートラック */
+  .seekbar-track {
+    position: absolute;
+    top: -10px;
+    left: 0;
+    right: 0;
+    height: 20px;
+    cursor: pointer;
+    -webkit-tap-highlight-color: transparent;
+    touch-action: none;
+    user-select: none;
+    z-index: 10;
+    display: flex;
+    align-items: center;
+  }
+
+  /* バー背景 */
+  .seekbar-track::before {
+    content: '';
+    position: absolute;
+    left: 0;
+    right: 0;
+    top: 50%;
+    transform: translateY(-50%);
+    height: 3px;
+    background: rgba(255, 255, 255, 0.2);
+    border-radius: 999px;
+  }
+
+  /* 進捗塗り */
+  .seekbar-fill {
+    position: absolute;
+    left: 0;
+    top: 50%;
+    transform: translateY(-50%);
+    height: 3px;
+    background: #fff;
+    border-radius: 999px;
+    pointer-events: none;
+    transition: width 0.1s linear;
+  }
+
+  /* ツマまみ */
+  .seekbar-thumb {
+    position: absolute;
+    top: 50%;
+    transform: translate(-50%, -50%) scale(0);
+    width: 14px;
+    height: 14px;
+    border-radius: 50%;
+    background: #fff;
+    pointer-events: none;
+    transition: transform 0.15s ease, left 0.1s linear;
+    box-shadow: 0 1px 4px rgba(0,0,0,0.5);
+  }
+
+  /* トラックにホバー/操作中はバーを太く、ツマまみを表示 */
+  .seekbar-track:hover .seekbar-fill,
+  .seekbar-track:active .seekbar-fill {
+    height: 5px;
+  }
+  .seekbar-track:hover .seekbar-thumb,
+  .seekbar-track:active .seekbar-thumb {
+    transform: translate(-50%, -50%) scale(1);
+  }
+  .seekbar-track:hover::before,
+  .seekbar-track:active::before {
+    height: 5px;
   }
 
   .bottom-nav-item {

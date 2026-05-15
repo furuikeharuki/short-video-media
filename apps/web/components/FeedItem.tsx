@@ -1,7 +1,6 @@
 "use client";
 
 import { useEffect, useRef, useCallback, useState } from "react";
-import Link from "next/link";
 import { useRouter } from "next/navigation";
 import type { MovieCard } from "@/lib/api/feed";
 
@@ -219,6 +218,12 @@ export default function FeedItem({ item, isFirst, isSecond = false }: Props) {
       navigator.clipboard.writeText(url).catch(() => {});
     }
   }, [item.slug, item.title]);
+
+  const handleDetail = useCallback((e: React.MouseEvent | React.TouchEvent) => {
+    e.stopPropagation();
+    e.preventDefault();
+    router.push(`/movies/${item.slug}`);
+  }, [router, item.slug]);
 
   const startLongPress = useCallback(() => {
     isLongPressRef.current = false;
@@ -450,11 +455,11 @@ export default function FeedItem({ item, isFirst, isSecond = false }: Props) {
             <span className="side-btn-label">共有</span>
           </button>
 
-          <Link
-            href={`/movies/${item.slug}`}
+          <button
             className="side-btn"
             aria-label="詳細を見る"
-            onClick={(e) => e.stopPropagation()}
+            onTouchEnd={handleDetail}
+            onClick={handleDetail}
           >
             <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
               <circle cx="12" cy="12" r="10"/>
@@ -462,7 +467,7 @@ export default function FeedItem({ item, isFirst, isSecond = false }: Props) {
               <line x1="12" y1="16" x2="12.01" y2="16"/>
             </svg>
             <span className="side-btn-label">詳細</span>
-          </Link>
+          </button>
 
           <a
             href={item.affiliate_url}

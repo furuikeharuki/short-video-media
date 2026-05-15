@@ -7,7 +7,7 @@ type Props = { searchParams: Promise<{ q?: string; genre?: string }> };
 
 export default async function SearchPage({ searchParams }: Props) {
   const { q, genre } = await searchParams;
-  const query  = q?.trim() ?? "";
+  const query    = q?.trim() ?? "";
   const genreTag = genre?.trim() ?? "";
 
   // タグ指定時: ジャンルフィルターでフィードを取得
@@ -27,7 +27,7 @@ export default async function SearchPage({ searchParams }: Props) {
         {items.length === 0 ? (
           <p style={styles.empty}>該当する作品が見つかりませんでした</p>
         ) : (
-          <SearchGrid items={items} />
+          <SearchGrid items={items} queryKey={`genre:${genreTag}`} />
         )}
         <style>{pageCSS}</style>
       </main>
@@ -60,7 +60,7 @@ export default async function SearchPage({ searchParams }: Props) {
       {items.length === 0 ? (
         <p style={styles.empty}>該当する作品が見つかりませんでした</p>
       ) : (
-        <SearchGrid items={items} />
+        <SearchGrid items={items} queryKey={`q:${query}`} />
       )}
       <style>{pageCSS}</style>
     </main>

@@ -5,9 +5,10 @@ import { useSearchParams } from "next/navigation";
 import FeedItem from "@/components/FeedItem";
 import type { MovieCard } from "@/lib/api/feed";
 
-const STORAGE_KEY  = "search_feed_items";
-const WINDOW_SIZE  = 2;
-const APPEND_AHEAD = 5;
+const STORAGE_KEY     = "search_feed_items";
+const STORAGE_KEY_IDX = "search_feed_index";
+const WINDOW_SIZE     = 2;
+const APPEND_AHEAD    = 5;
 
 function shuffle<T>(arr: T[]): T[] {
   const a = [...arr];
@@ -27,13 +28,20 @@ export default function SearchFeedPage() {
   const currentIdxRef = useRef(0);
   const wheelLockRef  = useRef(false);
 
-  // タッチ追跡は window にバインドするため ref 不要
   const touchStartYRef = useRef(0);
   const touchTimeRef   = useRef(0);
 
   const [currentIndex, setCurrentIndex] = useState(0);
   const [windowItems,  setWindowItems]  = useState<MovieCard[]>([]);
   const windowStartRef = useRef(0);
+
+  const [dragPx, setDragPx] = useState(0);
+  const dragStartY  = useRef(0);
+  const isDragging  = useRef(false);
+
+  const saveIndex = useCallback((idx: number) => {
+    try { sessionStorage.setItem(STORAGE_KEY_IDX, String(idx)); } catch { /* ignore */ }
+  }, []);
 
   const updateWindow = useCallback((idx: number) => {
     const all   = allItemsRef.current;
@@ -58,14 +66,29 @@ export default function SearchFeedPage() {
       if (!raw) return;
       const arr: MovieCard[] = JSON.parse(raw);
       if (arr.length === 0) return;
-      const selected = (selectedId ? arr.find((m) => m.id === selectedId) : null) ?? arr[0];
-      const rest     = shuffle(arr.filter((m) => m.id !== selected.id));
-      const initial  = [selected, ...rest];
-      baseItemsRef.current  = arr;
-      allItemsRef.current   = initial;
-      currentIdxRef.current = 0;
-      setCurrentIndex(0);
-      updateWindow(0);
+
+      baseItemsRef.current = arr;
+
+      // selectedId がある場合（グリッドからのタップ）→ そのアイテムを先頭に
+      if (selectedId) {
+        const selected = arr.find((m) => m.id === selectedId) ?? arr[0];
+        const rest     = shuffle(arr.filter((m) => m.id !== selected.id));
+        allItemsRef.current   = [selected, ...rest];
+        currentIdxRef.current = 0;
+        setCurrentIndex(0);
+        saveIndex(0);
+        updateWindow(0);
+        return;
+      }
+
+      // 「戻る」場合（selectedId なし）→ 保存済み順番・位置を復元
+      const savedIdx = parseInt(sessionStorage.getItem(STORAGE_KEY_IDX) ?? "0", 10);
+      // items は順番を保持したまま使う（シャッフルしない）
+      allItemsRef.current   = arr;
+      const restoredIdx = Math.min(savedIdx, arr.length - 1);
+      currentIdxRef.current = restoredIdx;
+      setCurrentIndex(restoredIdx);
+      updateWindow(restoredIdx);
     } catch { /* ignore */ }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -77,7 +100,8 @@ export default function SearchFeedPage() {
     currentIdxRef.current = next;
     setCurrentIndex(next);
     updateWindow(next);
-  }, [maybeAppend, updateWindow]);
+    saveIndex(next);
+  }, [maybeAppend, updateWindow, saveIndex]);
 
   const goPrev = useCallback(() => {
     const next = Math.max(0, currentIdxRef.current - 1);
@@ -85,15 +109,33 @@ export default function SearchFeedPage() {
     currentIdxRef.current = next;
     setCurrentIndex(next);
     updateWindow(next);
-  }, [updateWindow]);
+    saveIndex(next);
+  }, [updateWindow, saveIndex]);
 
-  // window にバインドすることで FeedItem の touch-action:pan-y を跨いで検知できる
+  // タッチ・ホイール (window バインド)
   useEffect(() => {
     const onTouchStart = (e: TouchEvent) => {
       touchStartYRef.current = e.touches[0].clientY;
       touchTimeRef.current   = Date.now();
+      isDragging.current  = true;
+      dragStartY.current  = e.touches[0].clientY;
+      setDragPx(0);
+    };
+    const onTouchMove = (e: TouchEvent) => {
+      if (!isDragging.current) return;
+      const dy = e.touches[0].clientY - dragStartY.current;
+      const atEnd = currentIdxRef.current >= allItemsRef.current.length - 1;
+      const atTop = currentIdxRef.current <= 0;
+      if ((dy > 0 && atEnd) || (dy < 0 && atTop)) {
+        setDragPx(dy * 0.35);
+      } else {
+        setDragPx(dy);
+      }
     };
     const onTouchEnd = (e: TouchEvent) => {
+      if (!isDragging.current) return;
+      isDragging.current = false;
+      setDragPx(0);
       const dy = touchStartYRef.current - e.changedTouches[0].clientY;
       const dt = Date.now() - touchTimeRef.current;
       if (Math.abs(dy) > 40 && dt < 500) {
@@ -101,7 +143,6 @@ export default function SearchFeedPage() {
       }
     };
     const onWheel = (e: WheelEvent) => {
-      // フィードコンテナの中のホイールのみ処理
       const target = e.target as HTMLElement;
       if (!target.closest(".feed-container")) return;
       e.preventDefault();
@@ -112,10 +153,12 @@ export default function SearchFeedPage() {
     };
 
     window.addEventListener("touchstart", onTouchStart, { passive: true });
+    window.addEventListener("touchmove",  onTouchMove,  { passive: true });
     window.addEventListener("touchend",   onTouchEnd,   { passive: true });
     window.addEventListener("wheel",      onWheel,      { passive: false, capture: true });
     return () => {
       window.removeEventListener("touchstart", onTouchStart);
+      window.removeEventListener("touchmove",  onTouchMove);
       window.removeEventListener("touchend",   onTouchEnd);
       window.removeEventListener("wheel",      onWheel, { capture: true } as EventListenerOptions);
     };
@@ -129,19 +172,26 @@ export default function SearchFeedPage() {
     );
   }
 
+  const isDraggingState = dragPx !== 0;
+
   return (
     <>
       <div className="feed-container">
         {windowItems.map((item, i) => {
           const absIndex = windowStartRef.current + i;
           const offset   = absIndex - currentIndex;
+          const transform  = `translateY(calc(${offset * 100}% + ${dragPx}px))`;
+          const transition = isDraggingState
+            ? "none"
+            : "transform 0.35s cubic-bezier(0.25,1,0.5,1)";
           return (
             <div
               key={`${item.id}-${absIndex}`}
               className="feed-slide"
               style={{
-                transform:     `translateY(${offset * 100}%)`,
-                zIndex:        offset === 0 ? 1 : 0,
+                transform,
+                transition,
+                zIndex:        offset === 0 ? 2 : 1,
                 pointerEvents: offset === 0 ? "auto" : "none",
               }}
             >
@@ -182,7 +232,6 @@ const feedStyle = `
   .feed-slide {
     position: absolute;
     inset: 0;
-    transition: transform 0.32s cubic-bezier(0.4, 0, 0.2, 1);
     will-change: transform;
   }
 

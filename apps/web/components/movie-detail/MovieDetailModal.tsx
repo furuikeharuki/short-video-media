@@ -118,12 +118,14 @@ export default function MovieDetailModal({ slug, onClose }: Props) {
 
   return (
     <>
+      {/* Backdrop */}
       <div
         className={`mdm-backdrop ${visible ? "mdm-backdrop--visible" : ""}`}
         onClick={handleClose}
         aria-hidden="true"
       />
 
+      {/* Sheet: ヘッダー直下から下端まで、角丸なし・隙間なし */}
       <div
         ref={sheetRef}
         role="dialog"
@@ -134,10 +136,6 @@ export default function MovieDetailModal({ slug, onClose }: Props) {
         onTouchMove={onTouchMove}
         onTouchEnd={onTouchEnd}
       >
-        <div className="mdm-handle-wrap">
-          <div className="mdm-handle" />
-        </div>
-
         <button
           className="mdm-back"
           onClick={handleClose}
@@ -183,18 +181,14 @@ export default function MovieDetailModal({ slug, onClose }: Props) {
 
         .mdm-sheet {
           position: fixed;
-          /*
-            border-radius: 16px の觧圆分だけ top を上にずらすことで
-            ヘッダーバーとの隙間を埋める。
-            觧圆は overflow:hidden の親要素でクリップされるため
-            実際の表示場所は var(--header-h) の直下から始まる。
-          */
-          top: calc(var(--header-h, 52px) - 16px);
-          left: 0; right: 0; bottom: 0;
+          /* ヘッダー直下にぴったり密着。角丸なし。 */
+          top: var(--header-h, 52px);
+          left: 0;
+          right: 0;
+          bottom: 0;
           z-index: 501;
           background: #0a0a0a;
-          border-radius: 16px 16px 0 0;
-          overflow: hidden;
+          border-radius: 0;
           display: flex;
           flex-direction: column;
           transform: translateY(100%);
@@ -204,22 +198,9 @@ export default function MovieDetailModal({ slug, onClose }: Props) {
         }
         .mdm-sheet--visible { transform: translateY(0); }
 
-        /* 觧圆分上にくる16pxをpadding-topで常に確保 */
-        .mdm-handle-wrap {
-          display: flex; align-items: center; justify-content: center;
-          padding: 26px 0 4px;
-          flex-shrink: 0;
-          cursor: grab;
-        }
-        .mdm-handle {
-          width: 36px; height: 4px;
-          background: rgba(255,255,255,0.25);
-          border-radius: 999px;
-        }
-
         .mdm-back {
           position: absolute;
-          top: 32px;
+          top: 16px;
           left: 16px;
           z-index: 10;
           display: flex;

@@ -467,15 +467,18 @@ const itemStyle = `
     inset: 0;
     overflow: hidden;
     background: #000;
+    display: flex;
+    align-items: center;
+    justify-content: center;
   }
   .feed-video {
-    position: absolute;
-    inset: 0;
-    width: 100%;
-    height: 100%;
-    object-fit: contain;
-    object-position: center center;
+    position: relative;
+    max-width: 100%;
+    max-height: 100%;
+    width: auto;
+    height: auto;
     border-radius: 8px;
+    display: block;
   }
   .overlay-wrap {
     position: absolute;
@@ -703,6 +706,12 @@ const itemStyle = `
     .shimmer-inner  { animation: none; }
     .skip-ripple    { animation: none; opacity: 0; }
     .action-overlay { animation: none; opacity: 0; }
+  }
+  @media (max-width: 767px) {
+    .video-bg {
+      align-items: flex-start;
+      padding-top: 24px;
+    }
   }
   @media (min-width: 768px) {
     .bottom-bar {

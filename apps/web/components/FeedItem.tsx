@@ -22,6 +22,12 @@ const LONG_PRESS_MS = 500;
 const TAP_MOVE_THRESHOLD = 10;
 const PLAY_THRESHOLD = 0.85;
 
+// side-actions の右端からの占有幅:
+// right: 12px + width: 56px(icon26 + padding余白) + gap: 8px = 76px
+const SIDE_ACTIONS_RIGHT = 12;
+const SIDE_ACTIONS_WIDTH = 56;
+const INFO_RIGHT = SIDE_ACTIONS_RIGHT + SIDE_ACTIONS_WIDTH + 8; // 76px
+
 const isLandscapeScreen = () => window.innerWidth > window.innerHeight;
 
 let globalUserGestured = false;
@@ -604,7 +610,7 @@ export default function FeedItem({ item, isFirst, isSecond = false }: Props) {
         </a>
       </div>
 
-      {/* 左下情報エリア：アイコン列の左に収まる */}
+      {/* 左下情報エリア：side-actionsの左端までに収まる */}
       <div className="info-overlay">
         {item.genres && item.genres.length > 0 && (
           <div className="genre-chips" onClick={(e) => e.stopPropagation()}>
@@ -725,10 +731,12 @@ const itemStyle = `
   }
 
   /* ===== 右下縦並びアクションボタン ===== */
+  /* widthを明示して幅を固定化。ラベルが伸びても容器幅が変わらない */
   .side-actions {
     position: absolute;
-    right: clamp(8px, 2vw, 16px);
+    right: ${SIDE_ACTIONS_RIGHT}px;
     bottom: clamp(16px, 4vh, 32px);
+    width: ${SIDE_ACTIONS_WIDTH}px;
     display: flex;
     flex-direction: column;
     align-items: center;
@@ -744,6 +752,7 @@ const itemStyle = `
     border: none;
     cursor: pointer;
     padding: 0;
+    width: 100%;
     -webkit-tap-highlight-color: transparent;
     touch-action: none;
     text-decoration: none;
@@ -755,22 +764,27 @@ const itemStyle = `
   .side-btn--buy svg { stroke: #ff4d7d; }
   .side-btn-label {
     color: #fff;
-    font-size: clamp(9px, 1.1vw, 11px);
+    font-size: 10px;
     font-weight: 600;
     letter-spacing: 0.02em;
     text-shadow: 0 1px 3px rgba(0,0,0,0.9);
     white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 100%;
   }
 
   /* ===== 左下情報エリア ===== */
-  /* side-actionsの幅(24px icon + 8px margin両側) = 約 56px を避ける */
+  /* right = side-actionsのright(${SIDE_ACTIONS_RIGHT}px) + width(${SIDE_ACTIONS_WIDTH}px) + 間蹝8px = ${INFO_RIGHT}px */
   .info-overlay {
     position: absolute;
     bottom: clamp(16px, 4vh, 32px);
-    left: clamp(10px, 3vw, 20px);
-    right: calc(clamp(8px, 2vw, 16px) + 44px);
+    left: 12px;
+    right: ${INFO_RIGHT}px;
     z-index: 30;
     pointer-events: auto;
+    /* 子要素の横幅溢れを必ず防ぐ */
+    overflow: hidden;
   }
   .item-title {
     font-size: clamp(13px, 3.5vw, 16px);
@@ -783,6 +797,7 @@ const itemStyle = `
     -webkit-line-clamp: 3;
     -webkit-box-orient: vertical;
     overflow: hidden;
+    word-break: break-all;
   }
   .item-actress {
     font-size: clamp(11px, 2.8vw, 13px);
@@ -804,6 +819,9 @@ const itemStyle = `
     flex-wrap: wrap;
     gap: 4px;
     margin-bottom: 6px;
+    /* タグが多いときは最大4行まで表示して以降を非表示 */
+    max-height: calc(1.8em * 4 + 4px * 3);
+    overflow: hidden;
   }
   .genre-chip {
     padding: 3px 10px;
@@ -827,7 +845,7 @@ const itemStyle = `
   .scroll-hint {
     position: absolute;
     bottom: clamp(100px, 18vh, 160px);
-    right: calc(clamp(8px, 2vw, 16px) + 52px);
+    right: ${INFO_RIGHT}px;
     display: flex;
     flex-direction: column;
     align-items: center;
@@ -884,23 +902,22 @@ const itemStyle = `
     .action-overlay { animation: none; opacity: 0; }
   }
 
-  /* ===== タブレット以上(768px以上)の追加調整 ===== */
+  /* ===== タブレット以上(768px+) ===== */
   @media (min-width: 768px) {
     .side-actions {
-      right: 20px;
+      right: 16px;
       bottom: 40px;
+      width: 60px;
       gap: 24px;
     }
-    .side-btn svg {
-      width: 28px;
-      height: 28px;
-    }
+    .side-btn svg { width: 28px; height: 28px; }
     .info-overlay {
       bottom: 40px;
-      left: 24px;
-      right: calc(20px + 52px);
+      left: 20px;
+      right: 84px; /* 16px + 60px + 8px */
     }
     .item-title   { font-size: 17px; }
     .item-actress { font-size: 14px; }
+    .scroll-hint  { right: 84px; }
   }
 `;

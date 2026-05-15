@@ -24,9 +24,10 @@ const PLAY_THRESHOLD = 0.85;
 
 // side-actions の右端からの占有幅:
 // right: 4px + width: 56px + gap: 8px = 68px
+// info-overlay はさらに +20px 余白を取る = 88px
 const SIDE_ACTIONS_RIGHT = 4;
 const SIDE_ACTIONS_WIDTH = 56;
-const INFO_RIGHT = SIDE_ACTIONS_RIGHT + SIDE_ACTIONS_WIDTH + 8; // 68px
+const INFO_RIGHT = SIDE_ACTIONS_RIGHT + SIDE_ACTIONS_WIDTH + 8 + 20; // 88px
 const INFO_LEFT = 12;
 
 const isLandscapeScreen = () => window.innerWidth > window.innerHeight;
@@ -775,23 +776,16 @@ const itemStyle = `
   }
 
   /* ===== 左下情報エリア ===== */
-  /*
-   * ここがkey修正:
-   * position:absoluteの要素はleft+rightだけでは変な子要素に幅を伝えられないケースがある。
-   * left+rightを指定すると同時にmax-widthも設定し、
-   * 子要素は100%から決してはみ出ないようにmin-width:0を設定する。
-   */
+  /* INFO_RIGHT = 4(side right) + 56(width) + 8(gap) + 20(余白) = 88px */
   .info-overlay {
     position: absolute;
     bottom: clamp(16px, 4vh, 32px);
     left: ${INFO_LEFT}px;
     right: ${INFO_RIGHT}px;
-    /* widthを明示することで子要素が迷わずに折り返せるようになる */
     width: calc(100% - ${INFO_LEFT}px - ${INFO_RIGHT}px);
     box-sizing: border-box;
     z-index: 30;
     pointer-events: auto;
-    /* 子要素が相対化されたときに幅を超えないように */
     overflow: hidden;
   }
   .item-title {
@@ -805,7 +799,6 @@ const itemStyle = `
     -webkit-line-clamp: 3;
     -webkit-box-orient: vertical;
     overflow: hidden;
-    /* 幅を親に呪縛する */
     width: 100%;
     word-break: break-all;
   }
@@ -830,7 +823,6 @@ const itemStyle = `
     flex-wrap: wrap;
     gap: 4px;
     margin-bottom: 6px;
-    /* 幅を親の100%に拘束し、タグが超えた分は折り返す */
     width: 100%;
     max-height: calc(1.8em * 3 + 4px * 2);
     overflow: hidden;
@@ -844,7 +836,6 @@ const itemStyle = `
     font-size: clamp(10px, 2.5vw, 12px);
     font-weight: 600;
     cursor: pointer;
-    /* タグ内の文字は折り返さない、タグ列全体は親幅で折り返す */
     white-space: nowrap;
     flex-shrink: 0;
     backdrop-filter: blur(6px);
@@ -928,11 +919,11 @@ const itemStyle = `
     .info-overlay {
       bottom: 40px;
       left: 20px;
-      right: 76px;
-      width: calc(100% - 20px - 76px);
+      right: 96px; /* 8 + 60 + 8 + 20 */
+      width: calc(100% - 20px - 96px);
     }
     .item-title   { font-size: 17px; }
     .item-actress { font-size: 14px; }
-    .scroll-hint  { right: 76px; }
+    .scroll-hint  { right: 96px; }
   }
 `;

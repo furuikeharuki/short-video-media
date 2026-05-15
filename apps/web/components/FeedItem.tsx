@@ -23,10 +23,10 @@ const TAP_MOVE_THRESHOLD = 10;
 const PLAY_THRESHOLD = 0.85;
 
 // side-actions の右端からの占有幅:
-// right: 12px + width: 56px(icon26 + padding余白) + gap: 4px = 72px
-const SIDE_ACTIONS_RIGHT = 12;
+// right: 4px + width: 56px(icon26 + padding余白) + gap: 8px = 68px
+const SIDE_ACTIONS_RIGHT = 4;
 const SIDE_ACTIONS_WIDTH = 56;
-const INFO_RIGHT = SIDE_ACTIONS_RIGHT + SIDE_ACTIONS_WIDTH + 4; // 72px
+const INFO_RIGHT = SIDE_ACTIONS_RIGHT + SIDE_ACTIONS_WIDTH + 8; // 68px
 
 const isLandscapeScreen = () => window.innerWidth > window.innerHeight;
 
@@ -731,7 +731,6 @@ const itemStyle = `
   }
 
   /* ===== 右下縦並びアクションボタン ===== */
-  /* widthを明示して幅を固定化。ラベルが伸びても容器幅が変わらない */
   .side-actions {
     position: absolute;
     right: ${SIDE_ACTIONS_RIGHT}px;
@@ -775,7 +774,7 @@ const itemStyle = `
   }
 
   /* ===== 左下情報エリア ===== */
-  /* right = side-actionsのright(${SIDE_ACTIONS_RIGHT}px) + width(${SIDE_ACTIONS_WIDTH}px) + 間蹝4px = ${INFO_RIGHT}px */
+  /* right = side-actions right(${SIDE_ACTIONS_RIGHT}px) + width(${SIDE_ACTIONS_WIDTH}px) + 隙間8px = ${INFO_RIGHT}px */
   .info-overlay {
     position: absolute;
     bottom: clamp(16px, 4vh, 32px);
@@ -903,7 +902,7 @@ const itemStyle = `
   /* ===== タブレット以上(768px+) ===== */
   @media (min-width: 768px) {
     .side-actions {
-      right: 16px;
+      right: 8px;
       bottom: 40px;
       width: 60px;
       gap: 24px;
@@ -912,10 +911,10 @@ const itemStyle = `
     .info-overlay {
       bottom: 40px;
       left: 20px;
-      right: 80px; /* 16px + 60px + 4px */
+      right: 76px; /* 8px + 60px + 8px */
     }
     .item-title   { font-size: 17px; }
     .item-actress { font-size: 14px; }
-    .scroll-hint  { right: 80px; }
+    .scroll-hint  { right: 76px; }
   }
 `;

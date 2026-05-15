@@ -476,6 +476,7 @@ const itemStyle = `
     object-fit: contain;
     object-position: center center;
     border-radius: 8px;
+    box-sizing: border-box;
   }
   .overlay-wrap {
     position: absolute;
@@ -705,9 +706,8 @@ const itemStyle = `
     .action-overlay { animation: none; opacity: 0; }
   }
   @media (max-width: 767px) {
-    .video-bg {
-      top: -60px;
-      bottom: 60px;
+    .feed-video {
+      padding-bottom: 60px;
     }
   }
   @media (min-width: 768px) {

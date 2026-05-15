@@ -21,7 +21,6 @@ const LONG_PRESS_MS = 500;
 const TAP_MOVE_THRESHOLD = 10;
 const PLAY_THRESHOLD = 0.85;
 
-// 動画領域の下端オフセットのフォールバック値
 const VIDEO_BOTTOM_OFFSET = 190;
 
 const isLandscapeScreen = () => window.innerWidth > window.innerHeight;
@@ -153,7 +152,6 @@ export default function FeedItem({ item, isFirst, isSecond = false }: Props) {
     if (!section || !video) return;
 
     const bottomBarH   = bottomBar ? bottomBar.offsetHeight : VIDEO_BOTTOM_OFFSET;
-    // bottom-bar は bottom:0 に居るのでオフセット = そのままの高さ
     const bottomOffset = bottomBarH;
 
     const videoTop    = V_PADDING_TOP;
@@ -519,10 +517,7 @@ export default function FeedItem({ item, isFirst, isSecond = false }: Props) {
         </div>
       )}
 
-      {/* ===== 下部レイアウト: Grid で info と side-actions を並べる ===== */}
       <div ref={bottomBarRef} className="bottom-bar">
-
-        {/* 左: 情報エリア */}
         <div className="info-overlay" onClick={(e) => e.stopPropagation()}>
           {item.genres && item.genres.length > 0 && (
             <div className="genre-chips" onClick={(e) => e.stopPropagation()}>
@@ -543,7 +538,6 @@ export default function FeedItem({ item, isFirst, isSecond = false }: Props) {
           )}
         </div>
 
-        {/* 右: アクションボタン縦並び */}
         <div className="side-actions" onClick={(e) => e.stopPropagation()} onTouchStart={(e) => e.stopPropagation()}>
           <button
             className="side-btn"
@@ -725,11 +719,6 @@ const itemStyle = `
     text-shadow: 0 1px 4px rgba(0,0,0,0.5);
   }
 
-  /* ===== 下部レイアウトコンテナ (Grid) ===== */
-  /*
-   * bottom:0 に固定して、padding-bottom で画面下端からの遠ざかりを確保。
-   * 高さは内容に応じて自然に伸びるのでタグが何行になっても下が切れない。
-   */
   .bottom-bar {
     position: absolute;
     bottom: 0;
@@ -744,7 +733,6 @@ const itemStyle = `
     pointer-events: none;
   }
 
-  /* ===== 左列: 情報エリア ===== */
   .info-overlay {
     min-width: 0;
     overflow: hidden;
@@ -759,7 +747,7 @@ const itemStyle = `
     text-shadow: 0 1px 6px rgba(0,0,0,0.8);
     margin: 0 0 4px;
     display: -webkit-box;
-    -webkit-line-clamp: 3;
+    -webkit-line-clamp: 2;
     -webkit-box-orient: vertical;
     overflow: hidden;
     word-break: break-all;
@@ -774,11 +762,6 @@ const itemStyle = `
     text-overflow: ellipsis;
   }
 
-  /* ===== ジャンルタグ ===== */
-  /*
-   * max-height 制限を撤廃し、何行でも全表示。
-   * bottom-bar を bottom:0 に置いたので下が切れることはない。
-   */
   .genre-chips {
     display: flex;
     flex-wrap: wrap;
@@ -804,7 +787,6 @@ const itemStyle = `
   }
   .genre-chip:active { background: rgba(255,255,255,0.25); }
 
-  /* ===== 右列: アクションボタン縦並び ===== */
   .side-actions {
     width: 56px;
     display: flex;
@@ -845,7 +827,6 @@ const itemStyle = `
     max-width: 100%;
   }
 
-  /* ===== スクロールヒント ===== */
   .scroll-hint {
     position: absolute;
     bottom: clamp(100px, 18vh, 160px);
@@ -868,7 +849,6 @@ const itemStyle = `
     50%       { transform: translateY(6px); }
   }
 
-  /* ===== skip ripple ===== */
   .skip-ripple {
     position: absolute;
     transform: translate(-50%, -50%);
@@ -898,7 +878,6 @@ const itemStyle = `
     100% { opacity: 0; transform: translate(-50%, -50%) scale(1.35); }
   }
 
-  /* ===== reduced motion ===== */
   @media (prefers-reduced-motion: reduce) {
     .shimmer-inner  { animation: none; }
     .scroll-hint    { animation: none; }
@@ -906,7 +885,6 @@ const itemStyle = `
     .action-overlay { animation: none; opacity: 0; }
   }
 
-  /* ===== タブレット以上(768px+) ===== */
   @media (min-width: 768px) {
     .bottom-bar {
       padding: 0 8px clamp(20px, 5vh, 40px) 20px;

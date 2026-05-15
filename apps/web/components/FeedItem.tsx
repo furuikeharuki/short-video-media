@@ -737,7 +737,7 @@ const itemStyle = `
     min-width: 0;
     overflow: hidden;
     pointer-events: auto;
-    padding-right: 8px;
+    padding-right: 0;
   }
   .item-title {
     font-size: clamp(13px, 3.5vw, 16px);
@@ -788,7 +788,7 @@ const itemStyle = `
   .genre-chip:active { background: rgba(255,255,255,0.25); }
 
   .side-actions {
-    width: 56px;
+    width: 53px;
     display: flex;
     flex-direction: column;
     align-items: center;

@@ -209,7 +209,7 @@ const styles: Record<string, React.CSSProperties> = {
   },
   content: {
     padding: '20px 16px',
-    paddingBottom: 'calc(var(--bottom-nav-h, 56px) + env(safe-area-inset-bottom, 0px) + 10px)' as unknown as string,
+    paddingBottom: 'calc(var(--bottom-nav-h, 56px) + env(safe-area-inset-bottom, 0px) + 24px)' as unknown as string,
     width: '100%',
     boxSizing: 'border-box' as const,
   },
@@ -254,7 +254,11 @@ const styles: Record<string, React.CSSProperties> = {
 
 const pageCSS = `
   *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
-  html, body { background: #0a0a0a !important; overflow: hidden !important; }
+  html, body {
+    background: #0a0a0a !important;
+    overflow: visible !important;
+    height: auto !important;
+  }
   .affiliate-btn {
     display: flex; align-items: center; justify-content: center;
     width: 100%; min-height: 52px; padding: 0 16px;

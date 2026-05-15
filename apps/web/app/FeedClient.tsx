@@ -125,10 +125,11 @@ export default function FeedClient() {
       const dy = e.touches[0].clientY - dragStartY.current;
       const atEnd = currentIdxRef.current >= allItemsRef.current.length - 1;
       const atTop = currentIdxRef.current <= 0;
+      // 端以外は全スライド追従させる（隣が見えるように dragPx を常に更新）
       if ((dy > 0 && atEnd) || (dy < 0 && atTop)) {
         setDragPx(dy * 0.35);
       } else {
-        setDragPx(0);
+        setDragPx(dy);
       }
     };
 
@@ -178,6 +179,8 @@ export default function FeedClient() {
   const showEmpty   = isEmpty && !isLoading;
   const showLoading = isLoading || (windowItems.length === 0 && !isEmpty);
 
+  const isDraggingState = dragPx !== 0;
+
   return (
     <div ref={containerRef} className="feed-container">
       {showEmpty ? (
@@ -192,22 +195,25 @@ export default function FeedClient() {
         windowItems.map((item, i) => {
           const absIndex = windowStartRef.current + i;
           const offset   = absIndex - currentIndex;
-          const isActive = offset === 0;
-          const transform = isActive
-            ? `translateY(calc(${offset * 100}% + ${dragPx}px))`
-            : `translateY(${offset * 100}%)`;
+
+          // dragPx を全スライドに適用して連動させる
+          const transform = `translateY(calc(${offset * 100}% + ${dragPx}px))`;
+
+          // ドラッグ中はアニメーション無効、離した瞬間にスナップ
+          const transition = isDraggingState
+            ? "none"
+            : "transform 0.35s cubic-bezier(0.25,1,0.5,1)";
+
           return (
             <div
               key={`${item.id}-${absIndex}`}
               className="feed-slide"
               style={{
                 transform,
-                transition: isActive && dragPx === 0
-                  ? "transform 0.35s cubic-bezier(0.25,1,0.5,1)"
-                  : isActive ? "none" : undefined,
-                zIndex:        isActive ? 2 : 1,
-                pointerEvents: isActive ? "auto" : "none",
-                visibility:    isActive ? "visible" : "hidden",
+                transition,
+                zIndex:        offset === 0 ? 2 : 1,
+                pointerEvents: offset === 0 ? "auto" : "none",
+                // visibility なし：非アクティブスライドも常時表示されスクロール中に覚ぎる
               }}
             >
               <FeedItem

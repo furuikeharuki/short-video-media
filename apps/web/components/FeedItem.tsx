@@ -23,8 +23,6 @@ const PLAY_THRESHOLD = 0.85;
 
 const VIDEO_BOTTOM_OFFSET = 190;
 
-const isLandscapeScreen = () => window.innerWidth > window.innerHeight;
-
 let globalUserGestured = false;
 
 function calcRenderedRect(
@@ -217,14 +215,9 @@ export default function FeedItem({ item, isFirst, isSecond = false }: Props) {
     const video   = videoRef.current;
     const section = sectionRef.current;
     if (!video || !section) return;
-    let fit: "cover" | "contain";
-    if (isLandscapeScreen()) {
-      fit = "contain";
-    } else {
-      const videoAspect  = video.videoWidth / video.videoHeight;
-      const screenAspect = section.offsetWidth / section.offsetHeight;
-      fit = videoAspect <= screenAspect ? "cover" : "contain";
-    }
+    const videoAspect  = video.videoWidth / video.videoHeight;
+    const screenAspect = section.offsetWidth / section.offsetHeight;
+    const fit: "cover" | "contain" = videoAspect <= screenAspect ? "cover" : "contain";
     objectFitRef.current = fit;
     calcVideoArea(fit);
   }, [calcVideoArea]);

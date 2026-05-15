@@ -1,6 +1,5 @@
 "use client";
 
-import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { FALLBACK_TAGS } from "@/lib/api/tags";
@@ -50,14 +49,23 @@ export default function Header() {
     [router]
   );
 
+  const handleLogoClick = useCallback(() => {
+    window.location.href = "/";
+  }, []);
+
   return (
     <header className="site-header">
-      <Link href="/" className="header-logo" aria-label="トップへ戻る">
+      <button
+        type="button"
+        className="header-logo"
+        aria-label="トップへ戻る（リロード）"
+        onClick={handleLogoClick}
+      >
         <span className="header-logo-text">
           <span className="logo-av">AV</span>
           <span className="logo-shorts"> Shorts</span>
         </span>
-      </Link>
+      </button>
 
       <div className="header-actions">
         <button
@@ -156,8 +164,20 @@ export default function Header() {
   );
 }
 
-/* 購入ボタン (.btn-buy) と同じ #e91e63 に統一 */
 const logoStyle = `
+  .header-logo {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    background: none;
+    border: none;
+    color: #fff;
+    cursor: pointer;
+    padding: 0;
+    min-height: 44px;
+    flex-shrink: 0;
+    -webkit-tap-highlight-color: transparent;
+  }
   .header-logo-text {
     font-size: 20px;
     font-weight: 800;

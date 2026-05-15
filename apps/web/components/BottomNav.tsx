@@ -7,28 +7,45 @@ const NAV_ITEMS = [
   {
     label: "ホーム",
     href: "/home",
-    icon: (
+    iconOutline: (
       <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
         <path d="M3 9.5L12 3l9 6.5V20a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V9.5z"/>
         <path d="M9 21V12h6v9"/>
+      </svg>
+    ),
+    iconFilled: (
+      <svg width="24" height="24" viewBox="0 0 24 24" fill="currentColor" stroke="none">
+        <path d="M12 2.5L2 9.2V21a1 1 0 0 0 1 1h6v-8h6v8h6a1 1 0 0 0 1-1V9.2L12 2.5z"/>
       </svg>
     ),
   },
   {
     label: "ショート",
     href: "/",
-    icon: (
+    iconOutline: (
       <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
         <rect x="4" y="2" width="16" height="20" rx="2"/>
         <polygon points="10,8 16,12 10,16" fill="currentColor" stroke="none"/>
+      </svg>
+    ),
+    iconFilled: (
+      <svg width="24" height="24" viewBox="0 0 24 24" fill="currentColor" stroke="none">
+        <rect x="4" y="2" width="16" height="20" rx="2"/>
+        <polygon points="10,8 16,12 10,16" fill="#000"/>
       </svg>
     ),
   },
   {
     label: "マイページ",
     href: "/mypage",
-    icon: (
+    iconOutline: (
       <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+        <circle cx="12" cy="8" r="4"/>
+        <path d="M4 20c0-4 3.6-7 8-7s8 3 8 7"/>
+      </svg>
+    ),
+    iconFilled: (
+      <svg width="24" height="24" viewBox="0 0 24 24" fill="currentColor" stroke="none">
         <circle cx="12" cy="8" r="4"/>
         <path d="M4 20c0-4 3.6-7 8-7s8 3 8 7"/>
       </svg>
@@ -52,7 +69,9 @@ export default function BottomNav() {
             className={`bottom-nav-item${isActive ? " bottom-nav-item--active" : ""}`}
             aria-current={isActive ? "page" : undefined}
           >
-            <span className="bottom-nav-icon">{item.icon}</span>
+            <span className="bottom-nav-icon">
+              {isActive ? item.iconFilled : item.iconOutline}
+            </span>
             <span className="bottom-nav-label">{item.label}</span>
           </Link>
         );
@@ -77,7 +96,6 @@ const navStyle = `
     backdrop-filter: blur(12px);
     -webkit-backdrop-filter: blur(12px);
     border-top: 1px solid rgba(255, 255, 255, 0.08);
-    /* iOS Safari のホームバー対応 */
     padding-bottom: env(safe-area-inset-bottom);
   }
 
@@ -97,14 +115,6 @@ const navStyle = `
 
   .bottom-nav-item--active {
     color: #fff;
-  }
-
-  .bottom-nav-item--active .bottom-nav-icon svg {
-    stroke: var(--accent, #E8003D);
-  }
-
-  .bottom-nav-item--active .bottom-nav-label {
-    color: var(--accent, #E8003D);
   }
 
   .bottom-nav-icon {

@@ -7,6 +7,7 @@ const NAV_ITEMS = [
   {
     label: "ホーム",
     href: "/home",
+    extraActive: [] as string[],
     iconOutline: (
       <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
         <path d="M3 9.5L12 3l9 6.5V20a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V9.5z"/>
@@ -22,7 +23,6 @@ const NAV_ITEMS = [
   {
     label: "ショート",
     href: "/",
-    /** 検索結果からの視聴画面もショートタブをアクティブにする */
     extraActive: ["/search/feed"],
     iconOutline: (
       <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -40,6 +40,7 @@ const NAV_ITEMS = [
   {
     label: "マイページ",
     href: "/mypage",
+    extraActive: [] as string[],
     iconOutline: (
       <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
         <circle cx="12" cy="8" r="4"/>
@@ -61,21 +62,33 @@ export default function BottomNav() {
   return (
     <nav className="bottom-nav" aria-label="メインナビゲーション">
       {NAV_ITEMS.map((item) => {
-        const extra = "extraActive" in item ? item.extraActive ?? [] : [];
         const isActive =
           (item.href === "/" ? pathname === "/" : pathname.startsWith(item.href)) ||
-          extra.some((p) => pathname.startsWith(p));
+          item.extraActive.some((p) => pathname.startsWith(p));
+
+        const icon = isActive ? item.iconFilled : item.iconOutline;
+
+        // アクティブ時は <span> にしてリンク自体を無効化
+        if (isActive) {
+          return (
+            <span
+              key={item.href}
+              className="bottom-nav-item bottom-nav-item--active"
+              aria-current="page"
+            >
+              <span className="bottom-nav-icon">{icon}</span>
+              <span className="bottom-nav-label">{item.label}</span>
+            </span>
+          );
+        }
 
         return (
           <Link
             key={item.href}
             href={item.href}
-            className={`bottom-nav-item${isActive ? " bottom-nav-item--active" : ""}`}
-            aria-current={isActive ? "page" : undefined}
+            className="bottom-nav-item"
           >
-            <span className="bottom-nav-icon">
-              {isActive ? item.iconFilled : item.iconOutline}
-            </span>
+            <span className="bottom-nav-icon">{icon}</span>
             <span className="bottom-nav-label">{item.label}</span>
           </Link>
         );
@@ -115,10 +128,12 @@ const navStyle = `
     -webkit-tap-highlight-color: transparent;
     transition: color 0.15s ease;
     padding-bottom: 2px;
+    cursor: pointer;
   }
 
   .bottom-nav-item--active {
     color: #fff;
+    cursor: default;
   }
 
   .bottom-nav-icon {

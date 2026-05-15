@@ -23,10 +23,10 @@ const TAP_MOVE_THRESHOLD = 10;
 const PLAY_THRESHOLD = 0.85;
 
 // side-actions の右端からの占有幅:
-// right: 12px + width: 56px(icon26 + padding余白) + gap: 8px = 76px
+// right: 12px + width: 56px(icon26 + padding余白) + gap: 4px = 72px
 const SIDE_ACTIONS_RIGHT = 12;
 const SIDE_ACTIONS_WIDTH = 56;
-const INFO_RIGHT = SIDE_ACTIONS_RIGHT + SIDE_ACTIONS_WIDTH + 8; // 76px
+const INFO_RIGHT = SIDE_ACTIONS_RIGHT + SIDE_ACTIONS_WIDTH + 4; // 72px
 
 const isLandscapeScreen = () => window.innerWidth > window.innerHeight;
 
@@ -775,7 +775,7 @@ const itemStyle = `
   }
 
   /* ===== 左下情報エリア ===== */
-  /* right = side-actionsのright(${SIDE_ACTIONS_RIGHT}px) + width(${SIDE_ACTIONS_WIDTH}px) + 間蹝8px = ${INFO_RIGHT}px */
+  /* right = side-actionsのright(${SIDE_ACTIONS_RIGHT}px) + width(${SIDE_ACTIONS_WIDTH}px) + 間蹝4px = ${INFO_RIGHT}px */
   .info-overlay {
     position: absolute;
     bottom: clamp(16px, 4vh, 32px);
@@ -783,7 +783,6 @@ const itemStyle = `
     right: ${INFO_RIGHT}px;
     z-index: 30;
     pointer-events: auto;
-    /* 子要素の横幅溢れを必ず防ぐ */
     overflow: hidden;
   }
   .item-title {
@@ -819,7 +818,6 @@ const itemStyle = `
     flex-wrap: wrap;
     gap: 4px;
     margin-bottom: 6px;
-    /* タグが多いときは最大4行まで表示して以降を非表示 */
     max-height: calc(1.8em * 4 + 4px * 3);
     overflow: hidden;
   }
@@ -914,10 +912,10 @@ const itemStyle = `
     .info-overlay {
       bottom: 40px;
       left: 20px;
-      right: 84px; /* 16px + 60px + 8px */
+      right: 80px; /* 16px + 60px + 4px */
     }
     .item-title   { font-size: 17px; }
     .item-actress { font-size: 14px; }
-    .scroll-hint  { right: 84px; }
+    .scroll-hint  { right: 80px; }
   }
 `;

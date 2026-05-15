@@ -59,7 +59,6 @@ export default function FeedClient() {
   const wheelLockRef    = useRef(false);
   const containerRef    = useRef<HTMLDivElement>(null);
   const preloadAbortRef = useRef<AbortController | null>(null);
-  // セッションから復元済みかどうかを追跡—フォールバック useEffect の課題発火を防ぐ
   const restoredRef     = useRef(false);
 
   const [currentIndex, setCurrentIndex] = useState(0);
@@ -69,8 +68,10 @@ export default function FeedClient() {
   const windowStartRef = useRef(0);
 
   const [dragPx, setDragPx] = useState(0);
-  const dragStartY = useRef(0);
-  const isDragging = useRef(false);
+  const dragStartY  = useRef(0);
+  const dragStartYForEnd = useRef(0); // onTouchEnd 用に ref で保持（ローカル変数のズレを防ぐ）
+  const dragStartTime = useRef(0);    // 同上
+  const isDragging  = useRef(false);
 
   const updateWindow = useCallback((idx: number) => {
     const all   = allItemsRef.current;
@@ -112,7 +113,6 @@ export default function FeedClient() {
   useEffect(() => {
     const session = loadSession();
     if (session && session.items.length > 0) {
-      // セッションがあれば順番・位置を復元（APIコールなし）
       restoredRef.current = true;
       const items = session.items as MovieCard[];
       allItemsRef.current   = items;
@@ -124,7 +124,6 @@ export default function FeedClient() {
       setIsLoading(false);
       updateWindow(idx);
     } else {
-      // 初回ロード：新たに seed を生成してフェッチ
       const seed = getOrCreateSeed();
       seedRef.current = seed;
       fetchInitial(seed, 0);
@@ -157,14 +156,12 @@ export default function FeedClient() {
     const el = containerRef.current;
     if (!el) return;
 
-    let startY = 0;
-    let startTime = 0;
-
     const onTouchStart = (e: TouchEvent) => {
-      startY = e.touches[0].clientY;
-      startTime = Date.now();
-      isDragging.current = true;
-      dragStartY.current = startY;
+      const y = e.touches[0].clientY;
+      isDragging.current     = true;
+      dragStartY.current     = y;
+      dragStartYForEnd.current = y;   // ref に記録
+      dragStartTime.current  = Date.now(); // ref に記録
       setDragPx(0);
     };
 
@@ -184,9 +181,11 @@ export default function FeedClient() {
       if (!isDragging.current) return;
       isDragging.current = false;
       setDragPx(0);
-      const dy = e.changedTouches[0].clientY - startY;
-      const dt = Date.now() - startTime;
-      if (Math.abs(dy) > 60 && dt < 500) {
+      // ローカル変数ではなく ref から読む（1枚目の startY ズレを防ぐ）
+      const dy = e.changedTouches[0].clientY - dragStartYForEnd.current;
+      const dt = Date.now() - dragStartTime.current;
+      // dt 上限を 1000ms に緩和（ゆっくりスワイプでも判定する）
+      if (Math.abs(dy) > 60 && dt < 1000) {
         if (dy < 0) goNext();
         else        goPrev();
       }
@@ -219,7 +218,6 @@ export default function FeedClient() {
     };
   }, [goNext, goPrev]);
 
-  // セッション復元済みの場合は発火しない。未復元・未フェッチの時のみフォールバックとして発火する
   useEffect(() => {
     if (restoredRef.current) return;
     if (windowItems.length === 0 && !isFetchingRef.current && !isEmpty) {

@@ -28,7 +28,6 @@ export default function FeedItem({ item, isFirst, isSecond = false }: Props) {
   const sectionRef    = useRef<HTMLElement>(null);
   const containerRef  = useRef<HTMLDivElement>(null);
   const shimmerRef    = useRef<HTMLDivElement>(null);
-  const pauseBadgeRef = useRef<HTMLDivElement>(null);
   const fastBadgeRef  = useRef<HTMLDivElement>(null);
   const overlayRef    = useRef<HTMLDivElement>(null);
   const rafRef        = useRef<number | null>(null);
@@ -66,11 +65,6 @@ export default function FeedItem({ item, isFirst, isSecond = false }: Props) {
     void el.offsetHeight;
     el.style.animation = "";
     setTimeout(() => { if (overlayRef.current) overlayRef.current.style.display = "none"; }, 700);
-  }, []);
-
-  const setPauseBadge = useCallback((visible: boolean) => {
-    const el = pauseBadgeRef.current;
-    if (el) el.style.display = visible ? "flex" : "none";
   }, []);
 
   const setFastBadge = useCallback((visible: boolean) => {
@@ -115,7 +109,6 @@ export default function FeedItem({ item, isFirst, isSecond = false }: Props) {
       try {
         await video.play();
         isPlayingRef.current = true;
-        setPauseBadge(false);
         startProgressLoop();
         return;
       } catch { /* fall through to muted retry */ }
@@ -126,10 +119,9 @@ export default function FeedItem({ item, isFirst, isSecond = false }: Props) {
     try {
       await video.play();
       isPlayingRef.current = true;
-      setPauseBadge(false);
       startProgressLoop();
     } catch { /* ignore */ }
-  }, [setPauseBadge, startProgressLoop]);
+  }, [startProgressLoop]);
 
   useEffect(() => {
     const video = videoRef.current;
@@ -149,7 +141,6 @@ export default function FeedItem({ item, isFirst, isSecond = false }: Props) {
         isMutedRef.current   = true;
         setIsMuted(true);
         setVideoReady(false);
-        setPauseBadge(false);
         setFastBadge(false);
         window.dispatchEvent(new CustomEvent("video-progress", { detail: { progress: 0 } }));
       }
@@ -159,7 +150,7 @@ export default function FeedItem({ item, isFirst, isSecond = false }: Props) {
       playObserver.disconnect();
       stopProgressLoop();
     };
-  }, [playVideo, setVideoReady, setPauseBadge, setFastBadge, stopProgressLoop]);
+  }, [playVideo, setVideoReady, setFastBadge, stopProgressLoop]);
 
   useEffect(() => {
     const el = containerRef.current;
@@ -196,10 +187,9 @@ export default function FeedItem({ item, isFirst, isSecond = false }: Props) {
       video.pause();
       isPlayingRef.current = false;
       stopProgressLoop();
-      setPauseBadge(true);
       showOverlay("pause");
     }
-  }, [playVideo, showOverlay, setPauseBadge, stopProgressLoop]);
+  }, [playVideo, showOverlay, stopProgressLoop]);
 
   const handleToggleMute = useCallback((e: React.MouseEvent | React.TouchEvent) => {
     e.stopPropagation();
@@ -211,13 +201,13 @@ export default function FeedItem({ item, isFirst, isSecond = false }: Props) {
       video.muted = false;
       isMutedRef.current = false;
       setIsMuted(false);
-      if (video.paused) { video.play().catch(() => {}); isPlayingRef.current = true; setPauseBadge(false); startProgressLoop(); }
+      if (video.paused) { video.play().catch(() => {}); isPlayingRef.current = true; startProgressLoop(); }
     } else {
       video.muted = true;
       isMutedRef.current = true;
       setIsMuted(true);
     }
-  }, [setPauseBadge, startProgressLoop]);
+  }, [startProgressLoop]);
 
   const handleShare = useCallback((e: React.MouseEvent | React.TouchEvent) => {
     e.stopPropagation();
@@ -370,12 +360,6 @@ export default function FeedItem({ item, isFirst, isSecond = false }: Props) {
                   <path d="M14 8L40 24L14 40V8Z" fill="white"/>
                 </svg>
               </span>
-            </div>
-            <div ref={pauseBadgeRef} className="pause-badge" aria-hidden="true" style={{ display: "none" }}>
-              <svg width="40" height="40" viewBox="0 0 48 48" fill="none">
-                <rect x="12" y="8" width="10" height="32" rx="2" fill="white"/>
-                <rect x="26" y="8" width="10" height="32" rx="2" fill="white"/>
-              </svg>
             </div>
           </div>
 
@@ -582,16 +566,6 @@ const itemStyle = `
     70%  { opacity: 0.8; transform: scale(1); }
     100% { opacity: 0; transform: scale(1); }
   }
-  .pause-badge {
-    position: absolute;
-    inset: 0;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    opacity: 0.7;
-    pointer-events: none;
-    filter: drop-shadow(0 2px 6px rgba(0,0,0,0.6));
-  }
   .fast-badge {
     position: absolute;
     top: 12px;
@@ -753,10 +727,6 @@ const itemStyle = `
     }
     .overlay-wrap {
       bottom: 60px;
-    }
-    .pause-badge {
-      bottom: 60px;
-      top: 0;
     }
   }
   @media (min-width: 768px) {

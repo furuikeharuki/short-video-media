@@ -59,6 +59,8 @@ export default function FeedClient() {
   const wheelLockRef    = useRef(false);
   const containerRef    = useRef<HTMLDivElement>(null);
   const preloadAbortRef = useRef<AbortController | null>(null);
+  // セッションから復元済みかどうかを追跡—フォールバック useEffect の課題発火を防ぐ
+  const restoredRef     = useRef(false);
 
   const [currentIndex, setCurrentIndex] = useState(0);
   const [windowItems, setWindowItems]   = useState<MovieCard[]>([]);
@@ -110,7 +112,8 @@ export default function FeedClient() {
   useEffect(() => {
     const session = loadSession();
     if (session && session.items.length > 0) {
-      // セッションがあれば順番・位置を復元
+      // セッションがあれば順番・位置を復元（APIコールなし）
+      restoredRef.current = true;
       const items = session.items as MovieCard[];
       allItemsRef.current   = items;
       seedRef.current       = session.seed;
@@ -138,7 +141,6 @@ export default function FeedClient() {
     currentIdxRef.current = nextIdx;
     setCurrentIndex(nextIdx);
     updateWindow(nextIdx);
-    // 位置だけ更新（items/seed は変わらない）
     try { sessionStorage.setItem(FEED_INDEX_KEY, String(nextIdx)); } catch { /* ignore */ }
   }, [updateWindow]);
 
@@ -217,7 +219,9 @@ export default function FeedClient() {
     };
   }, [goNext, goPrev]);
 
+  // セッション復元済みの場合は発火しない。未復元・未フェッチの時のみフォールバックとして発火する
   useEffect(() => {
+    if (restoredRef.current) return;
     if (windowItems.length === 0 && !isFetchingRef.current && !isEmpty) {
       const seed = seedRef.current ?? getOrCreateSeed();
       fetchInitial(seed, 0);

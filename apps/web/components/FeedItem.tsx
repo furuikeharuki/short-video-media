@@ -21,7 +21,9 @@ const TAP_MOVE_THRESHOLD = 10;
 const PLAY_THRESHOLD = 0.85;
 const LOADING_DELAY_MS = 300;
 
+// モジュールスコープで全動画共有
 let globalUserGestured = false;
+let globalIsMuted = true;
 
 export default function FeedItem({ item, isFirst, isSecond = false }: Props) {
   const router = useRouter();
@@ -36,7 +38,7 @@ export default function FeedItem({ item, isFirst, isSecond = false }: Props) {
   const isActiveRef   = useRef(false);
 
   const isPlayingRef             = useRef(false);
-  const isMutedRef               = useRef(true);
+  const isMutedRef               = useRef(globalIsMuted);
   const tapTimerRef              = useRef<ReturnType<typeof setTimeout> | null>(null);
   const tapCountRef              = useRef(0);
   const tapStartPosRef           = useRef<{ x: number; y: number }>({ x: 0, y: 0 });
@@ -50,12 +52,26 @@ export default function FeedItem({ item, isFirst, isSecond = false }: Props) {
   const loadingTimerRef          = useRef<ReturnType<typeof setTimeout> | null>(null);
   const navigatingRef            = useRef(false);
 
-  const [isMuted,      setIsMuted]      = useState(true);
+  const [isMuted,      setIsMuted]      = useState(globalIsMuted);
   const [isBookmarked, setIsBookmarked] = useState(false);
   const [navigating,   setNavigating]   = useState(false);
   const [mounted,      setMounted]      = useState(false);
 
   useEffect(() => { setMounted(true); }, []);
+
+  // グローバルミュート変更を自動反映（他インスタンスからの変更検知用）
+  useEffect(() => {
+    const sync = () => {
+      if (isMutedRef.current !== globalIsMuted) {
+        isMutedRef.current = globalIsMuted;
+        setIsMuted(globalIsMuted);
+        const video = videoRef.current;
+        if (video) video.muted = globalIsMuted;
+      }
+    };
+    window.addEventListener("global-mute-change", sync);
+    return () => window.removeEventListener("global-mute-change", sync);
+  }, []);
 
   // MovieModal（role=dialog）が出たら仮モーダルを消す
   useEffect(() => {
@@ -137,6 +153,7 @@ export default function FeedItem({ item, isFirst, isSecond = false }: Props) {
     }
     video.muted = true;
     isMutedRef.current = true;
+    globalIsMuted = true;
     setIsMuted(true);
     try {
       await video.play();
@@ -151,6 +168,9 @@ export default function FeedItem({ item, isFirst, isSecond = false }: Props) {
     const playObserver = new IntersectionObserver(([entry]) => {
       if (entry.isIntersecting) {
         isActiveRef.current = true;
+        // 再表示時にグローバルミュート状態を反映
+        isMutedRef.current = globalIsMuted;
+        setIsMuted(globalIsMuted);
         playVideo(video, false);
       } else {
         isActiveRef.current = false;
@@ -158,8 +178,7 @@ export default function FeedItem({ item, isFirst, isSecond = false }: Props) {
         video.pause();
         video.currentTime = 0;
         video.playbackRate = 1;
-        // ミュート状態はリセットしない（ユーザーが解除した状態をスクロール後も維持）
-        video.muted = isMutedRef.current;
+        video.muted = globalIsMuted;
         isPlayingRef.current = false;
         setVideoReady(false);
         setFastBadge(false);
@@ -219,15 +238,19 @@ export default function FeedItem({ item, isFirst, isSecond = false }: Props) {
     if (!video) return;
     if (isMutedRef.current) {
       globalUserGestured = true;
+      globalIsMuted = false;
       video.muted = false;
       isMutedRef.current = false;
       setIsMuted(false);
       if (video.paused) { video.play().catch(() => {}); isPlayingRef.current = true; startProgressLoop(); }
     } else {
+      globalIsMuted = true;
       video.muted = true;
       isMutedRef.current = true;
       setIsMuted(true);
     }
+    // 他のインスタンスに変更を通知
+    window.dispatchEvent(new Event("global-mute-change"));
   }, [startProgressLoop]);
 
   const handleShare = useCallback((e: React.MouseEvent | React.TouchEvent) => {

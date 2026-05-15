@@ -100,10 +100,11 @@ export function useFeedPlayback({ slug, title, onNavigate }: UseFeedPlaybackOpti
   }, []);
 
   useEffect(() => {
-    const handler = (e: CustomEvent<{ ratio: number }>) => {
+    const handler = (e: Event) => {
+      const ce = e as CustomEvent<{ ratio: number }>;
       const video = videoRef.current;
       if (!video || !isActiveRef.current) return;
-      const target = e.detail.ratio * (video.duration || 0);
+      const target = ce.detail.ratio * (video.duration || 0);
       video.currentTime = target;
     };
     window.addEventListener("video-seek", handler);

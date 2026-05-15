@@ -1,6 +1,5 @@
 import type { Metadata, Viewport } from "next";
 import Header from "@/components/Header";
-import AffiliateNotice from "@/components/AffiliateNotice";
 import BottomNav from "@/components/BottomNav";
 import "./globals.css";
 
@@ -89,7 +88,6 @@ export default function RootLayout({
       </head>
       <body>
         <Header />
-        <AffiliateNotice />
         {children}
         {modal}
         <BottomNav />

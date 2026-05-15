@@ -54,7 +54,6 @@ export default function Header() {
   );
 
   const handleLogoClick = useCallback(() => {
-    // sessionStorageを破棄してトップに戻ることで新しいシードでシャッフル
     try {
       sessionStorage.removeItem(FEED_SEED_KEY);
       sessionStorage.removeItem(FEED_INDEX_KEY);
@@ -65,43 +64,51 @@ export default function Header() {
 
   return (
     <header className="site-header">
-      <button
-        type="button"
-        className="header-logo"
-        aria-label="トップへ戻る（リロード）"
-        onClick={handleLogoClick}
-      >
-        <span className="header-logo-text">
-          <span className="logo-av">AV</span>
-          <span className="logo-shorts"> Shorts</span>
-        </span>
-      </button>
-
-      <div className="header-actions">
+      {/* ロゴ・アイコン行 */}
+      <div className="site-header__main">
         <button
-          ref={btnRef}
-          className={`header-icon-btn${open ? " is-active" : ""}`}
-          aria-label="検索"
-          aria-expanded={open}
-          aria-controls="search-dropdown"
-          onClick={toggleOpen}
           type="button"
+          className="header-logo"
+          aria-label="トップへ戻る（リロード）"
+          onClick={handleLogoClick}
         >
-          {open ? (
-            <svg width="22" height="22" viewBox="0 0 24 24" fill="none"
-              stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" aria-hidden="true">
-              <line x1="4" y1="4" x2="20" y2="20" />
-              <line x1="20" y1="4" x2="4" y2="20" />
-            </svg>
-          ) : (
-            <svg width="22" height="22" viewBox="0 0 24 24" fill="none"
-              stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-              <circle cx="11" cy="11" r="7" />
-              <line x1="16.5" y1="16.5" x2="22" y2="22" />
-            </svg>
-          )}
+          <span className="header-logo-text">
+            <span className="logo-av">AV</span>
+            <span className="logo-shorts"> Shorts</span>
+          </span>
         </button>
-        <HamburgerMenu />
+
+        <div className="header-actions">
+          <button
+            ref={btnRef}
+            className={`header-icon-btn${open ? " is-active" : ""}`}
+            aria-label="検索"
+            aria-expanded={open}
+            aria-controls="search-dropdown"
+            onClick={toggleOpen}
+            type="button"
+          >
+            {open ? (
+              <svg width="22" height="22" viewBox="0 0 24 24" fill="none"
+                stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" aria-hidden="true">
+                <line x1="4" y1="4" x2="20" y2="20" />
+                <line x1="20" y1="4" x2="4" y2="20" />
+              </svg>
+            ) : (
+              <svg width="22" height="22" viewBox="0 0 24 24" fill="none"
+                stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                <circle cx="11" cy="11" r="7" />
+                <line x1="16.5" y1="16.5" x2="22" y2="22" />
+              </svg>
+            )}
+          </button>
+          <HamburgerMenu />
+        </div>
+      </div>
+
+      {/* アフィリエイト警告ノティス */}
+      <div className="site-header__notice">
+        当サイトはFANZAアフィリエイトプログラムを利用しており、該当リンクからの購入により報酬を受け取る場合があります。
       </div>
 
       <div

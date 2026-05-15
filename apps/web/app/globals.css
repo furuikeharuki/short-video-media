@@ -17,10 +17,14 @@ html, body {
   overscroll-behavior: none;
 }
 
-/* ━━━ 共通変数 ━━━━━━━━━━━━━━━━━━━━━━━ */
+/* ━━━ 共通変数 ━━━━━━━━━━━━━━━━━━━━━ */
 
 :root {
-  --header-h:      52px;
+  /*
+    --header-h: ヘッダー本体(52px) + AffiliateNotice(29px) の合計高さ
+    Header.tsx 内に AffiliateNotice を包含したため、実際の fixed 領域と一致
+  */
+  --header-h:      81px;
   --bottom-nav-h:  56px;
   --header-bg:     #000;
   --accent:        #E8003D;
@@ -28,7 +32,7 @@ html, body {
   --feed-h:        calc(100dvh - var(--header-h) - var(--bottom-nav-h));
 }
 
-/* ━━━ ヘッダー ━━━━━━━━━━━━━━━━━━━━━━━━━━ */
+/* ━━━ ヘッダー ━━━━━━━━━━━━━━━━━━━━━━━━ */
 
 .site-header {
   position: fixed;
@@ -36,12 +40,30 @@ html, body {
   left: 0;
   right: 0;
   z-index: 100;
-  height: var(--header-h);
+  display: flex;
+  flex-direction: column;
+  background: var(--header-bg);
+}
+
+/* ロゴ・アイコン行 */
+.site-header__main {
+  height: 52px;
   display: flex;
   align-items: center;
   justify-content: space-between;
   padding: 0 14px;
-  background: var(--header-bg);
+}
+
+/* アフィリエイト警告ノティス */
+.site-header__notice {
+  width: 100%;
+  background: rgba(255,255,255,0.05);
+  border-bottom: 1px solid rgba(255,255,255,0.08);
+  padding: 6px 16px;
+  font-size: 11px;
+  color: rgba(255,255,255,0.45);
+  text-align: center;
+  line-height: 1.5;
 }
 
 .header-logo {
@@ -255,17 +277,12 @@ html, body {
   color: #fff;
 }
 
-/* ━━━ メインコンテンツ（共通ラッパー） ━━━━━━━━━━━━━━━━━━━━━━━ */
+/* ━━━ メインコンテンツ（共通ラッパー） ━━━━━━━━━━━━━━━━━━━━━ */
 
 .main-content {
   padding-top: var(--header-h);
 }
 
-/*
-  .page-content
-  ショート以外の全ページで使う共通ラッパー。
-  ヘッダー（上）とボトムナブ（下）の高さ分だけ余白を確保する。
-*/
 .page-content {
   padding-top: var(--header-h);
   padding-bottom: var(--bottom-nav-h);
@@ -273,7 +290,7 @@ html, body {
   box-sizing: border-box;
 }
 
-/* ━━━ フィードレイアウト ━━━━━━━━━━━━━━━━━━━━━ */
+/* ━━━ フィードレイアウト ━━━━━━━━━━━━━━━━━━━ */
 
 .feed-container {
   position: fixed;
@@ -301,7 +318,7 @@ html, body {
   background: #000;
 }
 
-/* ━━━ ユーティリティ ━━━━━━━━━━━━━━━━━━━━━━━━ */
+/* ━━━ ユーティリティ ━━━━━━━━━━━━━━━━━━━━━━ */
 
 .sr-only {
   position: absolute;
@@ -317,8 +334,7 @@ html, body {
   .search-dropdown { transition: none; }
 }
 
-/* ━━━ 詳細ページ（body.detail-page） ━━━━━━━━━━━━━━━━━━━━━ */
-/* layout.tsx の useEffect で付与・除去されるクラス */
+/* ━━━ 詳細ページ（body.detail-page） ━━━━━━━━━━━━━━━━━━━ */
 
 body.detail-page {
   overflow: auto !important;

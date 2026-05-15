@@ -19,7 +19,6 @@ const DBL_TAP_MS = 300;
 const LONG_PRESS_MS = 500;
 const TAP_MOVE_THRESHOLD = 10;
 const PLAY_THRESHOLD = 0.85;
-// この時間以内に遷移完了した場合はロードモーダルを出さない
 const LOADING_DELAY_MS = 150;
 
 let globalUserGestured = false;
@@ -58,12 +57,12 @@ export default function FeedItem({ item, isFirst, isSecond = false }: Props) {
 
   useEffect(() => { setMounted(true); }, []);
 
-  // Next.jsが本物モーダルを描画したらフラグを落とす
+  // data-next-loading のない dialog（= 本物のMovieModal）が出たら仮モーダルを消す
   useEffect(() => {
     if (!navigating) return;
     const observer = new MutationObserver(() => {
-      const dialogs = document.querySelectorAll("[role='dialog']");
-      if (dialogs.length >= 2) {
+      const realDialog = document.querySelector("[role='dialog']:not([data-next-loading])");
+      if (realDialog) {
         setNavigating(false);
         navigatingRef.current = false;
         observer.disconnect();
@@ -251,7 +250,6 @@ export default function FeedItem({ item, isFirst, isSecond = false }: Props) {
     navigatingRef.current = true;
     router.push(`/movies/${item.slug}`);
 
-    // LOADING_DELAY_MS以内に遷移完了した場合はモーダルを出さない
     if (loadingTimerRef.current) clearTimeout(loadingTimerRef.current);
     loadingTimerRef.current = setTimeout(() => {
       if (navigatingRef.current) setNavigating(true);

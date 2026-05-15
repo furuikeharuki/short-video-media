@@ -4,8 +4,8 @@ export default function ModalLoading() {
       {/* backdrop */}
       <div aria-hidden="true" style={backdropStyle} />
 
-      {/* modal shell */}
-      <div role="dialog" aria-modal="true" aria-label="読み込み中" style={modalStyle}>
+      {/* modal shell: data-next-loading でFeedItemの仮モーダルと区別する */}
+      <div role="dialog" aria-modal="true" aria-label="読み込み中" data-next-loading="true" style={modalStyle}>
         <div style={scrollStyle}>
 
           {/* hero skeleton */}

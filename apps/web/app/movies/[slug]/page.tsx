@@ -131,7 +131,7 @@ export default async function MovieDetailPage({ params }: PageProps) {
             <BackButton />
           </div>
 
-          <div style={styles.content}>
+          <div className="detail-content" style={styles.content}>
             <div style={styles.genreList}>
               {movie.genres.map((g) => (
                 <span key={g} style={styles.badge}>{g}</span>
@@ -209,7 +209,7 @@ const styles: Record<string, React.CSSProperties> = {
   },
   content: {
     padding: '20px 16px',
-    paddingBottom: 'calc(var(--bottom-nav-h, 56px) + env(safe-area-inset-bottom, 0px) + 10px)' as unknown as string,
+    paddingBottom: 'calc(var(--bottom-nav-h, 56px) + env(safe-area-inset-bottom, 0px) + 24px)' as unknown as string,
     width: '100%',
     boxSizing: 'border-box' as const,
   },
@@ -264,4 +264,9 @@ const pageCSS = `
   }
   .affiliate-btn:active { opacity: 0.75; transform: scale(0.98); }
   @media (hover: hover) { .affiliate-btn:hover { opacity: 0.88; } }
+  @media (max-width: 767px) {
+    .detail-content {
+      padding-bottom: calc(var(--bottom-nav-h, 56px) + env(safe-area-inset-bottom, 0px) + 60px) !important;
+    }
+  }
 `;

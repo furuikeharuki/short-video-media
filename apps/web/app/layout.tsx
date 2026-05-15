@@ -1,4 +1,4 @@
-import type { Metadata } from "next";
+import type { Metadata, Viewport } from "next";
 import Header from "@/components/Header";
 import AffiliateNotice from "@/components/AffiliateNotice";
 import BottomNav from "@/components/BottomNav";
@@ -7,6 +7,12 @@ import "./globals.css";
 const SITE_NAME = "AV Shorts";
 const SITE_URL = "https://av-shorts.com";
 const SITE_DESCRIPTION = "FANZAのAV作品をショート動画で試し見。気に入ったらそのまま購入できるアダルト動画メディア。";
+
+export const viewport: Viewport = {
+  width: "device-width",
+  initialScale: 1,
+  viewportFit: "cover",
+};
 
 export const metadata: Metadata = {
   metadataBase: new URL(SITE_URL),
@@ -74,7 +80,7 @@ export default function RootLayout({
                   window.dataLayer = window.dataLayer || [];
                   function gtag(){dataLayer.push(arguments);}
                   gtag('js', new Date());
-                  gtag('config', '${GA_ID}';
+                  gtag('config', '${GA_ID}');
                 `,
               }}
             />

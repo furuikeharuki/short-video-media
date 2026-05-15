@@ -239,19 +239,26 @@ export default function FeedItem({ item, isFirst, isSecond = false }: Props) {
     calcVideoArea(fit);
   }, [calcVideoArea]);
 
+  /**
+   * 再生ロジック。ミュート状態は isMutedRef の現在値をそのまま引き継ぐ。
+   * withGesture=true のときだけ globalUserGestured を立てる。
+   */
   const playVideo = useCallback(async (video: HTMLVideoElement, withGesture = false) => {
     if (withGesture) globalUserGestured = true;
+
+    // ミュート状態は変更せず、現在の ref をそのままビデオに反映
+    video.muted = isMutedRef.current;
+
     if (globalUserGestured) {
-      video.muted = false;
-      isMutedRef.current = false;
-      setIsMuted(false);
       try {
         await video.play();
         isPlayingRef.current = true;
         setPauseBadge(false);
         return;
-      } catch { /* fall through to muted */ }
+      } catch { /* fall through to muted retry */ }
     }
+
+    // ジェスチャ未発火の場合はミュートでフォールバック再生
     video.muted = true;
     isMutedRef.current = true;
     setIsMuted(true);
@@ -310,10 +317,14 @@ export default function FeedItem({ item, isFirst, isSecond = false }: Props) {
     setTimeout(() => ripple.remove(), 700);
   }, []);
 
+  /**
+   * 一時停止・再生。ミュート状態は一切変更しない。
+   */
   const fireTogglePlay = useCallback(async () => {
     const video = videoRef.current;
     if (!video) return;
     if (video.paused) {
+      // 再生時はミュート状態を維持したまま playVideo を呼ぶ
       await playVideo(video, true);
       showOverlay("play");
     } else {

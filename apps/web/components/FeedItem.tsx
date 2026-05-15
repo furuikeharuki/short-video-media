@@ -600,7 +600,7 @@ const itemStyle = `
     tap-highlight-color: transparent;
     -webkit-touch-callout: none;
     user-select: none;
-    touch-action: pan-y;
+    touch-action: none;
   }
   .action-overlay {
     position: absolute;

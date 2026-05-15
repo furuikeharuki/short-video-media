@@ -462,23 +462,21 @@ export default function FeedItem({ item, isFirst, isSecond = false }: Props) {
 }
 
 const itemStyle = `
+  /* === デフォルト（PC）: absolute + object-fit:contain で全面に広げる === */
   .video-bg {
     position: absolute;
     inset: 0;
     overflow: hidden;
     background: #000;
-    display: flex;
-    align-items: center;
-    justify-content: center;
   }
   .feed-video {
-    position: relative;
-    max-width: 100%;
-    max-height: 100%;
-    width: auto;
-    height: auto;
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    object-fit: contain;
+    object-position: center center;
     border-radius: 8px;
-    display: block;
   }
   .overlay-wrap {
     position: absolute;
@@ -707,10 +705,22 @@ const itemStyle = `
     .skip-ripple    { animation: none; opacity: 0; }
     .action-overlay { animation: none; opacity: 0; }
   }
+  /* === スマホ: flexで上寄せ === */
   @media (max-width: 767px) {
     .video-bg {
+      display: flex;
       align-items: flex-start;
+      justify-content: center;
       padding-top: 24px;
+    }
+    .feed-video {
+      position: relative;
+      inset: unset;
+      width: auto;
+      height: auto;
+      max-width: 100%;
+      max-height: 100%;
+      object-fit: unset;
     }
   }
   @media (min-width: 768px) {

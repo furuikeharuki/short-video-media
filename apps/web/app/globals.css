@@ -316,3 +316,11 @@ html, body {
 @media (prefers-reduced-motion: reduce) {
   .search-dropdown { transition: none; }
 }
+
+/* ━━━ 詳細ページ（body.detail-page） ━━━━━━━━━━━━━━━━━━━━━ */
+/* layout.tsx の useEffect で付与・除去されるクラス */
+
+body.detail-page {
+  overflow: auto !important;
+  height: auto !important;
+}

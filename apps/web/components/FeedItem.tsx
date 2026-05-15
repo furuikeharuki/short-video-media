@@ -704,6 +704,12 @@ const itemStyle = `
     .skip-ripple    { animation: none; opacity: 0; }
     .action-overlay { animation: none; opacity: 0; }
   }
+  @media (max-width: 767px) {
+    .video-bg {
+      top: -60px;
+      bottom: 60px;
+    }
+  }
   @media (min-width: 768px) {
     .bottom-bar {
       padding: 0 8px 20px 20px;

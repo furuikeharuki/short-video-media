@@ -31,7 +31,6 @@ export default function FeedItem({ item, isFirst, isSecond = false }: Props) {
   const pauseBadgeRef = useRef<HTMLDivElement>(null);
   const fastBadgeRef  = useRef<HTMLDivElement>(null);
   const overlayRef    = useRef<HTMLDivElement>(null);
-  const genreChipsRef = useRef<HTMLDivElement>(null);
 
   const isPlayingRef             = useRef(false);
   const isMutedRef               = useRef(true);
@@ -77,57 +76,6 @@ export default function FeedItem({ item, isFirst, isSecond = false }: Props) {
     if (el) el.style.display = visible ? "block" : "none";
   }, []);
 
-  /**
-   * スマホ + 縦長動画（左右フィット・上下に余白）のときだけ
-   * ジャンルタグ上端〜ナビバー下端の中間に動画中心を合わせる
-   */
-  const adjustVideoPosition = useCallback(() => {
-    const video     = videoRef.current;
-    const container = containerRef.current;
-    const section   = sectionRef.current;
-    const chips     = genreChipsRef.current;
-    if (!video || !container || !section || !chips) return;
-
-    // スマホ幅以外はリセット
-    if (window.innerWidth >= 768) {
-      container.style.paddingTop = "";
-      return;
-    }
-
-    const { videoWidth, videoHeight } = video;
-    if (!videoWidth || !videoHeight) return;
-
-    // コンテナ幅に動画をフィットさせた時の描画高さ
-    const containerW   = container.clientWidth;
-    const renderedH    = (videoHeight / videoWidth) * containerW;
-    const containerH   = container.clientHeight;
-
-    // 横長 or 画面より高い動画（上下フィット）はリセット
-    if (renderedH >= containerH) {
-      container.style.paddingTop = "";
-      return;
-    }
-
-    // section基準でのジャンルタグ上端
-    const sectionRect = section.getBoundingClientRect();
-    const chipsRect   = chips.getBoundingClientRect();
-    const chipsTopInSection = chipsRect.top - sectionRect.top;
-
-    // ナビバー（画面下のタブバー）の下端 = section内のbottom
-    // ナビバーはdocument全体の一番下にあるので window.innerHeight で近似
-    const navBarH = window.innerHeight - sectionRect.bottom + sectionRect.height;
-    // sectionRect内でのナビバー下端位置 = sectionRect.height（= section下端） + navBarH
-    // ただし座標系を section内に統一：ナビバー下端はsection外なので
-    // 「ジャンルタグ上端〜ナビバー下端」の中間点 = ジャンルタグ上端 + (section下端 - ジャンルタグ上端) / 2
-    // ※ナビバーはsectionの外側なので、ここではsection下端をナビバー下端とみなす
-    const availableBottom = sectionRect.height; // section内のbottom
-    const midPoint = (chipsTopInSection + availableBottom) / 2;
-
-    // paddingTop = 中間点 - 動画高さ/2（0以下は0）
-    const pt = Math.max(0, midPoint - renderedH / 2);
-    container.style.paddingTop = `${pt}px`;
-  }, []);
-
   const playVideo = useCallback(async (video: HTMLVideoElement, withGesture = false) => {
     if (withGesture) globalUserGestured = true;
     video.muted = isMutedRef.current;
@@ -171,19 +119,6 @@ export default function FeedItem({ item, isFirst, isSecond = false }: Props) {
     playObserver.observe(video);
     return () => { playObserver.disconnect(); };
   }, [playVideo, setVideoReady, setPauseBadge, setFastBadge]);
-
-  // メタデータ取得後・リサイズ時に位置を調整
-  useEffect(() => {
-    const video = videoRef.current;
-    if (!video) return;
-    const onMeta = () => adjustVideoPosition();
-    video.addEventListener("loadedmetadata", onMeta);
-    window.addEventListener("resize", onMeta);
-    return () => {
-      video.removeEventListener("loadedmetadata", onMeta);
-      window.removeEventListener("resize", onMeta);
-    };
-  }, [adjustVideoPosition]);
 
   useEffect(() => {
     const el = containerRef.current;
@@ -420,7 +355,7 @@ export default function FeedItem({ item, isFirst, isSecond = false }: Props) {
       <div className="bottom-bar">
         <div className="info-overlay" onClick={(e) => e.stopPropagation()}>
           {item.genres && item.genres.length > 0 && (
-            <div ref={genreChipsRef} className="genre-chips" onClick={(e) => e.stopPropagation()}>
+            <div className="genre-chips" onClick={(e) => e.stopPropagation()}>
               {item.genres.map((tag) => (
                 <button
                   key={tag}
@@ -527,7 +462,6 @@ export default function FeedItem({ item, isFirst, isSecond = false }: Props) {
 }
 
 const itemStyle = `
-  /* === デフォルト（PC）: absolute + object-fit:contain で全面に広げる === */
   .video-bg {
     position: absolute;
     inset: 0;
@@ -769,23 +703,6 @@ const itemStyle = `
     .shimmer-inner  { animation: none; }
     .skip-ripple    { animation: none; opacity: 0; }
     .action-overlay { animation: none; opacity: 0; }
-  }
-  /* === スマホ: flex + JSでpaddingTopを動的計算 === */
-  @media (max-width: 767px) {
-    .video-bg {
-      display: flex;
-      align-items: flex-start;
-      justify-content: center;
-    }
-    .feed-video {
-      position: relative;
-      inset: unset;
-      width: auto;
-      height: auto;
-      max-width: 100%;
-      max-height: 100%;
-      object-fit: unset;
-    }
   }
   @media (min-width: 768px) {
     .bottom-bar {

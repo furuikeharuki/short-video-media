@@ -168,7 +168,6 @@ const modalStyle: React.CSSProperties = {
   display: "flex",
   flexDirection: "column",
   fontFamily: "-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif",
-  // animation を削除: loading.tsx のスライドを引き継ぐため再アニメーション不要
 };
 
 const scrollStyle: React.CSSProperties = {
@@ -230,7 +229,8 @@ const backBtnStyle: React.CSSProperties = {
 };
 
 const contentStyle: React.CSSProperties = {
-  padding: "20px 16px 48px",
+  padding: "20px 16px",
+  paddingBottom: "calc(var(--bottom-nav-h, 56px) + env(safe-area-inset-bottom, 0px) + 32px)" as unknown as string,
   width: "100%",
   boxSizing: "border-box",
 };

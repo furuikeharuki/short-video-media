@@ -68,10 +68,10 @@ export default function FeedClient() {
   const windowStartRef = useRef(0);
 
   const [dragPx, setDragPx] = useState(0);
-  const dragStartY  = useRef(0);
-  const dragStartYForEnd = useRef(0); // onTouchEnd 用に ref で保持（ローカル変数のズレを防ぐ）
-  const dragStartTime = useRef(0);    // 同上
-  const isDragging  = useRef(false);
+  const dragStartY         = useRef(0);
+  const dragStartYForEnd   = useRef(0);
+  const dragStartTime      = useRef(0);
+  const isDragging         = useRef(false);
 
   const updateWindow = useCallback((idx: number) => {
     const all   = allItemsRef.current;
@@ -158,14 +158,16 @@ export default function FeedClient() {
 
     const onTouchStart = (e: TouchEvent) => {
       const y = e.touches[0].clientY;
-      isDragging.current     = true;
-      dragStartY.current     = y;
-      dragStartYForEnd.current = y;   // ref に記録
-      dragStartTime.current  = Date.now(); // ref に記録
+      isDragging.current       = true;
+      dragStartY.current       = y;
+      dragStartYForEnd.current = y;
+      dragStartTime.current    = Date.now();
       setDragPx(0);
     };
 
     const onTouchMove = (e: TouchEvent) => {
+      // passive:false で登録するので preventDefault() でバウンスを止める
+      e.preventDefault();
       if (!isDragging.current) return;
       const dy = e.touches[0].clientY - dragStartY.current;
       const atEnd = currentIdxRef.current >= allItemsRef.current.length - 1;
@@ -181,10 +183,8 @@ export default function FeedClient() {
       if (!isDragging.current) return;
       isDragging.current = false;
       setDragPx(0);
-      // ローカル変数ではなく ref から読む（1枚目の startY ズレを防ぐ）
       const dy = e.changedTouches[0].clientY - dragStartYForEnd.current;
       const dt = Date.now() - dragStartTime.current;
-      // dt 上限を 1000ms に緩和（ゆっくりスワイプでも判定する）
       if (Math.abs(dy) > 60 && dt < 1000) {
         if (dy < 0) goNext();
         else        goPrev();
@@ -205,7 +205,8 @@ export default function FeedClient() {
     };
 
     el.addEventListener("touchstart",  onTouchStart,  { passive: true });
-    el.addEventListener("touchmove",   onTouchMove,   { passive: true });
+    // touchmove は passive:false にして iOS バウンススクロールを preventDefault() で止める
+    el.addEventListener("touchmove",   onTouchMove,   { passive: false });
     el.addEventListener("touchend",    onTouchEnd,    { passive: true });
     el.addEventListener("touchcancel", onTouchCancel, { passive: true });
     el.addEventListener("wheel",       onWheel,       { passive: false });

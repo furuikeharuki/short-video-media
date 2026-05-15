@@ -16,7 +16,8 @@ const feedStyle = `
   .feed-container {
     position: fixed;
     top: var(--header-h, 52px);
-    left: 0; right: 0; bottom: 0;
+    left: 0; right: 0;
+    bottom: var(--bottom-nav-h, 56px);
     overflow: hidden;
   }
 

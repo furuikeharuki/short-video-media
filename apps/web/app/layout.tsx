@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import Header from "@/components/Header";
 import AffiliateNotice from "@/components/AffiliateNotice";
+import BottomNav from "@/components/BottomNav";
 import "./globals.css";
 
 const SITE_NAME = "AV Shorts";
@@ -61,11 +62,9 @@ export default function RootLayout({
   return (
     <html lang="ja">
       <head>
-        {/* FANZAの動画CDNへの接続を事前確立してDNS+TCP+TLSのレイテンシを削減 */}
         <link rel="preconnect" href="https://cc3001.dmm.co.jp" />
         <link rel="preconnect" href="https://cc3001.dmm.co.jp" crossOrigin="anonymous" />
         <link rel="dns-prefetch" href="https://cc3001.dmm.co.jp" />
-        {/* Google Analytics GA4 */}
         {GA_ID && (
           <>
             <script async src={`https://www.googletagmanager.com/gtag/js?id=${GA_ID}`} />
@@ -75,7 +74,7 @@ export default function RootLayout({
                   window.dataLayer = window.dataLayer || [];
                   function gtag(){dataLayer.push(arguments);}
                   gtag('js', new Date());
-                  gtag('config', '${GA_ID}');
+                  gtag('config', '${GA_ID}';
                 `,
               }}
             />
@@ -87,6 +86,7 @@ export default function RootLayout({
         <AffiliateNotice />
         {children}
         {modal}
+        <BottomNav />
       </body>
     </html>
   );

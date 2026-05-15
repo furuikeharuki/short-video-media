@@ -20,10 +20,11 @@ html, body {
 /* ━━━ 共通変数 ━━━━━━━━━━━━━━━━━━━━━━━━━━━ */
 
 :root {
-  --header-h:   52px;
-  --header-bg:  #000;
-  --accent:     #E8003D;
-  --dropdown-bg: rgba(0, 0, 0, 0.97);
+  --header-h:      52px;
+  --bottom-nav-h:  56px;
+  --header-bg:     #000;
+  --accent:        #E8003D;
+  --dropdown-bg:   rgba(0, 0, 0, 0.97);
 }
 
 /* ━━━ ヘッダー ━━━━━━━━━━━━━━━━━━━━━━━━━━━━ */
@@ -40,7 +41,6 @@ html, body {
   justify-content: space-between;
   padding: 0 14px;
   background: var(--header-bg);
-  /* will-change: transform 削除済み: iOS Safari で fixed ずれバグの原因になるため */
 }
 
 .header-logo {

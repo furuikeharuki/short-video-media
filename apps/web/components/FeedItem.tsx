@@ -19,6 +19,8 @@ const DBL_TAP_MS = 300;
 const LONG_PRESS_MS = 500;
 const TAP_MOVE_THRESHOLD = 10;
 const PLAY_THRESHOLD = 0.85;
+// この時間以内に遷移完了した場合はロードモーダルを出さない
+const LOADING_DELAY_MS = 150;
 
 let globalUserGestured = false;
 
@@ -46,6 +48,8 @@ export default function FeedItem({ item, isFirst, isSecond = false }: Props) {
   const lastTouchEndRef          = useRef(0);
   const pcClickCountRef          = useRef(0);
   const pcClickTimerRef          = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const loadingTimerRef          = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const navigatingRef            = useRef(false);
 
   const [isMuted,      setIsMuted]      = useState(true);
   const [isBookmarked, setIsBookmarked] = useState(false);
@@ -59,9 +63,9 @@ export default function FeedItem({ item, isFirst, isSecond = false }: Props) {
     if (!navigating) return;
     const observer = new MutationObserver(() => {
       const dialogs = document.querySelectorAll("[role='dialog']");
-      // 実際のモーダル（データあり）が出たら非表示
       if (dialogs.length >= 2) {
         setNavigating(false);
+        navigatingRef.current = false;
         observer.disconnect();
       }
     });
@@ -243,8 +247,15 @@ export default function FeedItem({ item, isFirst, isSecond = false }: Props) {
   const handleDetail = useCallback((e: React.MouseEvent | React.TouchEvent) => {
     e.stopPropagation();
     e.preventDefault();
-    setNavigating(true);
+
+    navigatingRef.current = true;
     router.push(`/movies/${item.slug}`);
+
+    // LOADING_DELAY_MS以内に遷移完了した場合はモーダルを出さない
+    if (loadingTimerRef.current) clearTimeout(loadingTimerRef.current);
+    loadingTimerRef.current = setTimeout(() => {
+      if (navigatingRef.current) setNavigating(true);
+    }, LOADING_DELAY_MS);
   }, [router, item.slug]);
 
   const startLongPress = useCallback(() => {
@@ -345,7 +356,6 @@ export default function FeedItem({ item, isFirst, isSecond = false }: Props) {
 
   return (
     <>
-      {/* createPortalでbody直下にマウントすることでposition:fixedの見た目が正確になる */}
       {mounted && navigating && createPortal(<ModalLoading />, document.body)}
       <section ref={sectionRef} className="feed-item" data-movie-id={item.id}>
         {item.sample_movie_url ? (

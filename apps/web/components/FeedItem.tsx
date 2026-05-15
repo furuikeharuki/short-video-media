@@ -158,10 +158,9 @@ export default function FeedItem({ item, isFirst, isSecond = false }: Props) {
         video.pause();
         video.currentTime = 0;
         video.playbackRate = 1;
-        video.muted = true;
+        // ミュート状態はリセットしない（ユーザーが解除した状態をスクロール後も維持）
+        video.muted = isMutedRef.current;
         isPlayingRef.current = false;
-        isMutedRef.current   = true;
-        setIsMuted(true);
         setVideoReady(false);
         setFastBadge(false);
         window.dispatchEvent(new CustomEvent("video-progress", { detail: { progress: 0 } }));

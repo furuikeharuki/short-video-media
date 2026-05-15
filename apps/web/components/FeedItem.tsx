@@ -690,7 +690,7 @@ const itemStyle = `
     display: flex;
     flex-direction: column;
     align-items: center;
-    gap: clamp(14px, 2.2vh, 24px);
+    gap: clamp(8px, 1.4vh, 16px);
     pointer-events: auto;
     flex-shrink: 0;
   }
@@ -702,7 +702,7 @@ const itemStyle = `
     background: none;
     border: none;
     cursor: pointer;
-    padding: 6px 0;
+    padding: 3px 0;
     width: 100%;
     -webkit-tap-highlight-color: transparent;
     touch-action: none;
@@ -771,7 +771,7 @@ const itemStyle = `
     }
     .side-actions {
       width: 72px;
-      gap: 20px;
+      gap: 14px;
     }
     .side-btn svg { width: 32px; height: 32px; }
     .item-title   { font-size: 17px; }

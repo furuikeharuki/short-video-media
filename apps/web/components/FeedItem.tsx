@@ -77,7 +77,6 @@ export default function FeedItem({ item, isFirst, isSecond = false }: Props) {
   const shimmerRef    = useRef<HTMLDivElement>(null);
   const pauseBadgeRef = useRef<HTMLDivElement>(null);
   const fastBadgeRef  = useRef<HTMLDivElement>(null);
-  const muteBadgeRef  = useRef<HTMLDivElement>(null);
   const overlayRef    = useRef<HTMLDivElement>(null);
 
   const objectFitRef             = useRef<"cover" | "contain">("cover");
@@ -94,7 +93,9 @@ export default function FeedItem({ item, isFirst, isSecond = false }: Props) {
   const pcClickCountRef          = useRef(0);
   const pcClickTimerRef          = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  const [hintVisible, setHintVisible] = useState(isFirst);
+  const [hintVisible,    setHintVisible]    = useState(isFirst);
+  const [isMuted,        setIsMuted]        = useState(true);
+  const [isBookmarked,   setIsBookmarked]   = useState(false);
 
   const [wrapStyle, setWrapStyle] = useState<React.CSSProperties>({
     position: "absolute",
@@ -140,11 +141,6 @@ export default function FeedItem({ item, isFirst, isSecond = false }: Props) {
   const setFastBadge = useCallback((visible: boolean) => {
     const el = fastBadgeRef.current;
     if (el) el.style.display = visible ? "block" : "none";
-  }, []);
-
-  const setMuteBadge = useCallback((visible: boolean) => {
-    const el = muteBadgeRef.current;
-    if (el) el.style.display = visible ? "flex" : "none";
   }, []);
 
   const calcVideoArea = useCallback((fit?: "cover" | "contain") => {
@@ -252,7 +248,7 @@ export default function FeedItem({ item, isFirst, isSecond = false }: Props) {
     if (globalUserGestured) {
       video.muted = false;
       isMutedRef.current = false;
-      setMuteBadge(false);
+      setIsMuted(false);
       try {
         await video.play();
         isPlayingRef.current = true;
@@ -262,13 +258,13 @@ export default function FeedItem({ item, isFirst, isSecond = false }: Props) {
     }
     video.muted = true;
     isMutedRef.current = true;
+    setIsMuted(true);
     try {
       await video.play();
       isPlayingRef.current = true;
       setPauseBadge(false);
-      setMuteBadge(true);
     } catch { /* ignore */ }
-  }, [setMuteBadge, setPauseBadge]);
+  }, [setPauseBadge]);
 
   useEffect(() => {
     const video = videoRef.current;
@@ -283,15 +279,15 @@ export default function FeedItem({ item, isFirst, isSecond = false }: Props) {
         video.muted = true;
         isPlayingRef.current = false;
         isMutedRef.current   = true;
+        setIsMuted(true);
         setVideoReady(false);
         setPauseBadge(false);
         setFastBadge(false);
-        setMuteBadge(false);
       }
     }, { threshold: PLAY_THRESHOLD });
     playObserver.observe(video);
     return () => { playObserver.disconnect(); };
-  }, [playVideo, setVideoReady, setPauseBadge, setFastBadge, setMuteBadge]);
+  }, [playVideo, setVideoReady, setPauseBadge, setFastBadge]);
 
   useEffect(() => {
     const el = containerRef.current;
@@ -332,17 +328,34 @@ export default function FeedItem({ item, isFirst, isSecond = false }: Props) {
     }
   }, [playVideo, showOverlay, setPauseBadge]);
 
-  const handleUnmute = useCallback((e: React.MouseEvent | React.TouchEvent) => {
+  const handleToggleMute = useCallback((e: React.MouseEvent | React.TouchEvent) => {
     e.stopPropagation();
     e.preventDefault();
     const video = videoRef.current;
     if (!video) return;
-    globalUserGestured = true;
-    video.muted = false;
-    isMutedRef.current = false;
-    setMuteBadge(false);
-    if (video.paused) { video.play().catch(() => {}); isPlayingRef.current = true; setPauseBadge(false); }
-  }, [setMuteBadge, setPauseBadge]);
+    if (isMutedRef.current) {
+      globalUserGestured = true;
+      video.muted = false;
+      isMutedRef.current = false;
+      setIsMuted(false);
+      if (video.paused) { video.play().catch(() => {}); isPlayingRef.current = true; setPauseBadge(false); }
+    } else {
+      video.muted = true;
+      isMutedRef.current = true;
+      setIsMuted(true);
+    }
+  }, [setPauseBadge]);
+
+  const handleShare = useCallback((e: React.MouseEvent | React.TouchEvent) => {
+    e.stopPropagation();
+    e.preventDefault();
+    const url = `${window.location.origin}/movies/${item.slug}`;
+    if (navigator.share) {
+      navigator.share({ title: item.title, url }).catch(() => {});
+    } else {
+      navigator.clipboard.writeText(url).catch(() => {});
+    }
+  }, [item.slug, item.title]);
 
   const startLongPress = useCallback(() => {
     isLongPressRef.current = false;
@@ -494,24 +507,6 @@ export default function FeedItem({ item, isFirst, isSecond = false }: Props) {
           </div>
 
           <div ref={fastBadgeRef} className="fast-badge" aria-hidden="true" style={{ display: "none" }}>2×</div>
-
-          <div
-            ref={muteBadgeRef}
-            className="mute-badge"
-            aria-label="タップしてミュート解除"
-            role="button"
-            style={{ display: "none" }}
-            onTouchStart={(e) => e.stopPropagation()}
-            onTouchEnd={handleUnmute}
-            onClick={handleUnmute}
-          >
-            <svg width="26" height="26" viewBox="0 0 24 24" fill="none">
-              <path d="M11 5L6 9H2v6h4l5 4V5z" fill="white"/>
-              <line x1="23" y1="9" x2="17" y2="15" stroke="white" strokeWidth="2.2" strokeLinecap="round"/>
-              <line x1="17" y1="9" x2="23" y2="15" stroke="white" strokeWidth="2.2" strokeLinecap="round"/>
-            </svg>
-            <span className="mute-label">タップで音声ON</span>
-          </div>
         </div>
       ) : (
         <div className="thumbnail-bg">
@@ -525,6 +520,94 @@ export default function FeedItem({ item, isFirst, isSecond = false }: Props) {
           />
         </div>
       )}
+
+      {/* 右下縦並びアクションボタン */}
+      <div className="side-actions" onClick={(e) => e.stopPropagation()} onTouchStart={(e) => e.stopPropagation()}>
+        {/* ミュートトグル */}
+        <button
+          className="side-btn"
+          aria-label={isMuted ? "音声ON" : "ミュート"}
+          onTouchEnd={handleToggleMute}
+          onClick={handleToggleMute}
+        >
+          {isMuted ? (
+            <svg width="26" height="26" viewBox="0 0 24 24" fill="none">
+              <path d="M11 5L6 9H2v6h4l5 4V5z" fill="white"/>
+              <line x1="23" y1="9" x2="17" y2="15" stroke="white" strokeWidth="2.2" strokeLinecap="round"/>
+              <line x1="17" y1="9" x2="23" y2="15" stroke="white" strokeWidth="2.2" strokeLinecap="round"/>
+            </svg>
+          ) : (
+            <svg width="26" height="26" viewBox="0 0 24 24" fill="none">
+              <path d="M11 5L6 9H2v6h4l5 4V5z" fill="white"/>
+              <path d="M15.54 8.46a5 5 0 0 1 0 7.07" stroke="white" strokeWidth="2" strokeLinecap="round"/>
+              <path d="M19.07 4.93a10 10 0 0 1 0 14.14" stroke="white" strokeWidth="2" strokeLinecap="round"/>
+            </svg>
+          )}
+          <span className="side-btn-label">{isMuted ? "音声OFF" : "音声ON"}</span>
+        </button>
+
+        {/* ブックマーク */}
+        <button
+          className={`side-btn${isBookmarked ? " side-btn--active" : ""}`}
+          aria-label="ブックマーク"
+          onTouchEnd={(e) => { e.stopPropagation(); e.preventDefault(); setIsBookmarked(b => !b); }}
+          onClick={(e) => { e.stopPropagation(); setIsBookmarked(b => !b); }}
+        >
+          <svg width="24" height="24" viewBox="0 0 24 24" fill={isBookmarked ? "white" : "none"} stroke="white" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"/>
+          </svg>
+          <span className="side-btn-label">保存</span>
+        </button>
+
+        {/* 共有 */}
+        <button
+          className="side-btn"
+          aria-label="共有"
+          onTouchEnd={handleShare}
+          onClick={handleShare}
+        >
+          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <circle cx="18" cy="5" r="3"/>
+            <circle cx="6" cy="12" r="3"/>
+            <circle cx="18" cy="19" r="3"/>
+            <line x1="8.59" y1="13.51" x2="15.42" y2="17.49"/>
+            <line x1="15.41" y1="6.51" x2="8.59" y2="10.49"/>
+          </svg>
+          <span className="side-btn-label">共有</span>
+        </button>
+
+        {/* 詳細を見る */}
+        <Link
+          href={`/movies/${item.slug}`}
+          className="side-btn"
+          aria-label="詳細を見る"
+          onClick={(e) => e.stopPropagation()}
+        >
+          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <circle cx="12" cy="12" r="10"/>
+            <line x1="12" y1="8" x2="12" y2="12"/>
+            <line x1="12" y1="16" x2="12.01" y2="16"/>
+          </svg>
+          <span className="side-btn-label">詳細</span>
+        </Link>
+
+        {/* 購入する */}
+        <a
+          href={item.affiliate_url}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="side-btn side-btn--buy"
+          aria-label="購入する"
+          onClick={(e) => e.stopPropagation()}
+        >
+          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <circle cx="9" cy="21" r="1"/>
+            <circle cx="20" cy="21" r="1"/>
+            <path d="M1 1h4l2.68 13.39a2 2 0 0 0 2 1.61h9.72a2 2 0 0 0 2-1.61L23 6H6"/>
+          </svg>
+          <span className="side-btn-label">購入</span>
+        </a>
+      </div>
 
       <div className="info-overlay">
         {item.genres && item.genres.length > 0 && (
@@ -544,14 +627,8 @@ export default function FeedItem({ item, isFirst, isSecond = false }: Props) {
         {item.actresses.length > 0 && (
           <p className="item-actress">👤 {item.actresses.join(" / ")}</p>
         )}
-        <div ref={ctaRef} className="cta-buttons">
-          <Link href={`/movies/${item.slug}`} className="btn-detail">
-            詳細を見る
-          </Link>
-          <a href={item.affiliate_url} target="_blank" rel="noopener noreferrer" className="btn-buy">
-            購入する →
-          </a>
-        </div>
+        {/* calcVideoArea の基準点として ctaRef を維持（非表示） */}
+        <div ref={ctaRef} className="cta-anchor" />
       </div>
 
       {isFirst && (
@@ -651,32 +728,46 @@ const itemStyle = `
     -webkit-backdrop-filter: blur(6px);
     text-shadow: 0 1px 4px rgba(0,0,0,0.5);
   }
-  .mute-badge {
+  /* 右下縦並びアクションボタン */
+  .side-actions {
     position: absolute;
-    bottom: 80px;
-    right: 14px;
-    background: rgba(0,0,0,0.62);
-    border-radius: 999px;
-    padding: 8px 14px 8px 10px;
-    z-index: 20;
-    cursor: pointer;
+    right: 12px;
+    bottom: 100px;
     display: flex;
+    flex-direction: column;
     align-items: center;
-    gap: 6px;
-    backdrop-filter: blur(8px);
-    -webkit-backdrop-filter: blur(8px);
-    border: 1px solid rgba(255,255,255,0.15);
-    transition: opacity 0.15s ease;
-    touch-action: none;
+    gap: 20px;
+    z-index: 30;
   }
-  .mute-badge:active { opacity: 0.7; }
-  .mute-label {
+  .side-btn {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 4px;
+    background: none;
+    border: none;
+    cursor: pointer;
+    padding: 0;
+    -webkit-tap-highlight-color: transparent;
+    touch-action: none;
+    text-decoration: none;
+    filter: drop-shadow(0 1px 4px rgba(0,0,0,0.8));
+    transition: transform 0.1s ease, opacity 0.1s ease;
+  }
+  .side-btn:active { transform: scale(0.88); opacity: 0.7; }
+  .side-btn--active svg { filter: drop-shadow(0 0 6px rgba(255,255,255,0.8)); }
+  .side-btn--buy svg { stroke: #ff4d7d; }
+  .side-btn-label {
     color: #fff;
-    font-size: 12px;
+    font-size: 10px;
     font-weight: 600;
-    white-space: nowrap;
     letter-spacing: 0.02em;
-    text-shadow: 0 1px 3px rgba(0,0,0,0.6);
+    text-shadow: 0 1px 3px rgba(0,0,0,0.9);
+    white-space: nowrap;
+  }
+  .cta-anchor {
+    height: 0;
+    visibility: hidden;
   }
   .genre-chips {
     display: flex;
@@ -703,8 +794,8 @@ const itemStyle = `
   .genre-chip:active { background: rgba(255,255,255,0.25); }
   .scroll-hint {
     position: absolute;
-    bottom: 180px;
-    right: 16px;
+    bottom: 220px;
+    right: 72px;
     display: flex;
     flex-direction: column;
     align-items: center;

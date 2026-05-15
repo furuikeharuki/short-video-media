@@ -20,11 +20,7 @@ html, body {
 /* ━━━ 共通変数 ━━━━━━━━━━━━━━━━━━━━━ */
 
 :root {
-  /*
-    --header-h: ヘッダー本体(52px) + AffiliateNotice(29px) の合計高さ
-    Header.tsx 内に AffiliateNotice を包含したため、実際の fixed 領域と一致
-  */
-  --header-h:      81px;
+  --header-h:      52px;
   --bottom-nav-h:  56px;
   --header-bg:     #000;
   --accent:        #E8003D;
@@ -40,30 +36,12 @@ html, body {
   left: 0;
   right: 0;
   z-index: 100;
-  display: flex;
-  flex-direction: column;
-  background: var(--header-bg);
-}
-
-/* ロゴ・アイコン行 */
-.site-header__main {
-  height: 52px;
+  height: var(--header-h);
   display: flex;
   align-items: center;
   justify-content: space-between;
   padding: 0 14px;
-}
-
-/* アフィリエイト警告ノティス */
-.site-header__notice {
-  width: 100%;
-  background: rgba(255,255,255,0.05);
-  border-bottom: 1px solid rgba(255,255,255,0.08);
-  padding: 6px 16px;
-  font-size: 11px;
-  color: rgba(255,255,255,0.45);
-  text-align: center;
-  line-height: 1.5;
+  background: var(--header-bg);
 }
 
 .header-logo {
@@ -283,6 +261,11 @@ html, body {
   padding-top: var(--header-h);
 }
 
+/*
+  .page-content
+  ショート以外の全ページで使う共通ラッパー。
+  ヘッダー（上）とボトムナブ（下）の高さ分だけ余白を確保する。
+*/
 .page-content {
   padding-top: var(--header-h);
   padding-bottom: var(--bottom-nav-h);
@@ -335,6 +318,7 @@ html, body {
 }
 
 /* ━━━ 詳細ページ（body.detail-page） ━━━━━━━━━━━━━━━━━━━ */
+/* layout.tsx の useEffect で付与・除去されるクラス */
 
 body.detail-page {
   overflow: auto !important;

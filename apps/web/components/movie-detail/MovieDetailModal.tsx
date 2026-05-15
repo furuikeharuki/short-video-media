@@ -118,14 +118,12 @@ export default function MovieDetailModal({ slug, onClose }: Props) {
 
   return (
     <>
-      {/* Backdrop: 画面全体を暗くするがヘッダーはクリック不可 */}
       <div
         className={`mdm-backdrop ${visible ? "mdm-backdrop--visible" : ""}`}
         onClick={handleClose}
         aria-hidden="true"
       />
 
-      {/* Sheet: ヘッダー直下から下端まで */}
       <div
         ref={sheetRef}
         role="dialog"
@@ -185,12 +183,18 @@ export default function MovieDetailModal({ slug, onClose }: Props) {
 
         .mdm-sheet {
           position: fixed;
-          /* ヘッダー直下から下端まで全画面を占有 */
-          top: var(--header-h, 52px);
+          /*
+            border-radius: 16px の觧圆分だけ top を上にずらすことで
+            ヘッダーバーとの隙間を埋める。
+            觧圆は overflow:hidden の親要素でクリップされるため
+            実際の表示場所は var(--header-h) の直下から始まる。
+          */
+          top: calc(var(--header-h, 52px) - 16px);
           left: 0; right: 0; bottom: 0;
           z-index: 501;
           background: #0a0a0a;
           border-radius: 16px 16px 0 0;
+          overflow: hidden;
           display: flex;
           flex-direction: column;
           transform: translateY(100%);
@@ -200,9 +204,10 @@ export default function MovieDetailModal({ slug, onClose }: Props) {
         }
         .mdm-sheet--visible { transform: translateY(0); }
 
+        /* 觧圆分上にくる16pxをpadding-topで常に確保 */
         .mdm-handle-wrap {
           display: flex; align-items: center; justify-content: center;
-          padding: 10px 0 4px;
+          padding: 26px 0 4px;
           flex-shrink: 0;
           cursor: grab;
         }
@@ -214,7 +219,7 @@ export default function MovieDetailModal({ slug, onClose }: Props) {
 
         .mdm-back {
           position: absolute;
-          top: 16px;
+          top: 32px;
           left: 16px;
           z-index: 10;
           display: flex;

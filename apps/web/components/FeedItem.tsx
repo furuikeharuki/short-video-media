@@ -94,7 +94,6 @@ export default function FeedItem({ item, isFirst, isSecond = false }: Props) {
   const pcClickCountRef          = useRef(0);
   const pcClickTimerRef          = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  const [hintVisible,  setHintVisible]  = useState(isFirst);
   const [isMuted,      setIsMuted]      = useState(true);
   const [isBookmarked, setIsBookmarked] = useState(false);
 
@@ -106,15 +105,6 @@ export default function FeedItem({ item, isFirst, isSecond = false }: Props) {
     overflow: "hidden",
     borderRadius: "8px",
   });
-
-  useEffect(() => {
-    if (!isFirst) return;
-    const container = document.querySelector(".feed-container");
-    if (!container) return;
-    const hide = () => setHintVisible(false);
-    container.addEventListener("scroll", hide, { once: true, passive: true });
-    return () => container.removeEventListener("scroll", hide);
-  }, [isFirst]);
 
   const setVideoReady = useCallback((ready: boolean) => {
     const video   = videoRef.current;
@@ -619,13 +609,6 @@ export default function FeedItem({ item, isFirst, isSecond = false }: Props) {
         </div>
       </div>
 
-      {isFirst && (
-        <div className={`scroll-hint${hintVisible ? "" : " scroll-hint--hidden"}`} aria-hidden="true">
-          <span>スワイプ</span>
-          <span className="scroll-arrow">↓</span>
-        </div>
-      )}
-
       <style>{itemStyle}</style>
     </section>
   );
@@ -825,28 +808,6 @@ const itemStyle = `
     max-width: 100%;
   }
 
-  .scroll-hint {
-    position: absolute;
-    bottom: clamp(100px, 18vh, 160px);
-    left: 12px;
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    gap: 4px;
-    color: rgba(255, 255, 255, 0.5);
-    font-size: 11px;
-    z-index: 10;
-    pointer-events: none;
-    transition: opacity 0.5s ease;
-    animation: bounce 2s ease-in-out infinite;
-  }
-  .scroll-hint--hidden { opacity: 0; animation: none; }
-  .scroll-arrow { font-size: 18px; }
-  @keyframes bounce {
-    0%, 100% { transform: translateY(0); }
-    50%       { transform: translateY(6px); }
-  }
-
   .skip-ripple {
     position: absolute;
     transform: translate(-50%, -50%);
@@ -878,7 +839,6 @@ const itemStyle = `
 
   @media (prefers-reduced-motion: reduce) {
     .shimmer-inner  { animation: none; }
-    .scroll-hint    { animation: none; }
     .skip-ripple    { animation: none; opacity: 0; }
     .action-overlay { animation: none; opacity: 0; }
   }

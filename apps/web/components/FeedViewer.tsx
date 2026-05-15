@@ -1,0 +1,166 @@
+"use client";
+
+import { useCallback, useEffect, useRef, useState } from "react";
+import FeedItem from "@/components/FeedItem";
+import type { MovieCard } from "@/lib/api/feed";
+
+const WINDOW_SIZE = 2;
+
+interface Props {
+  items: MovieCard[];
+  initialIndex?: number;
+  /** 末尾に近づいたときのコールバック（追加ロードなどに利用） */
+  onNearEnd?: (currentIndex: number) => void;
+  /** インデックス変化のコールバック */
+  onIndexChange?: (index: number) => void;
+}
+
+export default function FeedViewer({
+  items,
+  initialIndex = 0,
+  onNearEnd,
+  onIndexChange,
+}: Props) {
+  const containerRef  = useRef<HTMLDivElement>(null);
+  const currentIdxRef = useRef(initialIndex);
+  const wheelLockRef  = useRef(false);
+
+  const [currentIndex, setCurrentIndex] = useState(initialIndex);
+  const [windowItems,  setWindowItems]  = useState<MovieCard[]>([]);
+  const windowStartRef = useRef(0);
+
+  const [dragPx,         setDragPx]       = useState(0);
+  const dragStartY       = useRef(0);
+  const dragStartYForEnd = useRef(0);
+  const dragStartTime    = useRef(0);
+  const isDragging       = useRef(false);
+
+  const updateWindow = useCallback((idx: number) => {
+    const start = Math.max(0, idx - WINDOW_SIZE);
+    const end   = Math.min(items.length, idx + WINDOW_SIZE + 1);
+    windowStartRef.current = start;
+    setWindowItems(items.slice(start, end));
+  }, [items]);
+
+  // items または initialIndex が変わったときに初期化
+  useEffect(() => {
+    currentIdxRef.current = initialIndex;
+    setCurrentIndex(initialIndex);
+    updateWindow(initialIndex);
+  }, [items, initialIndex, updateWindow]);
+
+  const goNext = useCallback(() => {
+    const nextIdx = currentIdxRef.current + 1;
+    if (nextIdx >= items.length) return;
+    currentIdxRef.current = nextIdx;
+    setCurrentIndex(nextIdx);
+    updateWindow(nextIdx);
+    onIndexChange?.(nextIdx);
+    if (items.length - nextIdx <= 5) onNearEnd?.(nextIdx);
+  }, [items, updateWindow, onNearEnd, onIndexChange]);
+
+  const goPrev = useCallback(() => {
+    const next = Math.max(0, currentIdxRef.current - 1);
+    if (next === currentIdxRef.current) return;
+    currentIdxRef.current = next;
+    setCurrentIndex(next);
+    updateWindow(next);
+    onIndexChange?.(next);
+  }, [updateWindow, onIndexChange]);
+
+  useEffect(() => {
+    const el = containerRef.current;
+    if (!el) return;
+
+    const onTouchStart = (e: TouchEvent) => {
+      const y = e.touches[0].clientY;
+      isDragging.current       = true;
+      dragStartY.current       = y;
+      dragStartYForEnd.current = y;
+      dragStartTime.current    = Date.now();
+      setDragPx(0);
+    };
+
+    const onTouchMove = (e: TouchEvent) => {
+      e.preventDefault();
+      if (!isDragging.current) return;
+      const dy    = e.touches[0].clientY - dragStartY.current;
+      const atEnd = currentIdxRef.current >= items.length - 1;
+      const atTop = currentIdxRef.current <= 0;
+      if ((dy > 0 && atTop) || (dy < 0 && atEnd)) {
+        setDragPx(dy * 0.35);
+      } else {
+        setDragPx(dy);
+      }
+    };
+
+    const onTouchEnd = (e: TouchEvent) => {
+      if (!isDragging.current) return;
+      isDragging.current = false;
+      setDragPx(0);
+      const dy = e.changedTouches[0].clientY - dragStartYForEnd.current;
+      const dt = Date.now() - dragStartTime.current;
+      if (Math.abs(dy) > 60 && dt < 1000) {
+        if (dy < 0) goNext();
+        else        goPrev();
+      }
+    };
+
+    const onTouchCancel = () => {
+      isDragging.current = false;
+      setDragPx(0);
+    };
+
+    const onWheel = (e: WheelEvent) => {
+      e.preventDefault();
+      if (wheelLockRef.current) return;
+      wheelLockRef.current = true;
+      setTimeout(() => { wheelLockRef.current = false; }, 300);
+      if (e.deltaY > 0) goNext(); else goPrev();
+    };
+
+    el.addEventListener("touchstart",  onTouchStart,  { passive: true });
+    el.addEventListener("touchmove",   onTouchMove,   { passive: false });
+    el.addEventListener("touchend",    onTouchEnd,    { passive: true });
+    el.addEventListener("touchcancel", onTouchCancel, { passive: true });
+    el.addEventListener("wheel",       onWheel,       { passive: false });
+    return () => {
+      el.removeEventListener("touchstart",  onTouchStart);
+      el.removeEventListener("touchmove",   onTouchMove);
+      el.removeEventListener("touchend",    onTouchEnd);
+      el.removeEventListener("touchcancel", onTouchCancel);
+      el.removeEventListener("wheel",       onWheel);
+    };
+  }, [goNext, goPrev, items]);
+
+  const isDraggingState = dragPx !== 0;
+
+  return (
+    <div ref={containerRef} className="feed-container">
+      {windowItems.map((item, i) => {
+        const absIndex = windowStartRef.current + i;
+        const offset   = absIndex - currentIndex;
+        const transform  = `translateY(calc(${offset * 100}% + ${dragPx}px))`;
+        const transition = isDraggingState ? "none" : "transform 0.35s cubic-bezier(0.25,1,0.5,1)";
+        return (
+          <div
+            key={`${item.id}-${absIndex}`}
+            className="feed-slide"
+            style={{
+              transform,
+              transition,
+              zIndex:        offset === 0 ? 2 : 1,
+              pointerEvents: offset === 0 ? "auto" : "none",
+            }}
+          >
+            <FeedItem
+              item={item}
+              isFirst={absIndex === 0}
+              isSecond={absIndex === 1}
+            />
+          </div>
+        );
+      })}
+    </div>
+  );
+}

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useLayoutEffect, useRef, useCallback, useState } from "react";
+import { useEffect, useRef, useCallback, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import type { MovieCard } from "@/lib/api/feed";
@@ -13,58 +13,13 @@ interface Props {
   onGenreClick?: (genre: string) => void;
 }
 
-const H_PADDING = 4;
-const V_PADDING_TOP = 4;
 const SKIP_SEC = 5;
 const DBL_TAP_MS = 300;
 const LONG_PRESS_MS = 500;
 const TAP_MOVE_THRESHOLD = 10;
 const PLAY_THRESHOLD = 0.85;
 
-const VIDEO_BOTTOM_OFFSET = 190;
-
 let globalUserGestured = false;
-
-function calcRenderedRect(
-  containerW: number,
-  containerH: number,
-  videoW: number,
-  videoH: number,
-  objectPosition: string,
-): { top: number; left: number; width: number; height: number } {
-  if (videoW === 0 || videoH === 0) {
-    return { top: 0, left: 0, width: containerW, height: containerH };
-  }
-  const containerAspect = containerW / containerH;
-  const videoAspect     = videoW / videoH;
-
-  let renderedW: number;
-  let renderedH: number;
-  if (videoAspect < containerAspect) {
-    renderedH = containerH;
-    renderedW = renderedH * videoAspect;
-  } else {
-    renderedW = containerW;
-    renderedH = renderedW / videoAspect;
-  }
-
-  const parts = objectPosition.split(" ");
-  const parsePos = (val: string, total: number, rendered: number) => {
-    if (val === "center") return (total - rendered) / 2;
-    if (val === "top" || val === "left") return 0;
-    if (val === "bottom" || val === "right") return total - rendered;
-    if (val.endsWith("%")) {
-      const pct = parseFloat(val) / 100;
-      return pct * (total - rendered);
-    }
-    return parseFloat(val) || (total - rendered) / 2;
-  };
-
-  const left = parsePos(parts[0] ?? "center", containerW, renderedW);
-  const top  = parsePos(parts[1] ?? "center", containerH, renderedH);
-
-  return { top, left, width: renderedW, height: renderedH };
-}
 
 export default function FeedItem({ item, isFirst, isSecond = false }: Props) {
   const router = useRouter();
@@ -76,9 +31,7 @@ export default function FeedItem({ item, isFirst, isSecond = false }: Props) {
   const pauseBadgeRef = useRef<HTMLDivElement>(null);
   const fastBadgeRef  = useRef<HTMLDivElement>(null);
   const overlayRef    = useRef<HTMLDivElement>(null);
-  const bottomBarRef  = useRef<HTMLDivElement>(null);
 
-  const objectFitRef             = useRef<"cover" | "contain">("cover");
   const isPlayingRef             = useRef(false);
   const isMutedRef               = useRef(true);
   const tapTimerRef              = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -94,15 +47,6 @@ export default function FeedItem({ item, isFirst, isSecond = false }: Props) {
 
   const [isMuted,      setIsMuted]      = useState(true);
   const [isBookmarked, setIsBookmarked] = useState(false);
-
-  const [wrapStyle, setWrapStyle] = useState<React.CSSProperties>({
-    position: "absolute",
-    top: 0, left: 0, width: 0, height: 0,
-    pointerEvents: "none",
-    zIndex: 25,
-    overflow: "hidden",
-    borderRadius: "8px",
-  });
 
   const setVideoReady = useCallback((ready: boolean) => {
     const video   = videoRef.current;
@@ -131,96 +75,6 @@ export default function FeedItem({ item, isFirst, isSecond = false }: Props) {
     const el = fastBadgeRef.current;
     if (el) el.style.display = visible ? "block" : "none";
   }, []);
-
-  const calcVideoArea = useCallback((fit?: "cover" | "contain") => {
-    const resolvedFit = fit ?? objectFitRef.current;
-    const section   = sectionRef.current;
-    const video     = videoRef.current;
-    const bottomBar = bottomBarRef.current;
-    if (!section || !video) return;
-
-    const bottomBarH   = bottomBar ? bottomBar.offsetHeight : VIDEO_BOTTOM_OFFSET;
-    const bottomOffset = bottomBarH;
-
-    const videoTop    = V_PADDING_TOP;
-    const videoHeight = Math.max(section.offsetHeight - videoTop - bottomOffset, 0);
-    const videoWidth  = section.offsetWidth - H_PADDING * 2;
-
-    const objPosition = resolvedFit === "contain" ? "center 30%" : "center center";
-
-    video.style.position       = "absolute";
-    video.style.top            = `${videoTop}px`;
-    video.style.left           = `${H_PADDING}px`;
-    video.style.right          = "";
-    video.style.bottom         = "";
-    video.style.width          = `${videoWidth}px`;
-    video.style.height         = `${videoHeight}px`;
-    video.style.objectFit      = resolvedFit;
-    video.style.objectPosition = objPosition;
-    video.style.borderRadius   = "8px";
-
-    let wrapTop  = videoTop;
-    let wrapLeft = H_PADDING;
-    let wrapW    = videoWidth;
-    let wrapH    = videoHeight;
-
-    if (resolvedFit === "contain" && video.videoWidth > 0 && video.videoHeight > 0) {
-      const rendered = calcRenderedRect(
-        videoWidth, videoHeight,
-        video.videoWidth, video.videoHeight,
-        objPosition,
-      );
-      wrapTop  = videoTop  + rendered.top;
-      wrapLeft = H_PADDING + rendered.left;
-      wrapW    = rendered.width;
-      wrapH    = rendered.height;
-    }
-
-    setWrapStyle(prev => {
-      if (
-        prev.top === wrapTop && prev.left === wrapLeft &&
-        prev.width === wrapW && prev.height === wrapH
-      ) return prev;
-      return {
-        position: "absolute",
-        top: wrapTop,
-        left: wrapLeft,
-        width: wrapW,
-        height: wrapH,
-        pointerEvents: "none",
-        zIndex: 25,
-        overflow: "hidden",
-        borderRadius: "8px",
-      };
-    });
-  }, []);
-
-  useLayoutEffect(() => { calcVideoArea(); }, [calcVideoArea]);
-
-  useEffect(() => {
-    const bottomBar = bottomBarRef.current;
-    if (!bottomBar) return;
-    const ro = new ResizeObserver(() => calcVideoArea());
-    ro.observe(bottomBar);
-    return () => ro.disconnect();
-  }, [calcVideoArea]);
-
-  useEffect(() => {
-    const onResize = () => calcVideoArea();
-    window.addEventListener("resize", onResize, { passive: true });
-    return () => window.removeEventListener("resize", onResize);
-  }, [calcVideoArea]);
-
-  const handleMetadata = useCallback(() => {
-    const video   = videoRef.current;
-    const section = sectionRef.current;
-    if (!video || !section) return;
-    const videoAspect  = video.videoWidth / video.videoHeight;
-    const screenAspect = section.offsetWidth / section.offsetHeight;
-    const fit: "cover" | "contain" = videoAspect <= screenAspect ? "cover" : "contain";
-    objectFitRef.current = fit;
-    calcVideoArea(fit);
-  }, [calcVideoArea]);
 
   const playVideo = useCallback(async (video: HTMLVideoElement, withGesture = false) => {
     if (withGesture) globalUserGestured = true;
@@ -455,13 +309,13 @@ export default function FeedItem({ item, isFirst, isSecond = false }: Props) {
             loop
             playsInline
             preload={preloadAttr}
-            onLoadedMetadata={handleMetadata}
             onLoadedData={() => setVideoReady(true)}
             onCanPlay={() => setVideoReady(true)}
-            style={{ position: "absolute", opacity: 0, transition: "opacity 0.3s ease" }}
+            className="feed-video"
+            style={{ opacity: 0, transition: "opacity 0.3s ease" }}
           />
 
-          <div style={wrapStyle}>
+          <div className="overlay-wrap">
             <div ref={overlayRef} className="action-overlay" aria-hidden="true" style={{ display: "none" }}>
               <span className="action-icon action-icon--pause" style={{ display: "none" }}>
                 <svg width="48" height="48" viewBox="0 0 48 48" fill="none">
@@ -498,7 +352,7 @@ export default function FeedItem({ item, isFirst, isSecond = false }: Props) {
         </div>
       )}
 
-      <div ref={bottomBarRef} className="bottom-bar">
+      <div className="bottom-bar">
         <div className="info-overlay" onClick={(e) => e.stopPropagation()}>
           {item.genres && item.genres.length > 0 && (
             <div className="genre-chips" onClick={(e) => e.stopPropagation()}>
@@ -614,12 +468,26 @@ const itemStyle = `
     overflow: hidden;
     background: #000;
   }
+  .feed-video {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    object-position: center center;
+    border-radius: 8px;
+  }
+  .overlay-wrap {
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    z-index: 25;
+    border-radius: 8px;
+    overflow: hidden;
+  }
   .shimmer {
     position: absolute;
-    top: ${V_PADDING_TOP}px;
-    left: ${H_PADDING}px;
-    right: ${H_PADDING}px;
-    bottom: 0;
+    inset: 0;
     background: #1a1a1a;
     z-index: 1;
     overflow: hidden;
@@ -698,7 +566,6 @@ const itemStyle = `
     -webkit-backdrop-filter: blur(6px);
     text-shadow: 0 1px 4px rgba(0,0,0,0.5);
   }
-
   .bottom-bar {
     position: absolute;
     bottom: 0;
@@ -711,8 +578,8 @@ const itemStyle = `
     padding: 0 4px 15px 12px;
     box-sizing: border-box;
     pointer-events: none;
+    background: linear-gradient(to top, rgba(0,0,0,0.7) 0%, transparent 100%);
   }
-
   .info-overlay {
     min-width: 0;
     overflow: hidden;
@@ -741,7 +608,6 @@ const itemStyle = `
     overflow: hidden;
     text-overflow: ellipsis;
   }
-
   .genre-chips {
     display: flex;
     flex-wrap: wrap;
@@ -766,7 +632,6 @@ const itemStyle = `
     transition: background 0.15s;
   }
   .genre-chip:active { background: rgba(255,255,255,0.25); }
-
   .side-actions {
     width: 53px;
     display: flex;
@@ -806,7 +671,6 @@ const itemStyle = `
     text-overflow: ellipsis;
     max-width: 100%;
   }
-
   .skip-ripple {
     position: absolute;
     transform: translate(-50%, -50%);
@@ -835,16 +699,14 @@ const itemStyle = `
     40%  { opacity: 1; transform: translate(-50%, -50%) scale(1.1); }
     100% { opacity: 0; transform: translate(-50%, -50%) scale(1.35); }
   }
-
   @media (prefers-reduced-motion: reduce) {
     .shimmer-inner  { animation: none; }
     .skip-ripple    { animation: none; opacity: 0; }
     .action-overlay { animation: none; opacity: 0; }
   }
-
   @media (min-width: 768px) {
     .bottom-bar {
-      padding: 0 8px 15px 20px;
+      padding: 0 8px 20px 20px;
     }
     .side-actions {
       width: 60px;

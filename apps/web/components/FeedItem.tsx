@@ -57,7 +57,6 @@ export default function FeedItem({ item, isFirst, isSecond = false }: Props) {
 
   useEffect(() => { setMounted(true); }, []);
 
-  // data-next-loading のない dialog（= 本物のMovieModal）が出たら仮モーダルを消す
   useEffect(() => {
     if (!navigating) return;
     const observer = new MutationObserver(() => {
@@ -246,10 +245,8 @@ export default function FeedItem({ item, isFirst, isSecond = false }: Props) {
   const handleDetail = useCallback((e: React.MouseEvent | React.TouchEvent) => {
     e.stopPropagation();
     e.preventDefault();
-
     navigatingRef.current = true;
     router.push(`/movies/${item.slug}`);
-
     if (loadingTimerRef.current) clearTimeout(loadingTimerRef.current);
     loadingTimerRef.current = setTimeout(() => {
       if (navigatingRef.current) setNavigating(true);
@@ -445,13 +442,13 @@ export default function FeedItem({ item, isFirst, isSecond = false }: Props) {
               onClick={handleToggleMute}
             >
               {isMuted ? (
-                <svg width="26" height="26" viewBox="0 0 24 24" fill="none">
+                <svg width="30" height="30" viewBox="0 0 24 24" fill="none">
                   <path d="M11 5L6 9H2v6h4l5 4V5z" fill="white"/>
                   <line x1="23" y1="9" x2="17" y2="15" stroke="white" strokeWidth="2.2" strokeLinecap="round"/>
                   <line x1="17" y1="9" x2="23" y2="15" stroke="white" strokeWidth="2.2" strokeLinecap="round"/>
                 </svg>
               ) : (
-                <svg width="26" height="26" viewBox="0 0 24 24" fill="none">
+                <svg width="30" height="30" viewBox="0 0 24 24" fill="none">
                   <path d="M11 5L6 9H2v6h4l5 4V5z" fill="white"/>
                   <path d="M15.54 8.46a5 5 0 0 1 0 7.07" stroke="white" strokeWidth="2" strokeLinecap="round"/>
                   <path d="M19.07 4.93a10 10 0 0 1 0 14.14" stroke="white" strokeWidth="2" strokeLinecap="round"/>
@@ -466,7 +463,7 @@ export default function FeedItem({ item, isFirst, isSecond = false }: Props) {
               onTouchEnd={(e) => { e.stopPropagation(); e.preventDefault(); setIsBookmarked(b => !b); }}
               onClick={(e) => { e.stopPropagation(); setIsBookmarked(b => !b); }}
             >
-              <svg width="24" height="24" viewBox="0 0 24 24" fill={isBookmarked ? "white" : "none"} stroke="white" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <svg width="30" height="30" viewBox="0 0 24 24" fill={isBookmarked ? "white" : "none"} stroke="white" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                 <path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"/>
               </svg>
               <span className="side-btn-label">保存</span>
@@ -478,7 +475,7 @@ export default function FeedItem({ item, isFirst, isSecond = false }: Props) {
               onTouchEnd={handleShare}
               onClick={handleShare}
             >
-              <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                 <circle cx="18" cy="5" r="3"/>
                 <circle cx="6" cy="12" r="3"/>
                 <circle cx="18" cy="19" r="3"/>
@@ -494,7 +491,7 @@ export default function FeedItem({ item, isFirst, isSecond = false }: Props) {
               onTouchEnd={handleDetail}
               onClick={handleDetail}
             >
-              <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                 <circle cx="12" cy="12" r="10"/>
                 <line x1="12" y1="8" x2="12" y2="12"/>
                 <line x1="12" y1="16" x2="12.01" y2="16"/>
@@ -510,7 +507,7 @@ export default function FeedItem({ item, isFirst, isSecond = false }: Props) {
               aria-label="購入する"
               onClick={(e) => e.stopPropagation()}
             >
-              <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                 <circle cx="9" cy="21" r="1"/>
                 <circle cx="20" cy="21" r="1"/>
                 <path d="M1 1h4l2.68 13.39a2 2 0 0 0 2 1.61h9.72a2 2 0 0 0 2-1.61L23 6H6"/>
@@ -689,7 +686,7 @@ const itemStyle = `
   }
   .genre-chip:active { background: rgba(255,255,255,0.25); }
   .side-actions {
-    width: 53px;
+    width: 65px;
     display: flex;
     flex-direction: column;
     align-items: center;
@@ -705,7 +702,7 @@ const itemStyle = `
     background: none;
     border: none;
     cursor: pointer;
-    padding: 0;
+    padding: 6px 0;
     width: 100%;
     -webkit-tap-highlight-color: transparent;
     touch-action: none;
@@ -718,7 +715,7 @@ const itemStyle = `
   .side-btn--buy svg { stroke: #ff4d7d; }
   .side-btn-label {
     color: #fff;
-    font-size: 10px;
+    font-size: 11px;
     font-weight: 600;
     letter-spacing: 0.02em;
     text-shadow: 0 1px 3px rgba(0,0,0,0.9);
@@ -773,10 +770,10 @@ const itemStyle = `
       padding: 0 8px 20px 20px;
     }
     .side-actions {
-      width: 60px;
+      width: 72px;
       gap: 20px;
     }
-    .side-btn svg { width: 28px; height: 28px; }
+    .side-btn svg { width: 32px; height: 32px; }
     .item-title   { font-size: 17px; }
     .item-actress { font-size: 14px; }
   }

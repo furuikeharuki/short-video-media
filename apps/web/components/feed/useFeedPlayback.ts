@@ -223,7 +223,8 @@ export function useFeedPlayback({ slug, title, onOpenModal }: UseFeedPlaybackOpt
 
   const handleShare = useCallback((e: React.MouseEvent | React.TouchEvent) => {
     e.stopPropagation();
-    e.preventDefault();
+    // navigator.share はユーザージェスチャーの同期コンテキストが必要なため
+    // e.preventDefault() を呼ばない
     const url = `${window.location.origin}/?v=${slug}`;
     if (navigator.share) {
       navigator.share({ title, url }).catch(() => {});
@@ -232,7 +233,6 @@ export function useFeedPlayback({ slug, title, onOpenModal }: UseFeedPlaybackOpt
     }
   }, [slug, title]);
 
-  // 詳細ボタン: video を pause してモーダルを開く
   const handleDetail = useCallback((e: React.MouseEvent | React.TouchEvent) => {
     e.stopPropagation();
     e.preventDefault();

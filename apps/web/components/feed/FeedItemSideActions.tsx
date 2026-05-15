@@ -69,7 +69,11 @@ export default function FeedItemSideActions({
       <button
         className="side-btn"
         aria-label="共有"
-        onTouchEnd={onShare}
+        onTouchEnd={(e) => {
+          e.stopPropagation();
+          e.preventDefault(); // clickの二重発火を防ぐ
+          onShare(e);
+        }}
         onClick={onShare}
       >
         <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">

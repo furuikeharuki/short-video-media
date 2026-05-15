@@ -10,6 +10,10 @@ const WINDOW_SIZE   = 2;
 const PRELOAD_AHEAD = 2;
 const PRELOAD_BYTES = 2 * 1024 * 1024;
 
+const FEED_SEED_KEY  = "feed_seed";
+const FEED_INDEX_KEY = "feed_index";
+const FEED_ITEMS_KEY = "feed_items";
+
 const preloadCache = new Set<string>();
 
 function prefetchVideo(url: string, abortSignal: AbortSignal) {
@@ -20,6 +24,30 @@ function prefetchVideo(url: string, abortSignal: AbortSignal) {
     headers: { Range: `bytes=0-${PRELOAD_BYTES - 1}` },
     signal: abortSignal,
   }).catch(() => { preloadCache.delete(url); });
+}
+
+function saveSession(seed: number, index: number, items: object[]) {
+  try {
+    sessionStorage.setItem(FEED_SEED_KEY,  String(seed));
+    sessionStorage.setItem(FEED_INDEX_KEY, String(index));
+    sessionStorage.setItem(FEED_ITEMS_KEY, JSON.stringify(items));
+  } catch { /* ignore */ }
+}
+
+function loadSession(): { seed: number; index: number; items: object[] } | null {
+  try {
+    const seed  = sessionStorage.getItem(FEED_SEED_KEY);
+    const index = sessionStorage.getItem(FEED_INDEX_KEY);
+    const items = sessionStorage.getItem(FEED_ITEMS_KEY);
+    if (!seed || !index || !items) return null;
+    return {
+      seed:  parseInt(seed, 10),
+      index: parseInt(index, 10),
+      items: JSON.parse(items),
+    };
+  } catch {
+    return null;
+  }
 }
 
 export default function FeedClient() {
@@ -58,19 +86,19 @@ export default function FeedClient() {
     }
   }, []);
 
-  const fetchInitial = useCallback(async (overrideCursor?: string, overrideSeed?: number) => {
+  const fetchInitial = useCallback(async (seed: number, startIndex = 0) => {
     if (isFetchingRef.current) return;
     isFetchingRef.current = true;
     try {
-      const cursor = overrideCursor ?? "0";
-      const seed   = overrideSeed   ?? seedRef.current ?? 0;
-      const res = await getFeed(parseInt(cursor, 10), 20, seed);
+      const res = await getFeed(0, 20, seed);
       allItemsRef.current   = res.items;
       nextCursorRef.current = res.next_cursor;
-      currentIdxRef.current = 0;
-      setCurrentIndex(0);
+      const idx = Math.min(startIndex, res.items.length - 1);
+      currentIdxRef.current = idx;
+      setCurrentIndex(idx);
       setIsEmpty(res.items.length === 0);
-      updateWindow(0);
+      updateWindow(idx);
+      saveSession(seed, idx, res.items);
     } catch (e) {
       console.error("fetchInitial failed", e);
     } finally {
@@ -80,9 +108,24 @@ export default function FeedClient() {
   }, [updateWindow]);
 
   useEffect(() => {
-    const seed = getOrCreateSeed();
-    seedRef.current = seed;
-    fetchInitial("0", seed);
+    const session = loadSession();
+    if (session && session.items.length > 0) {
+      // セッションがあれば順番・位置を復元
+      const items = session.items as MovieCard[];
+      allItemsRef.current   = items;
+      seedRef.current       = session.seed;
+      const idx = Math.min(session.index, items.length - 1);
+      currentIdxRef.current = idx;
+      setCurrentIndex(idx);
+      setIsEmpty(false);
+      setIsLoading(false);
+      updateWindow(idx);
+    } else {
+      // 初回ロード：新たに seed を生成してフェッチ
+      const seed = getOrCreateSeed();
+      seedRef.current = seed;
+      fetchInitial(seed, 0);
+    }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -95,6 +138,8 @@ export default function FeedClient() {
     currentIdxRef.current = nextIdx;
     setCurrentIndex(nextIdx);
     updateWindow(nextIdx);
+    // 位置だけ更新（items/seed は変わらない）
+    try { sessionStorage.setItem(FEED_INDEX_KEY, String(nextIdx)); } catch { /* ignore */ }
   }, [updateWindow]);
 
   const goPrev = useCallback(() => {
@@ -103,6 +148,7 @@ export default function FeedClient() {
     currentIdxRef.current = next;
     setCurrentIndex(next);
     updateWindow(next);
+    try { sessionStorage.setItem(FEED_INDEX_KEY, String(next)); } catch { /* ignore */ }
   }, [updateWindow]);
 
   useEffect(() => {
@@ -125,7 +171,6 @@ export default function FeedClient() {
       const dy = e.touches[0].clientY - dragStartY.current;
       const atEnd = currentIdxRef.current >= allItemsRef.current.length - 1;
       const atTop = currentIdxRef.current <= 0;
-      // 端以外は全スライド追従させる（隣が見えるように dragPx を常に更新）
       if ((dy > 0 && atEnd) || (dy < 0 && atTop)) {
         setDragPx(dy * 0.35);
       } else {
@@ -173,7 +218,10 @@ export default function FeedClient() {
   }, [goNext, goPrev]);
 
   useEffect(() => {
-    if (windowItems.length === 0 && !isFetchingRef.current && !isEmpty) fetchInitial();
+    if (windowItems.length === 0 && !isFetchingRef.current && !isEmpty) {
+      const seed = seedRef.current ?? getOrCreateSeed();
+      fetchInitial(seed, 0);
+    }
   }, [windowItems, fetchInitial, isEmpty]);
 
   const showEmpty   = isEmpty && !isLoading;
@@ -196,10 +244,7 @@ export default function FeedClient() {
           const absIndex = windowStartRef.current + i;
           const offset   = absIndex - currentIndex;
 
-          // dragPx を全スライドに適用して連動させる
-          const transform = `translateY(calc(${offset * 100}% + ${dragPx}px))`;
-
-          // ドラッグ中はアニメーション無効、離した瞬間にスナップ
+          const transform  = `translateY(calc(${offset * 100}% + ${dragPx}px))`;
           const transition = isDraggingState
             ? "none"
             : "transform 0.35s cubic-bezier(0.25,1,0.5,1)";
@@ -213,7 +258,6 @@ export default function FeedClient() {
                 transition,
                 zIndex:        offset === 0 ? 2 : 1,
                 pointerEvents: offset === 0 ? "auto" : "none",
-                // visibility なし：非アクティブスライドも常時表示されスクロール中に覚ぎる
               }}
             >
               <FeedItem

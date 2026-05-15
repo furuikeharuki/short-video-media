@@ -93,9 +93,9 @@ export default function FeedItem({ item, isFirst, isSecond = false }: Props) {
   const pcClickCountRef          = useRef(0);
   const pcClickTimerRef          = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  const [hintVisible,    setHintVisible]    = useState(isFirst);
-  const [isMuted,        setIsMuted]        = useState(true);
-  const [isBookmarked,   setIsBookmarked]   = useState(false);
+  const [hintVisible,  setHintVisible]  = useState(isFirst);
+  const [isMuted,      setIsMuted]      = useState(true);
+  const [isBookmarked, setIsBookmarked] = useState(false);
 
   const [wrapStyle, setWrapStyle] = useState<React.CSSProperties>({
     position: "absolute",
@@ -523,7 +523,6 @@ export default function FeedItem({ item, isFirst, isSecond = false }: Props) {
 
       {/* 右下縦並びアクションボタン */}
       <div className="side-actions" onClick={(e) => e.stopPropagation()} onTouchStart={(e) => e.stopPropagation()}>
-        {/* ミュートトグル */}
         <button
           className="side-btn"
           aria-label={isMuted ? "音声ON" : "ミュート"}
@@ -546,7 +545,6 @@ export default function FeedItem({ item, isFirst, isSecond = false }: Props) {
           <span className="side-btn-label">{isMuted ? "音声OFF" : "音声ON"}</span>
         </button>
 
-        {/* ブックマーク */}
         <button
           className={`side-btn${isBookmarked ? " side-btn--active" : ""}`}
           aria-label="ブックマーク"
@@ -559,7 +557,6 @@ export default function FeedItem({ item, isFirst, isSecond = false }: Props) {
           <span className="side-btn-label">保存</span>
         </button>
 
-        {/* 共有 */}
         <button
           className="side-btn"
           aria-label="共有"
@@ -576,7 +573,6 @@ export default function FeedItem({ item, isFirst, isSecond = false }: Props) {
           <span className="side-btn-label">共有</span>
         </button>
 
-        {/* 詳細を見る */}
         <Link
           href={`/movies/${item.slug}`}
           className="side-btn"
@@ -591,7 +587,6 @@ export default function FeedItem({ item, isFirst, isSecond = false }: Props) {
           <span className="side-btn-label">詳細</span>
         </Link>
 
-        {/* 購入する */}
         <a
           href={item.affiliate_url}
           target="_blank"
@@ -609,6 +604,7 @@ export default function FeedItem({ item, isFirst, isSecond = false }: Props) {
         </a>
       </div>
 
+      {/* 左下情報エリア：アイコン列の左に収まる */}
       <div className="info-overlay">
         {item.genres && item.genres.length > 0 && (
           <div className="genre-chips" onClick={(e) => e.stopPropagation()}>
@@ -627,7 +623,6 @@ export default function FeedItem({ item, isFirst, isSecond = false }: Props) {
         {item.actresses.length > 0 && (
           <p className="item-actress">👤 {item.actresses.join(" / ")}</p>
         )}
-        {/* calcVideoArea の基準点として ctaRef を維持（非表示） */}
         <div ref={ctaRef} className="cta-anchor" />
       </div>
 
@@ -728,15 +723,16 @@ const itemStyle = `
     -webkit-backdrop-filter: blur(6px);
     text-shadow: 0 1px 4px rgba(0,0,0,0.5);
   }
-  /* 右下縦並びアクションボタン */
+
+  /* ===== 右下縦並びアクションボタン ===== */
   .side-actions {
     position: absolute;
-    right: 12px;
-    bottom: 100px;
+    right: clamp(8px, 2vw, 16px);
+    bottom: clamp(16px, 4vh, 32px);
     display: flex;
     flex-direction: column;
     align-items: center;
-    gap: 20px;
+    gap: clamp(16px, 2.5vh, 28px);
     z-index: 30;
   }
   .side-btn {
@@ -759,21 +755,55 @@ const itemStyle = `
   .side-btn--buy svg { stroke: #ff4d7d; }
   .side-btn-label {
     color: #fff;
-    font-size: 10px;
+    font-size: clamp(9px, 1.1vw, 11px);
     font-weight: 600;
     letter-spacing: 0.02em;
     text-shadow: 0 1px 3px rgba(0,0,0,0.9);
     white-space: nowrap;
   }
+
+  /* ===== 左下情報エリア ===== */
+  /* side-actionsの幅(24px icon + 8px margin両側) = 約 56px を避ける */
+  .info-overlay {
+    position: absolute;
+    bottom: clamp(16px, 4vh, 32px);
+    left: clamp(10px, 3vw, 20px);
+    right: calc(clamp(8px, 2vw, 16px) + 44px);
+    z-index: 30;
+    pointer-events: auto;
+  }
+  .item-title {
+    font-size: clamp(13px, 3.5vw, 16px);
+    font-weight: 700;
+    line-height: 1.35;
+    color: #fff;
+    text-shadow: 0 1px 6px rgba(0,0,0,0.8);
+    margin-bottom: 4px;
+    display: -webkit-box;
+    -webkit-line-clamp: 3;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+  }
+  .item-actress {
+    font-size: clamp(11px, 2.8vw, 13px);
+    color: rgba(255,255,255,0.75);
+    text-shadow: 0 1px 4px rgba(0,0,0,0.7);
+    margin-bottom: 6px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
   .cta-anchor {
     height: 0;
     visibility: hidden;
   }
+
+  /* ===== ジャンルタグ ===== */
   .genre-chips {
     display: flex;
     flex-wrap: wrap;
-    gap: 5px;
-    margin-bottom: 8px;
+    gap: 4px;
+    margin-bottom: 6px;
   }
   .genre-chip {
     padding: 3px 10px;
@@ -781,7 +811,7 @@ const itemStyle = `
     border: 1px solid rgba(255,255,255,0.35);
     background: rgba(255,255,255,0.12);
     color: rgba(255,255,255,0.9);
-    font-size: 11px;
+    font-size: clamp(10px, 2.5vw, 12px);
     font-weight: 600;
     cursor: pointer;
     white-space: nowrap;
@@ -792,10 +822,12 @@ const itemStyle = `
     transition: background 0.15s;
   }
   .genre-chip:active { background: rgba(255,255,255,0.25); }
+
+  /* ===== スクロールヒント ===== */
   .scroll-hint {
     position: absolute;
-    bottom: 220px;
-    right: 72px;
+    bottom: clamp(100px, 18vh, 160px);
+    right: calc(clamp(8px, 2vw, 16px) + 52px);
     display: flex;
     flex-direction: column;
     align-items: center;
@@ -813,6 +845,8 @@ const itemStyle = `
     0%, 100% { transform: translateY(0); }
     50%       { transform: translateY(6px); }
   }
+
+  /* ===== skip ripple ===== */
   .skip-ripple {
     position: absolute;
     transform: translate(-50%, -50%);
@@ -841,10 +875,32 @@ const itemStyle = `
     40%  { opacity: 1; transform: translate(-50%, -50%) scale(1.1); }
     100% { opacity: 0; transform: translate(-50%, -50%) scale(1.35); }
   }
+
+  /* ===== reduced motion ===== */
   @media (prefers-reduced-motion: reduce) {
     .shimmer-inner  { animation: none; }
     .scroll-hint    { animation: none; }
     .skip-ripple    { animation: none; opacity: 0; }
     .action-overlay { animation: none; opacity: 0; }
+  }
+
+  /* ===== タブレット以上(768px以上)の追加調整 ===== */
+  @media (min-width: 768px) {
+    .side-actions {
+      right: 20px;
+      bottom: 40px;
+      gap: 24px;
+    }
+    .side-btn svg {
+      width: 28px;
+      height: 28px;
+    }
+    .info-overlay {
+      bottom: 40px;
+      left: 24px;
+      right: calc(20px + 52px);
+    }
+    .item-title   { font-size: 17px; }
+    .item-actress { font-size: 14px; }
   }
 `;

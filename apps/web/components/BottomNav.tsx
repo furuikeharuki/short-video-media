@@ -68,7 +68,6 @@ export default function BottomNav() {
 
         const icon = isActive ? item.iconFilled : item.iconOutline;
 
-        // アクティブ時は <span> にしてリンク自体を無効化
         if (isActive) {
           return (
             <span
@@ -113,7 +112,7 @@ const navStyle = `
     backdrop-filter: blur(12px);
     -webkit-backdrop-filter: blur(12px);
     border-top: 1px solid rgba(255, 255, 255, 0.08);
-    padding-bottom: env(safe-area-inset-bottom);
+    padding-bottom: 5px;
   }
 
   .bottom-nav-item {

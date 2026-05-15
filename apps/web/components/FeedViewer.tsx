@@ -9,9 +9,7 @@ const WINDOW_SIZE = 2;
 interface Props {
   items: MovieCard[];
   initialIndex?: number;
-  /** 末尾に近づいたときのコールバック（追加ロードなどに利用） */
   onNearEnd?: (currentIndex: number) => void;
-  /** インデックス変化のコールバック */
   onIndexChange?: (index: number) => void;
 }
 
@@ -24,6 +22,7 @@ export default function FeedViewer({
   const containerRef  = useRef<HTMLDivElement>(null);
   const currentIdxRef = useRef(initialIndex);
   const wheelLockRef  = useRef(false);
+  const modalOpenRef  = useRef(false);
 
   const [currentIndex, setCurrentIndex] = useState(initialIndex);
   const [windowItems,  setWindowItems]  = useState<MovieCard[]>([]);
@@ -35,6 +34,18 @@ export default function FeedViewer({
   const dragStartTime    = useRef(0);
   const isDragging       = useRef(false);
 
+  // モーダル開閉状態をカスタムイベントで受け取る
+  useEffect(() => {
+    const onOpen  = () => { modalOpenRef.current = true; };
+    const onClose = () => { modalOpenRef.current = false; };
+    window.addEventListener("modal-open",  onOpen);
+    window.addEventListener("modal-close", onClose);
+    return () => {
+      window.removeEventListener("modal-open",  onOpen);
+      window.removeEventListener("modal-close", onClose);
+    };
+  }, []);
+
   const updateWindow = useCallback((idx: number) => {
     const start = Math.max(0, idx - WINDOW_SIZE);
     const end   = Math.min(items.length, idx + WINDOW_SIZE + 1);
@@ -42,7 +53,6 @@ export default function FeedViewer({
     setWindowItems(items.slice(start, end));
   }, [items]);
 
-  // items または initialIndex が変わったときに初期化
   useEffect(() => {
     currentIdxRef.current = initialIndex;
     setCurrentIndex(initialIndex);
@@ -73,6 +83,7 @@ export default function FeedViewer({
     if (!el) return;
 
     const onTouchStart = (e: TouchEvent) => {
+      if (modalOpenRef.current) return;
       const y = e.touches[0].clientY;
       isDragging.current       = true;
       dragStartY.current       = y;
@@ -82,6 +93,7 @@ export default function FeedViewer({
     };
 
     const onTouchMove = (e: TouchEvent) => {
+      if (modalOpenRef.current) return;
       e.preventDefault();
       if (!isDragging.current) return;
       const dy    = e.touches[0].clientY - dragStartY.current;
@@ -95,14 +107,14 @@ export default function FeedViewer({
     };
 
     const onTouchEnd = (e: TouchEvent) => {
+      if (modalOpenRef.current) { isDragging.current = false; return; }
       if (!isDragging.current) return;
       isDragging.current = false;
       setDragPx(0);
       const dy = e.changedTouches[0].clientY - dragStartYForEnd.current;
       const dt = Date.now() - dragStartTime.current;
       if (Math.abs(dy) > 60 && dt < 1000) {
-        if (dy < 0) goNext();
-        else        goPrev();
+        if (dy < 0) goNext(); else goPrev();
       }
     };
 
@@ -112,6 +124,7 @@ export default function FeedViewer({
     };
 
     const onWheel = (e: WheelEvent) => {
+      if (modalOpenRef.current) return;
       e.preventDefault();
       if (wheelLockRef.current) return;
       wheelLockRef.current = true;

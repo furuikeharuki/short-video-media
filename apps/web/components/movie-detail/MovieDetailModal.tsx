@@ -16,15 +16,20 @@ export default function MovieDetailModal({ slug, onClose }: Props) {
   const [movie, setMovie] = useState<MovieDetail | null>(null);
   const [state, setState] = useState<State>("loading");
   const [visible, setVisible] = useState(false);
-  const sheetRef = useRef<HTMLDivElement>(null);
-  const startYRef = useRef(0);
+  const sheetRef    = useRef<HTMLDivElement>(null);
+  const scrollRef   = useRef<HTMLDivElement>(null);
+  const startYRef   = useRef(0);
   const currentYRef = useRef(0);
   const isDraggingRef = useRef(false);
 
-  // マウント後アニメ開始
+  // マウント後アニメ開始 + FeedViewerにモーダル開くことを通知
   useEffect(() => {
+    window.dispatchEvent(new Event("modal-open"));
     const t = requestAnimationFrame(() => setVisible(true));
-    return () => cancelAnimationFrame(t);
+    return () => {
+      cancelAnimationFrame(t);
+      window.dispatchEvent(new Event("modal-close"));
+    };
   }, []);
 
   // データ取得
@@ -48,14 +53,14 @@ export default function MovieDetailModal({ slug, onClose }: Props) {
     return () => { cancelled = true; };
   }, [slug]);
 
-  // Esc キーで閉じる
+  // Escキー
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") handleClose(); };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   });
 
-  // history pushState（URLをslugに変える）
+  // history pushState
   useEffect(() => {
     const prev = window.location.pathname + window.location.search;
     window.history.pushState({ modalSlug: slug }, "", `/movies/${slug}`);
@@ -79,13 +84,25 @@ export default function MovieDetailModal({ slug, onClose }: Props) {
     setTimeout(onClose, 300);
   }, [onClose]);
 
-  // ドラッグ（下スワイプで閉じる）
-  const onTouchStart = useCallback((e: React.TouchEvent) => {
-    startYRef.current = e.touches[0].clientY;
-    isDraggingRef.current = true;
+  // ドラッグ: スクロール領域の一番上からさらに上に引っ張ったときのみ閉じる
+  const onTouchStart = useCallback((e: React.TouchEvent<HTMLDivElement>) => {
+    const scroll = scrollRef.current;
+    if (scroll && scroll.contains(e.target as Node)) {
+      // スクロール領域内: 一番上のときのみドラッグ中断を許可
+      if (scroll.scrollTop === 0) {
+        startYRef.current   = e.touches[0].clientY;
+        isDraggingRef.current = true;
+      } else {
+        isDraggingRef.current = false;
+      }
+    } else {
+      startYRef.current   = e.touches[0].clientY;
+      isDraggingRef.current = true;
+    }
+    currentYRef.current = 0;
   }, []);
 
-  const onTouchMove = useCallback((e: React.TouchEvent) => {
+  const onTouchMove = useCallback((e: React.TouchEvent<HTMLDivElement>) => {
     if (!isDraggingRef.current) return;
     const dy = e.touches[0].clientY - startYRef.current;
     currentYRef.current = dy;
@@ -100,7 +117,7 @@ export default function MovieDetailModal({ slug, onClose }: Props) {
     const dy = currentYRef.current;
     if (sheetRef.current) {
       sheetRef.current.style.transition = "";
-      sheetRef.current.style.transform = "";
+      sheetRef.current.style.transform  = "";
     }
     if (dy > 100) handleClose();
     currentYRef.current = 0;
@@ -131,6 +148,18 @@ export default function MovieDetailModal({ slug, onClose }: Props) {
           <div className="mdm-handle" />
         </div>
 
+        {/* 戻るボタン */}
+        <button
+          className="mdm-back"
+          onClick={handleClose}
+          aria-label="戻る"
+        >
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+            <polyline points="15 18 9 12 15 6" />
+          </svg>
+          戻る
+        </button>
+
         {/* 閉じるボタン */}
         <button
           className="mdm-close"
@@ -140,7 +169,7 @@ export default function MovieDetailModal({ slug, onClose }: Props) {
           ✕
         </button>
 
-        <div className="mdm-scroll">
+        <div ref={scrollRef} className="mdm-scroll">
           {state === "loading" && (
             <div className="mdm-loading">
               <div className="mdm-spinner" />
@@ -178,7 +207,6 @@ export default function MovieDetailModal({ slug, onClose }: Props) {
           transform: translateY(100%);
           transition: transform 0.35s cubic-bezier(0.32, 0.72, 0, 1);
           will-change: transform;
-          touch-action: pan-y;
           overscroll-behavior: contain;
         }
         .mdm-sheet--visible { transform: translateY(0); }
@@ -194,6 +222,18 @@ export default function MovieDetailModal({ slug, onClose }: Props) {
           background: rgba(255,255,255,0.25);
           border-radius: 999px;
         }
+
+        .mdm-back {
+          position: absolute; top: 8px; left: 12px;
+          background: transparent;
+          border: none; color: #fff;
+          font-size: 13px; font-weight: 600;
+          display: flex; align-items: center; gap: 4px;
+          padding: 6px 8px; border-radius: 8px;
+          cursor: pointer; z-index: 10;
+          transition: background 0.15s;
+        }
+        .mdm-back:hover { background: rgba(255,255,255,0.1); }
 
         .mdm-close {
           position: absolute; top: 10px; right: 14px;

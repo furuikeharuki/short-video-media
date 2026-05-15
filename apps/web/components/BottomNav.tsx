@@ -57,7 +57,6 @@ const NAV_ITEMS = [
   },
 ];
 
-// FeedItem から発火されるカスタムイベントの型定義
 declare global {
   interface WindowEventMap {
     "video-progress": CustomEvent<{ progress: number }>;
@@ -69,12 +68,10 @@ export default function BottomNav() {
   const pathname    = usePathname();
   const isShortPage = pathname === "/" || pathname.startsWith("/search/feed");
 
-  const barRef       = useRef<HTMLDivElement>(null);
   const trackRef     = useRef<HTMLDivElement>(null);
   const isDragging   = useRef(false);
   const [progress, setProgress] = useState(0);
 
-  // FeedItem からの進捗イベントを listen
   useEffect(() => {
     if (!isShortPage) return;
     const handler = (e: CustomEvent<{ progress: number }>) => {
@@ -86,7 +83,6 @@ export default function BottomNav() {
     return () => window.removeEventListener("video-progress", handler);
   }, [isShortPage]);
 
-  // ドラッグ/タップでシークする共通処理
   const seek = useCallback((clientX: number) => {
     const track = trackRef.current;
     if (!track) return;
@@ -96,7 +92,6 @@ export default function BottomNav() {
     window.dispatchEvent(new CustomEvent("video-seek", { detail: { ratio } }));
   }, []);
 
-  // マウス ドラッグ
   const handleMouseDown = useCallback((e: React.MouseEvent) => {
     if (!isShortPage) return;
     isDragging.current = true;
@@ -107,7 +102,6 @@ export default function BottomNav() {
     window.addEventListener("mouseup", onUp);
   }, [isShortPage, seek]);
 
-  // タッチ ドラッグ
   const handleTouchStart = useCallback((e: React.TouchEvent) => {
     if (!isShortPage) return;
     e.stopPropagation();
@@ -128,7 +122,6 @@ export default function BottomNav() {
   return (
     <nav className="bottom-nav" aria-label="メインナビゲーション">
 
-      {/* シークバー：ショート画面のみ表示 */}
       {isShortPage && (
         <div
           ref={trackRef}
@@ -143,15 +136,8 @@ export default function BottomNav() {
           aria-valuemax={100}
           aria-valuenow={Math.round(progress * 100)}
         >
-          <div
-            ref={barRef}
-            className="seekbar-fill"
-            style={{ width: `${progress * 100}%` }}
-          />
-          <div
-            className="seekbar-thumb"
-            style={{ left: `${progress * 100}%` }}
-          />
+          <div className="seekbar-fill" style={{ width: `${progress * 100}%` }} />
+          <div className="seekbar-thumb" style={{ left: `${progress * 100}%` }} />
         </div>
       )}
 
@@ -185,7 +171,7 @@ export default function BottomNav() {
 const navStyle = `
   .bottom-nav {
     position: fixed;
-    bottom: 0;
+    bottom: -3px;
     left: 0;
     right: 0;
     z-index: 200;
@@ -199,7 +185,6 @@ const navStyle = `
     padding-bottom: 5px;
   }
 
-  /* シークバートラック */
   .seekbar-track {
     position: absolute;
     top: -10px;
@@ -215,7 +200,6 @@ const navStyle = `
     align-items: center;
   }
 
-  /* バー背景 */
   .seekbar-track::before {
     content: '';
     position: absolute;
@@ -228,7 +212,6 @@ const navStyle = `
     border-radius: 999px;
   }
 
-  /* 進捗塗り */
   .seekbar-fill {
     position: absolute;
     left: 0;
@@ -241,7 +224,6 @@ const navStyle = `
     transition: width 0.1s linear;
   }
 
-  /* ツマまみ */
   .seekbar-thumb {
     position: absolute;
     top: 50%;
@@ -255,7 +237,6 @@ const navStyle = `
     box-shadow: 0 1px 4px rgba(0,0,0,0.5);
   }
 
-  /* トラックにホバー/操作中はバーを太く、ツマまみを表示 */
   .seekbar-track:hover .seekbar-fill,
   .seekbar-track:active .seekbar-fill {
     height: 5px;

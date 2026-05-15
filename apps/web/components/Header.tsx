@@ -5,6 +5,10 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { FALLBACK_TAGS } from "@/lib/api/tags";
 import HamburgerMenu from "@/components/HamburgerMenu";
 
+const FEED_SEED_KEY  = "feed_seed";
+const FEED_INDEX_KEY = "feed_index";
+const FEED_ITEMS_KEY = "feed_items";
+
 export default function Header() {
   const router      = useRouter();
   const inputRef    = useRef<HTMLInputElement>(null);
@@ -50,6 +54,12 @@ export default function Header() {
   );
 
   const handleLogoClick = useCallback(() => {
+    // sessionStorageを破棄してトップに戻ることで新しいシードでシャッフル
+    try {
+      sessionStorage.removeItem(FEED_SEED_KEY);
+      sessionStorage.removeItem(FEED_INDEX_KEY);
+      sessionStorage.removeItem(FEED_ITEMS_KEY);
+    } catch { /* ignore */ }
     window.location.href = "/";
   }, []);
 

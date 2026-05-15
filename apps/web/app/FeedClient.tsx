@@ -32,15 +32,26 @@ function loadSession(): { seed: number; index: number; items: object[] } | null 
   } catch { return null; }
 }
 
+/** ブラウザのリロード（再読み込み）かどうかを判定 */
+function isPageReload(): boolean {
+  try {
+    const entries = performance.getEntriesByType("navigation") as PerformanceNavigationTiming[];
+    if (entries.length > 0) return entries[0].type === "reload";
+    // fallback for older browsers
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    return (performance as any).navigation?.type === 1;
+  } catch { return false; }
+}
+
 export default function FeedClient() {
   const seedRef       = useRef<number | null>(null);
   const isFetchingRef = useRef(false);
   const nextCursorRef = useRef<string | null>(null);
 
-  const [items,       setItems]       = useState<MovieCard[]>([]);
+  const [items,        setItems]        = useState<MovieCard[]>([]);
   const [initialIndex, setInitialIndex] = useState(0);
-  const [isEmpty,     setIsEmpty]     = useState(false);
-  const [isLoading,   setIsLoading]   = useState(true);
+  const [isEmpty,      setIsEmpty]      = useState(false);
+  const [isLoading,    setIsLoading]    = useState(true);
 
   const fetchInitial = useCallback(async (seed: number, startIndex = 0) => {
     if (isFetchingRef.current) return;
@@ -62,6 +73,15 @@ export default function FeedClient() {
   }, []);
 
   useEffect(() => {
+    // リロード時はsessionStorageを破棄して新しいシードで取得
+    if (isPageReload()) {
+      try { sessionStorage.removeItem(FEED_SEED_KEY); sessionStorage.removeItem(FEED_INDEX_KEY); sessionStorage.removeItem(FEED_ITEMS_KEY); } catch { /* ignore */ }
+      const seed = getOrCreateSeed();
+      seedRef.current = seed;
+      fetchInitial(seed, 0);
+      return;
+    }
+
     const session = loadSession();
     if (session && session.items.length > 0) {
       seedRef.current = session.seed;

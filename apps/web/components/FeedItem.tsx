@@ -4,7 +4,7 @@ import { useEffect, useRef, useCallback, useState } from "react";
 import { createPortal } from "react-dom";
 import { useRouter } from "next/navigation";
 import type { MovieCard } from "@/lib/api/feed";
-import ModalLoading from "@/app/@modal/(.)movies/[slug]/loading";
+import ModalLoading from "@/components/ModalLoading";
 
 interface Props {
   item: MovieCard;
@@ -57,11 +57,11 @@ export default function FeedItem({ item, isFirst, isSecond = false }: Props) {
 
   useEffect(() => { setMounted(true); }, []);
 
+  // MovieModal（role=dialog）が出たら仮モーダルを消す
   useEffect(() => {
     if (!navigating) return;
     const observer = new MutationObserver(() => {
-      const realDialog = document.querySelector("[role='dialog']:not([data-next-loading])");
-      if (realDialog) {
+      if (document.querySelector("[role='dialog']")) {
         setNavigating(false);
         navigatingRef.current = false;
         observer.disconnect();

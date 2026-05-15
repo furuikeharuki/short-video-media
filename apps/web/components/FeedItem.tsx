@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useCallback, useState } from "react";
+import { createPortal } from "react-dom";
 import { useRouter } from "next/navigation";
 import type { MovieCard } from "@/lib/api/feed";
 import ModalLoading from "@/app/@modal/(.)movies/[slug]/loading";
@@ -49,13 +50,17 @@ export default function FeedItem({ item, isFirst, isSecond = false }: Props) {
   const [isMuted,      setIsMuted]      = useState(true);
   const [isBookmarked, setIsBookmarked] = useState(false);
   const [navigating,   setNavigating]   = useState(false);
+  const [mounted,      setMounted]      = useState(false);
 
-  // モーダルが実際に描画されたら（Next.jsがナビ完了したら）フラグを落とす
+  useEffect(() => { setMounted(true); }, []);
+
+  // Next.jsが本物モーダルを描画したらフラグを落とす
   useEffect(() => {
     if (!navigating) return;
     const observer = new MutationObserver(() => {
-      const dialog = document.querySelector("[role='dialog']");
-      if (dialog) {
+      const dialogs = document.querySelectorAll("[role='dialog']");
+      // 実際のモーダル（データあり）が出たら非表示
+      if (dialogs.length >= 2) {
         setNavigating(false);
         observer.disconnect();
       }
@@ -340,7 +345,8 @@ export default function FeedItem({ item, isFirst, isSecond = false }: Props) {
 
   return (
     <>
-      {navigating && <ModalLoading />}
+      {/* createPortalでbody直下にマウントすることでposition:fixedの見た目が正確になる */}
+      {mounted && navigating && createPortal(<ModalLoading />, document.body)}
       <section ref={sectionRef} className="feed-item" data-movie-id={item.id}>
         {item.sample_movie_url ? (
           <div

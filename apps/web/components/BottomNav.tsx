@@ -22,6 +22,8 @@ const NAV_ITEMS = [
   {
     label: "ショート",
     href: "/",
+    /** 検索結果からの視聴画面もショートタブをアクティブにする */
+    extraActive: ["/search/feed"],
     iconOutline: (
       <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
         <rect x="4" y="2" width="16" height="20" rx="2"/>
@@ -59,9 +61,11 @@ export default function BottomNav() {
   return (
     <nav className="bottom-nav" aria-label="メインナビゲーション">
       {NAV_ITEMS.map((item) => {
-        const isActive = item.href === "/"
-          ? pathname === "/"
-          : pathname.startsWith(item.href);
+        const extra = "extraActive" in item ? item.extraActive ?? [] : [];
+        const isActive =
+          (item.href === "/" ? pathname === "/" : pathname.startsWith(item.href)) ||
+          extra.some((p) => pathname.startsWith(p));
+
         return (
           <Link
             key={item.href}

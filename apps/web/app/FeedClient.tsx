@@ -166,13 +166,13 @@ export default function FeedClient() {
     };
 
     const onTouchMove = (e: TouchEvent) => {
-      // passive:false で登録するので preventDefault() でバウンスを止める
       e.preventDefault();
       if (!isDragging.current) return;
       const dy = e.touches[0].clientY - dragStartY.current;
       const atEnd = currentIdxRef.current >= allItemsRef.current.length - 1;
       const atTop = currentIdxRef.current <= 0;
-      if ((dy > 0 && atEnd) || (dy < 0 && atTop)) {
+      // 進めない方向（先頭で下・末尾で上）だけ35%減衰
+      if ((dy > 0 && atTop) || (dy < 0 && atEnd)) {
         setDragPx(dy * 0.35);
       } else {
         setDragPx(dy);
@@ -205,7 +205,6 @@ export default function FeedClient() {
     };
 
     el.addEventListener("touchstart",  onTouchStart,  { passive: true });
-    // touchmove は passive:false にして iOS バウンススクロールを preventDefault() で止める
     el.addEventListener("touchmove",   onTouchMove,   { passive: false });
     el.addEventListener("touchend",    onTouchEnd,    { passive: true });
     el.addEventListener("touchcancel", onTouchCancel, { passive: true });

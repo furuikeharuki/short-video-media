@@ -8,11 +8,16 @@ from app.db.session import get_db
 from app.repositories.movie_repository import (
     get_movies_by_genre,
     get_new_release_movies,
+    get_recent_release_movies,
     get_top_genres_by_movie_count,
 )
 from app.schemas.home import HomeResponse, HomeSection
 from app.services.feed_service import _to_card
-from app.services.ranking_service import get_popular_search_genres, get_ranking
+from app.services.ranking_service import (
+    get_popular_all_time,
+    get_popular_search_genres,
+    get_ranking,
+)
 
 
 # ジャンルとして提示したくない技術タグ・メタタグ
@@ -40,15 +45,37 @@ async def get_home(
         )
     )
 
-    # 2. 月間ランキング
+    # 2. 新着 (今日を除いた 1ヶ月以内に配信された作品を配信日降順)
+    recent_movies = await get_recent_release_movies(db, days=30, limit=section_limit)
+    sections.append(
+        HomeSection(
+            key="recent",
+            title="新着",
+            subtitle="直近1ヶ月に配信された作品",
+            items=[_to_card(m) for m in recent_movies],
+        )
+    )
+
+    # 3. 人気 (全期間の総視聴回数順)
+    popular_items = await get_popular_all_time(db, limit=section_limit)
+    sections.append(
+        HomeSection(
+            key="popular",
+            title="人気",
+            subtitle="総視聴回数順",
+            items=popular_items,
+        )
+    )
+
+    # 4. 月間ランキング
     monthly = await get_ranking(db, period="monthly", limit=section_limit)
     sections.append(HomeSection(key="ranking_monthly", title="月間ランキング", items=monthly))
 
-    # 3. 週間ランキング
+    # 5. 週間ランキング
     weekly = await get_ranking(db, period="weekly", limit=section_limit)
     sections.append(HomeSection(key="ranking_weekly", title="週間ランキング", items=weekly))
 
-    # 4. デイリーランキング
+    # 6. デイリーランキング
     daily = await get_ranking(db, period="daily", limit=section_limit)
     sections.append(HomeSection(key="ranking_daily", title="デイリーランキング", items=daily))
 

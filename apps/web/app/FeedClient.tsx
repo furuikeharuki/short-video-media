@@ -7,6 +7,7 @@ import { markSeen, getOrCreateSeed } from "@/lib/feedOrder";
 import { getFeed } from "@/lib/api/feed";
 import { getMovieBySlug } from "@/lib/api/movies";
 import { loadPlaylist, clearPlaylist } from "@/lib/feedPlaylist";
+import { logEvent } from "@/lib/api/events";
 import type { MovieCard } from "@/lib/api/feed";
 import type { MovieDetail } from "@/lib/api/movies";
 
@@ -169,9 +170,25 @@ export default function FeedClient() {
   }, []);
 
   const handleIndexChange = useCallback((index: number) => {
-    if (items[index]) markSeen(items[index].id);
+    const cur = items[index];
+    if (cur) {
+      markSeen(cur.id);
+      // ランキング集計のために view イベントを記録
+      logEvent({ event_type: "view", slug: cur.slug, title: cur.title });
+    }
     try { sessionStorage.setItem(FEED_INDEX_KEY, String(index)); } catch { /* ignore */ }
   }, [items]);
+
+  const firstViewLoggedRef = useRef(false);
+  useEffect(() => {
+    if (isLoading) return;
+    if (firstViewLoggedRef.current) return;
+    const cur = items[initialIndex];
+    if (!cur) return;
+    firstViewLoggedRef.current = true;
+    markSeen(cur.id);
+    logEvent({ event_type: "view", slug: cur.slug, title: cur.title });
+  }, [isLoading, items, initialIndex]);
 
   if (isEmpty) {
     return (

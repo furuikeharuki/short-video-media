@@ -81,6 +81,26 @@ async def aggregate_view_ranking(
     return [(row[0], int(row[1])) for row in result.all()]
 
 
+async def aggregate_view_ranking_all_time(
+    db: AsyncSession,
+    *,
+    limit: int = 20,
+) -> list[tuple[str, int]]:
+    """全期間の event_type='view' を slug 単位で集計し、(slug, count) を降順で返す。「人気」セクション用。"""
+    stmt = (
+        select(Event.slug, func.count(Event.id).label("c"))
+        .where(
+            Event.event_type == "view",
+            Event.slug.is_not(None),
+        )
+        .group_by(Event.slug)
+        .order_by(desc("c"))
+        .limit(limit)
+    )
+    result = await db.execute(stmt)
+    return [(row[0], int(row[1])) for row in result.all()]
+
+
 async def aggregate_search_query_ranking(
     db: AsyncSession,
     *,

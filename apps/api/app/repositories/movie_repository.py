@@ -127,6 +127,33 @@ async def get_new_release_movies(
     return list(result2.scalars().unique().all())
 
 
+async def get_recent_release_movies(
+    db: AsyncSession,
+    *,
+    today: date | None = None,
+    days: int = 30,
+    limit: int = 20,
+) -> list[Movie]:
+    """「新着」セクション: 今日を除いた直近 days 日以内に配信開始された作品を、
+    primary_date 降順 (新しいものが上) で返す。
+    """
+    t = today or date.today()
+    since = t - timedelta(days=days)
+    stmt = (
+        select(Movie)
+        .where(
+            Movie.is_visible.is_(True),
+            Movie.primary_date.is_not(None),
+            Movie.primary_date >= since,
+            Movie.primary_date < t,  # 今日を除く
+        )
+        .order_by(desc(Movie.primary_date), desc(Movie.review_count), Movie.id)
+        .limit(limit)
+    )
+    result = await db.execute(stmt)
+    return list(result.scalars().unique().all())
+
+
 async def get_movies_by_genre(
     db: AsyncSession,
     *,

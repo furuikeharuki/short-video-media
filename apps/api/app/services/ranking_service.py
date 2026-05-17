@@ -11,6 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.repositories.event_repository import (
     aggregate_search_query_ranking,
     aggregate_view_ranking,
+    aggregate_view_ranking_all_time,
 )
 from app.repositories.movie_repository import (
     get_fallback_ranking_movies,
@@ -53,6 +54,26 @@ async def get_ranking(
     movies = await get_fallback_ranking_movies(
         db, limit=limit, window_days=_FALLBACK_WINDOW_DAYS[period]
     )
+    return [_to_card(m) for m in movies]
+
+
+async def get_popular_all_time(
+    db: AsyncSession,
+    *,
+    limit: int = 20,
+) -> list[MovieCard]:
+    """「人気」セクション: 全期間の view イベント計順。
+    view イベントが不足しているときは全体の review_count 順 (windowなし) で補う。
+    """
+    ranked = await aggregate_view_ranking_all_time(db, limit=limit)
+    slugs = [s for s, _ in ranked if s]
+
+    if slugs:
+        movies = await get_movies_by_slugs_ordered(db, slugs)
+        if movies:
+            return [_to_card(m) for m in movies]
+
+    movies = await get_fallback_ranking_movies(db, limit=limit, window_days=None)
     return [_to_card(m) for m in movies]
 
 

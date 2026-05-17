@@ -12,6 +12,7 @@ export const metadata: Metadata = {
 };
 
 const RANKING_KEYS = new Set([
+  "popular",
   "ranking_daily",
   "ranking_weekly",
   "ranking_monthly",

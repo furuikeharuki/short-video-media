@@ -1,4 +1,5 @@
 import { notFound } from "next/navigation";
+import Link from "next/link";
 import type { Metadata } from "next";
 
 import AffiliateLink from "@/components/analytics/affiliate-link";
@@ -68,12 +69,18 @@ export default async function MovieDetailPage({ params }: PageProps) {
     const hasReview = movie.review_count > 0 && movie.review_average != null;
     const canonical = `${SITE_URL}/movies/${slug}`;
 
-    const metaRows = [
+    const searchLink = (value: string) => (
+      <Link href={`/search?q=${encodeURIComponent(value)}`} style={styles.metaLink}>
+        {value}
+      </Link>
+    );
+
+    const metaRows: { label: string; value: React.ReactNode }[] = [
       { label: "出演",       value: movie.actresses.length > 0 ? movie.actresses.join(" / ") : NA },
       { label: "シリーズ",   value: movie.series_name ?? NA },
-      { label: "監督",       value: movie.director_name ?? NA },
-      { label: "メーカー",   value: movie.maker_name ?? NA },
-      { label: "レーベル",   value: movie.label_name ?? NA },
+      { label: "監督",       value: movie.director_name ? searchLink(movie.director_name) : NA },
+      { label: "メーカー",   value: movie.maker_name ? searchLink(movie.maker_name) : NA },
+      { label: "レーベル",   value: movie.label_name ? searchLink(movie.label_name) : NA },
       { label: "収録時間",   value: movie.volume != null ? `${movie.volume}分` : NA },
       { label: "配信開始日", value: formatDate(movie.delivery_date) },
       { label: "商品発売日", value: formatDate(movie.release_date) },
@@ -245,6 +252,9 @@ const styles: Record<string, React.CSSProperties> = {
   metaValue: {
     fontSize: '13px', color: 'rgba(255,255,255,0.75)',
     lineHeight: 1.6, wordBreak: 'break-all' as const,
+  },
+  metaLink: {
+    color: '#7cb7ff', textDecoration: 'none', borderBottom: '1px solid rgba(124,183,255,0.3)',
   },
   description: {
     fontSize: '14px', lineHeight: 1.8, color: 'rgba(255,255,255,0.6)',

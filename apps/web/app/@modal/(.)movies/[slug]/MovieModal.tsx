@@ -50,12 +50,31 @@ export default function MovieModal({ movie }: { movie: MovieDetail }) {
   const price = movie.price_list?.sale_price ?? movie.price_list?.list_price ?? movie.price_min;
   const hasReview = movie.review_count > 0 && movie.review_average != null;
 
+  // 監督 / メーカー / レーベル をタップしたら検索結果一覧へ
+  // インターセプトモーダル上なので router.push() した時点で自然にモーダルが閉じる
+  const navigateToSearch = (value: string) => {
+    router.push(`/search?q=${encodeURIComponent(value)}`);
+  };
+
+  const searchLink = (value: string) => (
+    <a
+      href={`/search?q=${encodeURIComponent(value)}`}
+      onClick={(e) => {
+        e.preventDefault();
+        navigateToSearch(value);
+      }}
+      style={metaLinkStyle}
+    >
+      {value}
+    </a>
+  );
+
   const metaRows: { label: string; value: React.ReactNode }[] = [
     { label: "出演",       value: movie.actresses.length > 0 ? movie.actresses.join(" / ") : NA },
     { label: "シリーズ",   value: movie.series_name ?? NA },
-    { label: "監督",       value: movie.director_name ?? NA },
-    { label: "メーカー",   value: movie.maker_name ?? NA },
-    { label: "レーベル",   value: movie.label_name ?? NA },
+    { label: "監督",       value: movie.director_name ? searchLink(movie.director_name) : NA },
+    { label: "メーカー",   value: movie.maker_name ? searchLink(movie.maker_name) : NA },
+    { label: "レーベル",   value: movie.label_name ? searchLink(movie.label_name) : NA },
     { label: "収録時間",   value: movie.volume != null ? `${movie.volume}分` : NA },
     { label: "配信開始日", value: formatDate(movie.delivery_date) },
     { label: "商品発売日", value: formatDate(movie.release_date) },
@@ -241,6 +260,12 @@ const genreListStyle: React.CSSProperties = {
   flexWrap: "wrap",
   gap: "6px",
   marginBottom: "14px",
+};
+
+const metaLinkStyle: React.CSSProperties = {
+  color: "#7cb7ff",
+  textDecoration: "none",
+  borderBottom: "1px solid rgba(124,183,255,0.3)",
 };
 
 const badgeStyle: React.CSSProperties = {

@@ -442,32 +442,33 @@ const styles = `
   }
   .mypage-grid {
     display: grid;
+    /* minmax(0, 1fr) でコンテンツの最小幅に引っ張られて列幅に差を出さない */
     /* スマホ (デフォ) : 2 列 */
-    grid-template-columns: repeat(2, 1fr);
+    grid-template-columns: repeat(2, minmax(0, 1fr));
     gap: 8px;
   }
   /* タブレット : 3 列 */
   @media (min-width: 481px) {
-    .mypage-grid { grid-template-columns: repeat(3, 1fr); }
+    .mypage-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
   }
   /* 小型 PC / 大きめタブレット : 4 列 */
   @media (min-width: 640px) {
-    .mypage-grid { grid-template-columns: repeat(4, 1fr); }
+    .mypage-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); }
   }
   /* PC : 5 列 */
   @media (min-width: 900px) {
-    .mypage-grid { grid-template-columns: repeat(5, 1fr); }
+    .mypage-grid { grid-template-columns: repeat(5, minmax(0, 1fr)); }
   }
   /* ワイド PC : 6 列 + 中央寄せ */
   @media (min-width: 1200px) {
     .mypage-grid {
-      grid-template-columns: repeat(6, 1fr);
+      grid-template-columns: repeat(6, minmax(0, 1fr));
       max-width: 1200px;
       margin: 0 auto;
     }
   }
   /* 大画面 PC : 7 列 */
   @media (min-width: 1500px) {
-    .mypage-grid { grid-template-columns: repeat(7, 1fr); }
+    .mypage-grid { grid-template-columns: repeat(7, minmax(0, 1fr)); }
   }
 `;

@@ -103,18 +103,20 @@ const pageCSS = `
   html, body { background: #0a0a0a !important; overflow: hidden !important; }
   .search-grid {
     display: grid;
-    grid-template-columns: repeat(3, 1fr);
+    /* minmax(0, 1fr) にしないと、コンテンツの最小幅に引っ張られて
+       サブピクセル丸めで有些セルが 1px 広くなり列差が出ることがある。 */
+    grid-template-columns: repeat(3, minmax(0, 1fr));
     gap: 8px;
     padding: 8px;
   }
   /* MovieCardThumb はデフォルトで width: 140px 固定なので、グリッドセルいっぱいに伸ばす */
-  .search-grid > .mct { width: 100%; }
+  .search-grid > .mct { width: 100%; min-width: 0; }
   @media (min-width: 640px) {
-    .search-grid { grid-template-columns: repeat(5, 1fr); }
+    .search-grid { grid-template-columns: repeat(5, minmax(0, 1fr)); }
   }
   @media (min-width: 1024px) {
     .search-grid {
-      grid-template-columns: repeat(7, 1fr);
+      grid-template-columns: repeat(7, minmax(0, 1fr));
       max-width: 1200px;
       margin: 0 auto;
     }

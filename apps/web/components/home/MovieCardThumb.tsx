@@ -97,6 +97,9 @@ const styles = `
     color: #fff;
     flex: 0 0 auto;
     -webkit-tap-highlight-color: transparent;
+    /* グリッドセル内でのサブピクセル丸め誤差を抑える */
+    min-width: 0;
+    box-sizing: border-box;
   }
   .mct--portrait  { width: 140px; }
   .mct--landscape { width: 220px; }
@@ -112,11 +115,16 @@ const styles = `
     border-radius: 10px;
     overflow: hidden;
     background: #1a1a1a;
+    /* サブピクセルで 1px はみ出させないため明示的に min-width: 0 */
+    min-width: 0;
   }
   .mct--portrait  .mct-thumb { aspect-ratio: 9 / 13; }
   .mct--landscape .mct-thumb { aspect-ratio: 16 / 10; }
 
   .mct-thumb img {
+    /* サブピクセル丸めで 1px ずれて枠からはみ出さないよう absolute positioning で枠にフィットさせる */
+    position: absolute;
+    top: 0; left: 0;
     width: 100%; height: 100%;
     object-fit: cover; display: block;
   }

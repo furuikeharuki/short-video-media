@@ -51,6 +51,7 @@ export default async function HomePage() {
               href: `/search?q=${encodeURIComponent(section.genre)}`,
             }
           : undefined;
+        const playlistKey = `home_${section.key}`;
 
         return (
           <HorizontalCardRow
@@ -65,6 +66,12 @@ export default async function HomePage() {
                 movie={m}
                 aspect="portrait"
                 rank={isRanking ? i + 1 : undefined}
+                playlist={{
+                  key: playlistKey,
+                  title: section.title,
+                  startIndex: i,
+                  items: section.items,
+                }}
               />
             ))}
           </HorizontalCardRow>

@@ -6,6 +6,7 @@ import FeedViewer from "@/components/FeedViewer";
 import { markSeen, getOrCreateSeed } from "@/lib/feedOrder";
 import { getFeed } from "@/lib/api/feed";
 import { getMovieBySlug } from "@/lib/api/movies";
+import { loadPlaylist, clearPlaylist } from "@/lib/feedPlaylist";
 import type { MovieCard } from "@/lib/api/feed";
 import type { MovieDetail } from "@/lib/api/movies";
 
@@ -108,6 +109,28 @@ export default function FeedClient() {
 
   useEffect(() => {
     const vSlug = searchParams.get("v") ?? undefined;
+    const playlistKey = searchParams.get("playlist") ?? undefined;
+
+    // ?playlist=<key> がある場合は sessionStorage に保存されたリストをそのまま使う
+    // (API を叩かず、セクションの順番をそのまま再現する)
+    if (playlistKey) {
+      const pl = loadPlaylist(playlistKey);
+      if (pl && pl.items.length > 0) {
+        const seed = getOrCreateSeed();
+        seedRef.current = seed;
+        const idx = Math.min(Math.max(pl.startIndex, 0), pl.items.length - 1);
+        setItems(pl.items);
+        setInitialIndex(idx);
+        setIsEmpty(false);
+        setIsLoading(false);
+        nextCursorRef.current = null;
+        saveSession(seed, idx, pl.items);
+        // 遷移後は一度だけ使えればよいのでクリア
+        clearPlaylist(playlistKey);
+        return;
+      }
+      // playlist が見つからないときは通常のフィードにフォールバック
+    }
 
     // ?v= がある場合は常に新鮮なフィードを取得（先頭に該当動画を差し込む）
     if (vSlug) {

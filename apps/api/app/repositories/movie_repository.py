@@ -152,15 +152,76 @@ async def get_fallback_ranking_movies(
     db: AsyncSession,
     *,
     limit: int = 20,
+    window_days: int | None = None,
 ) -> list[Movie]:
     """イベントデータが不足しているときの代替ランキング。
-    review_average * log(review_count+1) といった複雑なものはやめて、
-    シンプルに review_count desc で返す。"""
+
+    window_days を指定すると、直近 N 日に配信開始 (primary_date) された
+    作品の中で review_count 降順を返す。
+    ヒット件数が limit に満たない場合は、全体の review_count 降順で補充する。
+    """
+    movies: list[Movie] = []
+    seen_ids: set[str] = set()
+
+    if window_days is not None and window_days > 0:
+        since = date.today() - timedelta(days=window_days)
+        stmt_window = (
+            select(Movie)
+            .where(
+                Movie.is_visible.is_(True),
+                Movie.primary_date.is_not(None),
+                Movie.primary_date >= since,
+            )
+            .order_by(desc(Movie.review_count), desc(Movie.review_average), Movie.id)
+            .limit(limit)
+        )
+        result = await db.execute(stmt_window)
+        for m in result.scalars().unique().all():
+            if m.id not in seen_ids:
+                movies.append(m)
+                seen_ids.add(m.id)
+
+    if len(movies) >= limit:
+        return movies[:limit]
+
+    # 補充: 全体の review_count 降順
     stmt = (
         select(Movie)
         .where(Movie.is_visible.is_(True))
         .order_by(desc(Movie.review_count), desc(Movie.review_average), Movie.id)
-        .limit(limit)
+        .limit(limit * 2)
     )
     result = await db.execute(stmt)
-    return list(result.scalars().unique().all())
+    for m in result.scalars().unique().all():
+        if len(movies) >= limit:
+            break
+        if m.id in seen_ids:
+            continue
+        movies.append(m)
+        seen_ids.add(m.id)
+    return movies[:limit]
+
+
+async def get_top_genres_by_movie_count(
+    db: AsyncSession,
+    *,
+    limit: int = 10,
+    exclude: set[str] | None = None,
+) -> list[str]:
+    """作品数の多い genre 名を上から limit 件返す。技術タグ除外。"""
+    stmt = (
+        select(Genre.name, func.count(MovieGenre.movie_id).label("c"))
+        .join(MovieGenre, MovieGenre.genre_id == Genre.id)
+        .group_by(Genre.name)
+        .order_by(desc("c"))
+        .limit(limit * 3)  # 除外後 limit 件残る余裕
+    )
+    result = await db.execute(stmt)
+    out: list[str] = []
+    for name, _ in result.all():
+        if exclude and name in exclude:
+            continue
+        out.append(name)
+        if len(out) >= limit:
+            break
+    return out

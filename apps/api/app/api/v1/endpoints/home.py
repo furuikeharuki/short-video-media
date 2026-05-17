@@ -8,19 +8,15 @@ from app.db.session import get_db
 from app.repositories.movie_repository import (
     get_movies_by_genre,
     get_new_release_movies,
+    get_top_genres_by_movie_count,
 )
 from app.schemas.home import HomeResponse, HomeSection
 from app.services.feed_service import _to_card
 from app.services.ranking_service import get_popular_search_genres, get_ranking
 
 
-# 検索数イベントが不足しているときに使う代替ジャンル
-# (DB に実在するジャンル名のみ。技術タグ ハイビジョン/独占配信/単体作品/4K は除外)
-FALLBACK_GENRES = ["巨乳", "痴女", "人妻・主婦"]
-
-# 「本日配信開始」が空のとき遡る日数。primary_date が古いカタログでも
-# セクションを埋められるように広めにとる。
-NEW_RELEASE_FALLBACK_DAYS = 90
+# ジャンルとして提示したくない技術タグ・メタタグ
+GENRE_EXCLUDE = {"ハイビジョン", "独占配信", "単体作品", "4K", "デジモ", "ギリモザ"}
 
 router = APIRouter()
 
@@ -32,9 +28,9 @@ async def get_home(
 ) -> HomeResponse:
     sections: list[HomeSection] = []
 
-    # 1. 本日配信開始
+    # 1. 本日配信開始 (今日の primary_date の作品のみ。フォールバックなし)
     new_movies = await get_new_release_movies(
-        db, limit=section_limit, fallback_days=NEW_RELEASE_FALLBACK_DAYS
+        db, limit=section_limit, fallback_days=0
     )
     sections.append(
         HomeSection(
@@ -57,16 +53,21 @@ async def get_home(
     sections.append(HomeSection(key="ranking_daily", title="デイリーランキング", items=daily))
 
     # 5-7. 検索数の高いジャンル 1〜3
-    popular = await get_popular_search_genres(db, period="weekly", limit=3)
-    # 不足分を FALLBACK_GENRES で埋める (重複排除)
+    # 検索イベントがあるなら検索数順。不足分は DB に存在する「作品数の多いジャンル」で補充する。
+    popular_raw = await get_popular_search_genres(db, period="weekly", limit=10)
+    popular = [g for g in popular_raw if g not in GENRE_EXCLUDE]
     seen: set[str] = set(popular)
-    for g in FALLBACK_GENRES:
-        if len(popular) >= 3:
-            break
-        if g in seen:
-            continue
-        popular.append(g)
-        seen.add(g)
+    if len(popular) < 3:
+        fallback = await get_top_genres_by_movie_count(
+            db, limit=10, exclude=GENRE_EXCLUDE | seen
+        )
+        for g in fallback:
+            if len(popular) >= 3:
+                break
+            if g in seen:
+                continue
+            popular.append(g)
+            seen.add(g)
 
     for i, genre_name in enumerate(popular[:3], start=1):
         movies = await get_movies_by_genre(db, genre_name=genre_name, limit=section_limit)

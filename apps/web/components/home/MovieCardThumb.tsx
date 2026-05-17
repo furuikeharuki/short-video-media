@@ -1,8 +1,10 @@
 "use client";
 
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import type { MovieCard } from "@/lib/api/feed";
 import { logEvent } from "@/lib/api/events";
+import { savePlaylist, type Playlist } from "@/lib/feedPlaylist";
 
 type Props = {
   movie: MovieCard;
@@ -10,7 +12,12 @@ type Props = {
   aspect?: "portrait" | "landscape";
   /** ランキング順位 (1始まり)。指定時は左上にバッジ表示。 */
   rank?: number;
-  /** クリック時に飛ばす先。デフォは /movies/{slug} (パラレルルートでモーダル表示)。 */
+  /**
+   * タップ時に「そのセクションのリスト順でフィード再生を開始」させるときに指定。
+   * playlist があると href は無視され、sessionStorage にリストを保存してから /?playlist=<key> へ遷移する。
+   */
+  playlist?: Playlist;
+  /** playlist 未指定時の遷移先 (デフォは詳細モーダル)。 */
   href?: string;
 };
 
@@ -18,12 +25,25 @@ export default function MovieCardThumb({
   movie,
   aspect = "portrait",
   rank,
+  playlist,
   href,
 }: Props) {
+  const router = useRouter();
   const imgSrc = movie.image_url_list ?? movie.image_url_large ?? "";
   const linkHref = href ?? `/movies/${encodeURIComponent(movie.slug)}`;
 
-  const handleClick = () => {
+  const handleClick = (e: React.MouseEvent<HTMLAnchorElement>) => {
+    if (playlist) {
+      e.preventDefault();
+      logEvent({
+        event_type: "play",
+        slug: movie.slug,
+        title: movie.title,
+      });
+      savePlaylist(playlist);
+      router.push(`/?playlist=${encodeURIComponent(playlist.key)}`);
+      return;
+    }
     logEvent({
       event_type: "detail_click",
       slug: movie.slug,

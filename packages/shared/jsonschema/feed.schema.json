@@ -1,0 +1,16 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://short-video-media/schemas/feed.schema.json",
+  "title": "FeedPage",
+  "type": "object",
+  "required": ["items"],
+  "properties": {
+    "items": {
+      "type": "array",
+      "items": { "$ref": "movie.schema.json#" }
+    },
+    "next_cursor": { "type": ["string", "null"] },
+    "has_next": { "type": "boolean" },
+    "total": { "type": ["integer", "null"], "minimum": 0 }
+  }
+}

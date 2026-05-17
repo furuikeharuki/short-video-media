@@ -1,0 +1,21 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://short-video-media/schemas/search.schema.json",
+  "title": "SearchResult",
+  "type": "object",
+  "required": ["query", "items"],
+  "properties": {
+    "query": { "type": "string" },
+    "items": {
+      "type": "array",
+      "items": { "$ref": "movie.schema.json#" }
+    },
+    "next_cursor": { "type": ["string", "null"] },
+    "has_next": { "type": "boolean" },
+    "total": { "type": ["integer", "null"], "minimum": 0 },
+    "filters_applied": {
+      "type": "object",
+      "additionalProperties": true
+    }
+  }
+}

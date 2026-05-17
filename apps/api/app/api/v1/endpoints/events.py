@@ -1,6 +1,7 @@
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.rate_limit import EventRateLimiter, get_event_rate_limiter
 from app.db.session import get_db
 from app.repositories.event_repository import ALLOWED_EVENT_TYPES, insert_event
 from app.schemas.event import EventAck, EventCreate
@@ -11,8 +12,13 @@ router = APIRouter()
 @router.post("/events", response_model=EventAck)
 async def create_event(
     payload: EventCreate,
+    request: Request,
     db: AsyncSession = Depends(get_db),
+    limiter: EventRateLimiter = Depends(get_event_rate_limiter),
 ) -> EventAck:
+    # IP ごとのレート制限（在庫スパム / 連打対策）
+    limiter.check(request)
+
     if payload.event_type not in ALLOWED_EVENT_TYPES:
         raise HTTPException(status_code=400, detail="invalid event_type")
 

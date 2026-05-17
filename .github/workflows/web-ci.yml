@@ -1,0 +1,50 @@
+name: Web CI
+
+# apps/web の TypeScript 型チェック + Next.js build を回す軽量 CI。
+
+on:
+  push:
+    branches: [main, develop]
+    paths:
+      - "apps/web/**"
+      - ".github/workflows/web-ci.yml"
+  pull_request:
+    paths:
+      - "apps/web/**"
+      - ".github/workflows/web-ci.yml"
+
+concurrency:
+  group: web-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  typecheck:
+    name: typecheck + build (apps/web)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    defaults:
+      run:
+        working-directory: apps/web
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+          cache-dependency-path: apps/web/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: TypeScript typecheck
+        run: npm run typecheck
+
+      - name: Next.js build
+        env:
+          NEXT_PUBLIC_API_BASE_URL: https://example.com
+          NEXT_PUBLIC_SITE_URL: https://example.com
+          AUTH_SECRET: ci-only-32-byte-dummy-secret-not-used-anywhere
+        run: npm run build

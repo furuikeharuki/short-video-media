@@ -1,3 +1,4 @@
+"""ヘルスチェックの軽量テスト。DB に触れないので CI でも安全に動く。"""
 from fastapi.testclient import TestClient
 
 from app.main import app

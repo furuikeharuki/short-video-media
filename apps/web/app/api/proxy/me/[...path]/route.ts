@@ -3,11 +3,19 @@
  *
  * Auth.js セッションから apiToken を取り出して Authorization: Bearer に付与する。
  * クライアント側に JWT を露出させないための一段噛ませ。
+ *
+ * NOTE: ユーザー固有データなので Next.js のキャッシュ機構に乗せないよう
+ *       `dynamic = "force-dynamic"` を明示する。
  */
 
 import { NextRequest, NextResponse } from "next/server";
 
 import { auth } from "@/auth";
+
+// Next.js のルーティングキャッシュ・データキャッシュを無効化
+export const dynamic = "force-dynamic";
+export const revalidate = 0;
+export const fetchCache = "force-no-store";
 
 const API_BASE_URL =
   process.env.INTERNAL_API_BASE_URL ?? process.env.NEXT_PUBLIC_API_BASE_URL ?? "";
@@ -28,21 +36,20 @@ async function handle(request: NextRequest, context: RouteContext) {
   const search = request.nextUrl.search;
   const targetUrl = `${API_BASE_URL}/api/v1/me/${subPath}${search}`;
 
-  const headers: HeadersInit = {
+  const headers: Record<string, string> = {
     Authorization: `Bearer ${session.apiToken}`,
   };
-  const ct = request.headers.get("content-type");
-  if (ct) headers["Content-Type"] = ct;
 
   let body: BodyInit | undefined;
-  if (request.method !== "GET" && request.method !== "DELETE") {
-    body = await request.text();
-  } else if (request.method === "DELETE") {
-    // FastAPI が DELETE のリクエストボディを受ける設計なので転送する
+  if (request.method === "GET") {
+    // GET はボディ無し
+  } else {
+    // DELETE / POST / PUT / PATCH すべて body 転送を許可
     const text = await request.text();
     if (text) {
       body = text;
-      headers["Content-Type"] = headers["Content-Type"] ?? "application/json";
+      const ct = request.headers.get("content-type");
+      headers["Content-Type"] = ct && ct.trim() !== "" ? ct : "application/json";
     }
   }
 
@@ -62,6 +69,7 @@ async function handle(request: NextRequest, context: RouteContext) {
     status: apiRes.status,
     headers: {
       "Content-Type": apiRes.headers.get("content-type") ?? "application/json",
+      "Cache-Control": "private, no-store, max-age=0",
     },
   });
 }
@@ -70,6 +78,12 @@ export async function GET(request: NextRequest, context: RouteContext) {
   return handle(request, context);
 }
 export async function POST(request: NextRequest, context: RouteContext) {
+  return handle(request, context);
+}
+export async function PUT(request: NextRequest, context: RouteContext) {
+  return handle(request, context);
+}
+export async function PATCH(request: NextRequest, context: RouteContext) {
   return handle(request, context);
 }
 export async function DELETE(request: NextRequest, context: RouteContext) {

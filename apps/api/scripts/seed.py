@@ -17,7 +17,8 @@ from app.db.models.actress import Actress
 from app.db.models.genre import Genre
 from app.db.models.movie import Movie, MovieGenre, MovieActress
 
-MOCK_PATH = Path(__file__).parent.parent / "app" / "mock_data" / "movies.json"
+# 開発用フィクスチャ（本番では sync_catalog ジョブが実データを投入する）
+MOCK_PATH = Path(__file__).parent / "fixtures" / "movies.json"
 
 
 def _get_async_url(url: str) -> str:

@@ -146,19 +146,28 @@ export function useFeedPlayback({ slug, title, isActive, onOpenModal }: UseFeedP
 
   const playVideo = useCallback(async (video: HTMLVideoElement, withGesture = false) => {
     if (withGesture) globalUserGestured = true;
-    video.muted = isMutedRef.current;
-    if (globalUserGestured) {
-      try {
-        await video.play();
-        isPlayingRef.current = true;
-        startProgressLoop();
-        return;
-      } catch { /* fall through to muted retry */ }
+    // ユーザーがミュート解除済みかどうかは globalIsMuted をソースオブトルースにする。
+    // そうしないと、「見た目は unmuted なのに video 要素だけ muted=true」などの不整合が起きる。
+    video.muted = globalIsMuted;
+    isMutedRef.current = globalIsMuted;
+
+    try {
+      await video.play();
+      isPlayingRef.current = true;
+      startProgressLoop();
+      return;
+    } catch {
+      /* unmuted 再生に失敗したら muted フォールバックに進む */
     }
+
+    // フォールバック: この <video> だけ muted=true にして再生を試みる。
+    // ここで重要なのは globalIsMuted を書き換えないこと。
+    // 以前は autoplay policy / 動画のないスライド / ロード失敗などで一時的に play() が
+    // reject されると globalIsMuted=true に戻されてしまい、スクロールしているうちに
+    // ミュートが勝手に ON に戻るバグがあった。
+    // (globalUserGestured は markFeedGesture によってスワイプごとに再設定される、
+    //  また handleToggleMute で明示的に unmute された状態は保持しておきたい)
     video.muted = true;
-    isMutedRef.current = true;
-    globalIsMuted = true;
-    setIsMuted(true);
     try {
       await video.play();
       isPlayingRef.current = true;

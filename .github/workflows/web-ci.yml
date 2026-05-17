@@ -7,10 +7,14 @@ on:
     branches: [main, develop]
     paths:
       - "apps/web/**"
+      - "package.json"
+      - "package-lock.json"
       - ".github/workflows/web-ci.yml"
   pull_request:
     paths:
       - "apps/web/**"
+      - "package.json"
+      - "package-lock.json"
       - ".github/workflows/web-ci.yml"
 
 concurrency:
@@ -23,10 +27,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
 
-    defaults:
-      run:
-        working-directory: apps/web
-
+    # ルート package.json に workspaces: ["apps/*"] が定義されているため、
+    # lockfile はルートにただ 1 つだけ存在する。インストールもルートで行う。
     steps:
       - uses: actions/checkout@v4
 
@@ -34,17 +36,17 @@ jobs:
         with:
           node-version: "20"
           cache: "npm"
-          cache-dependency-path: apps/web/package-lock.json
+          cache-dependency-path: package-lock.json
 
-      - name: Install dependencies
+      - name: Install dependencies (npm workspaces)
         run: npm ci
 
       - name: TypeScript typecheck
-        run: npm run typecheck
+        run: npm run typecheck -w apps/web
 
       - name: Next.js build
         env:
           NEXT_PUBLIC_API_BASE_URL: https://example.com
           NEXT_PUBLIC_SITE_URL: https://example.com
           AUTH_SECRET: ci-only-32-byte-dummy-secret-not-used-anywhere
-        run: npm run build
+        run: npm run build -w apps/web

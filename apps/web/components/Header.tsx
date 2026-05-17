@@ -4,7 +4,6 @@ import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { FALLBACK_TAGS } from "@/lib/api/tags";
 import HamburgerMenu from "@/components/HamburgerMenu";
-import AffiliateNotice from "@/components/AffiliateNotice";
 
 const FEED_SEED_KEY  = "feed_seed";
 const FEED_INDEX_KEY = "feed_index";
@@ -20,8 +19,9 @@ export default function Header() {
   const [open, setOpen]   = useState(false);
   const [query, setQuery] = useState("");
 
-  // ヘッダー全体（タイトル + AffiliateNotice）の実高さを --header-h に同期する。
-  // これによりモーダル・フィード・ボトムナビ等の top/padding が自動でズレなく追従する。
+  // ヘッダーの実高さを --header-h に同期する。
+  // safe-area-inset-top やフォントサイズの差異で 52px から微妙にズレるケースを吸収し、
+  // モーダル・フィード・ボトムナビ等の top/padding がピッタリ追従するようにする。
   useEffect(() => {
     const el = wrapperRef.current;
     if (!el) return;
@@ -204,7 +204,6 @@ export default function Header() {
 
       <style>{logoStyle}</style>
     </header>
-    <AffiliateNotice />
     </div>
   );
 }

@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useCallback, useState } from "react";
+import { createPortal } from "react-dom";
 import type { MovieDetail } from "@/lib/api/movies";
 import MovieDetailContent from "./MovieDetailContent";
 import DetailViewTracker from "@/components/analytics/detail-view-tracker";
@@ -16,11 +17,16 @@ export default function MovieDetailModal({ slug, onClose }: Props) {
   const [movie, setMovie] = useState<MovieDetail | null>(null);
   const [state, setState] = useState<State>("loading");
   const [visible, setVisible] = useState(false);
+  const [mounted, setMounted] = useState(false);
   const sheetRef    = useRef<HTMLDivElement>(null);
   const scrollRef   = useRef<HTMLDivElement>(null);
   const startYRef   = useRef(0);
   const currentYRef = useRef(0);
   const isDraggingRef = useRef(false);
+
+  useEffect(() => {
+    setMounted(true);
+  }, []);
 
   useEffect(() => {
     window.dispatchEvent(new Event("modal-open"));
@@ -116,7 +122,13 @@ export default function MovieDetailModal({ slug, onClose }: Props) {
     currentYRef.current = 0;
   }, [handleClose]);
 
-  return (
+  // Portal で document.body 直下にレンダー。
+  // 祖先要素 (.feed-slide など) に transform が掛かっていると、
+  // position: fixed の包含ブロックがビューポートではなくその祖先になり、
+  // ヘッダー直下にピッタリ寄らない問題が起きるため Portal で回避する。
+  if (!mounted) return null;
+
+  return createPortal(
     <>
       {/* Backdrop */}
       <div
@@ -244,6 +256,7 @@ export default function MovieDetailModal({ slug, onClose }: Props) {
           height: 200px; color: rgba(255,255,255,0.5); font-size: 14px;
         }
       `}</style>
-    </>
+    </>,
+    document.body
   );
 }

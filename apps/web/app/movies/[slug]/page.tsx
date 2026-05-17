@@ -185,7 +185,7 @@ export default async function MovieDetailPage({ params }: PageProps) {
 const styles: Record<string, React.CSSProperties> = {
   main: {
     position: 'fixed' as const,
-    // ヘッダー全体（AffiliateNotice 込み）の実高さにピッタリ描画させる
+    // ヘッダーの実高さにピッタリ描画させる
     top: 'var(--header-h, 52px)' as unknown as string,
     left: 0, right: 0, bottom: 0,
     overflowY: 'auto' as const,

@@ -7,6 +7,7 @@ interface Props {
   preload: "auto" | "metadata";
   containerRef: RefObject<HTMLDivElement>;
   shimmerRef: RefObject<HTMLDivElement>;
+  spinnerRef: RefObject<HTMLDivElement>;
   fastBadgeRef: RefObject<HTMLDivElement>;
   overlayRef: RefObject<HTMLDivElement>;
   videoRef: RefObject<HTMLVideoElement>;
@@ -29,6 +30,7 @@ export default function FeedItemVideo({
   preload,
   containerRef,
   shimmerRef,
+  spinnerRef,
   fastBadgeRef,
   overlayRef,
   videoRef,
@@ -58,10 +60,9 @@ export default function FeedItemVideo({
       onClick={onClick}
     >
       {/*
-        ロード中オーバーレイ。
-        - 背景にサムネイル画像を表示 (動画と同じ contain ・同じ位置)
-        - その上に中央でクルクル回るスピナー
+        ロード中の背景サムネイル (動画と同じ contain ・同じ位置)。
         動画が canplay に達したら useFeedPlayback.setVideoReady() で display:none にして消す。
+        スピナー自体は overlay-wrap 側に独立して置き、再生中のバッファ不足時にも表示できるようにする。
       */}
       <div ref={shimmerRef} className="shimmer" aria-hidden="true">
         {thumbnailUrl ? (
@@ -75,7 +76,6 @@ export default function FeedItemVideo({
             onContextMenu={(e) => e.preventDefault()}
           />
         ) : null}
-        <div className="shimmer-spinner" />
       </div>
 
       <video
@@ -98,6 +98,18 @@ export default function FeedItemVideo({
       />
 
       <div className="overlay-wrap">
+        {/*
+          ローディングスピナー。一時停止アイコン (.action-overlay) と同じ
+          overlay-wrap 内に置くことで中央・モバイルでもボトムバーぶんの
+          余白を考慮した同一の位置に表示される。初回ロード中だけでなく、
+          再生中の waiting/stalled 時にも表示される。
+        */}
+        <div
+          ref={spinnerRef}
+          className="loading-spinner"
+          aria-hidden="true"
+          style={{ display: "flex" }}
+        />
         <div
           ref={overlayRef}
           className="action-overlay"

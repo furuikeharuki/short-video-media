@@ -51,6 +51,7 @@ export function useFeedPlayback({ slug, title, isActive, onOpenModal }: UseFeedP
   const sectionRef   = useRef<HTMLElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const shimmerRef   = useRef<HTMLDivElement>(null);
+  const spinnerRef   = useRef<HTMLDivElement>(null);
   const fastBadgeRef = useRef<HTMLDivElement>(null);
   const overlayRef   = useRef<HTMLDivElement>(null);
   const rafRef       = useRef<number | null>(null);
@@ -84,11 +85,24 @@ export function useFeedPlayback({ slug, title, isActive, onOpenModal }: UseFeedP
     return () => window.removeEventListener("global-mute-change", sync);
   }, []);
 
+  // 初回ロード中のサムネイル背景 (.shimmer) と、一時停止アイコンと同じ
+  // .overlay-wrap 内で中央に表示されるローディングスピナー (.loading-spinner) は
+  // 独立して制御する。そうしないとキャッシュ切れで再バッファーしたときに
+  // スピナーだけ表示したいケースをサポートできない。
   const setVideoReady = useCallback((ready: boolean) => {
     const video   = videoRef.current;
     const shimmer = shimmerRef.current;
     if (video)   video.style.opacity   = ready ? "1" : "0";
     if (shimmer) shimmer.style.display = ready ? "none" : "block";
+  }, []);
+
+  // ローディングスピナーの表示・非表示を切り替える。
+  // - 初回ロード中: サムネイル + スピナーを重ねて表示
+  // - 再生中のバッファ不足 (waiting/stalled): スピナーのみ表示
+  const setSpinnerVisible = useCallback((visible: boolean) => {
+    const el = spinnerRef.current;
+    if (!el) return;
+    el.style.display = visible ? "flex" : "none";
   }, []);
 
   const showOverlay = useCallback((type: "play" | "pause") => {
@@ -228,9 +242,45 @@ export function useFeedPlayback({ slug, title, isActive, onOpenModal }: UseFeedP
     }
     isPlayingRef.current = false;
     setVideoReady(false);
+    setSpinnerVisible(true);
     setFastBadge(false);
     window.dispatchEvent(new CustomEvent("video-progress", { detail: { progress: 0 } }));
-  }, [isActive, setVideoReady, setFastBadge, stopProgressLoop]);
+  }, [isActive, setVideoReady, setSpinnerVisible, setFastBadge, stopProgressLoop]);
+
+  // 再生中の読み込み停滾 (waiting/stalled) と、出荷再開 (playing/canplaythrough) を検知して
+  // スピナーの表示・非表示を切り替える。isActive 中のときだけビデオ要素が
+  // 存在するため、それに依存したイベントリスナをその単位で貼り替える。
+  useEffect(() => {
+    if (!isActive) return;
+    const video = videoRef.current;
+    if (!video) return;
+
+    const handleWaiting = () => {
+      // シーク直後などにも発火するが、バッファが足りればすぐ playing で消えるので問題なし
+      setSpinnerVisible(true);
+    };
+    const handlePlaying = () => {
+      setSpinnerVisible(false);
+    };
+    const handleCanPlayThrough = () => {
+      setSpinnerVisible(false);
+    };
+    const handleStalled = () => {
+      // ネットワーク遅延でデータが来ないときもスピナーを出す
+      setSpinnerVisible(true);
+    };
+
+    video.addEventListener("waiting", handleWaiting);
+    video.addEventListener("playing", handlePlaying);
+    video.addEventListener("canplaythrough", handleCanPlayThrough);
+    video.addEventListener("stalled", handleStalled);
+    return () => {
+      video.removeEventListener("waiting", handleWaiting);
+      video.removeEventListener("playing", handlePlaying);
+      video.removeEventListener("canplaythrough", handleCanPlayThrough);
+      video.removeEventListener("stalled", handleStalled);
+    };
+  }, [isActive, setSpinnerVisible]);
 
   // フォールバック: 念のため IntersectionObserver でも監視する。
   // (端末向きを変えたときや SSR ハイドレート直後など、isActive prop の同期前に発火するケースに備える)
@@ -442,10 +492,12 @@ export function useFeedPlayback({ slug, title, isActive, onOpenModal }: UseFeedP
     sectionRef,
     containerRef,
     shimmerRef,
+    spinnerRef,
     fastBadgeRef,
     overlayRef,
     isMuted,
     setVideoReady,
+    setSpinnerVisible,
     handleToggleMute,
     handleShare,
     handleDetail,

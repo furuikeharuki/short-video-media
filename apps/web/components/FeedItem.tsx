@@ -171,10 +171,12 @@ export default function FeedItem({ item, isActive, isFirst, isSecond = false }: 
     sectionRef,
     containerRef,
     shimmerRef,
+    spinnerRef,
     fastBadgeRef,
     overlayRef,
     isMuted,
     setVideoReady,
+    setSpinnerVisible,
     handleToggleMute,
     handleShare,
     handleDetail,
@@ -279,11 +281,13 @@ export default function FeedItem({ item, isActive, isFirst, isSecond = false }: 
     videoSettledRef.current = true;
     clearHardTimeout();
     setVideoReady(true);
+    // 初回ロードが完了したらスピナーも一旦消す。その後は waiting/playing イベントで制御される。
+    setSpinnerVisible(false);
     const isFallback = probedUrl !== null || mp4Attempt > 0;
     if (isFallback && videoSrc && item.slug && videoSrc !== item.sample_movie_url) {
       void reportSampleUrl(item.slug, videoSrc);
     }
-  }, [setVideoReady, mp4Attempt, probedUrl, videoSrc, item.slug, item.sample_movie_url, clearHardTimeout]);
+  }, [setVideoReady, setSpinnerVisible, mp4Attempt, probedUrl, videoSrc, item.slug, item.sample_movie_url, clearHardTimeout]);
 
   // フォールバックを使い果たしたかどうか
   const isMp4Exhausted = mp4Attempt >= MAX_MP4_ATTEMPTS;
@@ -302,13 +306,14 @@ export default function FeedItem({ item, isActive, isFirst, isSecond = false }: 
             preload={preloadAttr}
             containerRef={containerRef}
             shimmerRef={shimmerRef}
+            spinnerRef={spinnerRef}
             fastBadgeRef={fastBadgeRef}
             overlayRef={overlayRef}
             videoRef={videoRef}
             thumbnailUrl={item.image_url_large ?? item.image_url_list ?? ""}
             thumbnailAlt={item.title}
             onLoadedData={handleLoadedData}
-            onCanPlay={() => setVideoReady(true)}
+            onCanPlay={() => { setVideoReady(true); setSpinnerVisible(false); }}
             onError={handleVideoError}
             onTouchStart={handleTouchStart}
             onTouchEnd={handleTouchEnd}

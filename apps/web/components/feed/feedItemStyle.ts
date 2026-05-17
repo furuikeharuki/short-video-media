@@ -15,6 +15,25 @@ export const itemStyle = `
     border-radius: 8px;
     box-sizing: border-box;
   }
+  /* サムネイル (非アクティブスライド または動画ロード中) は
+     動画と同じサイズ・アスペクトで画面内に収まるよう contain させる。 */
+  .thumbnail-bg {
+    position: absolute;
+    inset: 0;
+    overflow: hidden;
+    background: #000;
+  }
+  .thumbnail-img {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    object-fit: contain;
+    object-position: center center;
+    border-radius: 8px;
+    box-sizing: border-box;
+    display: block;
+  }
   .overlay-wrap {
     position: absolute;
     inset: 0;
@@ -233,7 +252,8 @@ export const itemStyle = `
     .action-overlay { animation: none; opacity: 0; }
   }
   @media (max-width: 767px) {
-    .feed-video {
+    .feed-video,
+    .thumbnail-img {
       padding-bottom: 60px;
     }
     .overlay-wrap {

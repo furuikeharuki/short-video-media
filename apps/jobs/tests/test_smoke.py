@@ -10,6 +10,8 @@ sys.path.insert(0, str(_HERE.parents[1]))
 from src.sync_catalog import (  # noqa: E402
     _build_affiliate_url,
     _build_content_id,
+    _build_large_image_url,
+    _build_list_image_url,
     _extract_price_list,
     _extract_review,
     _month_slices,
@@ -110,6 +112,29 @@ def test_month_slices_single_month():
     slices = _month_slices(date(2026, 5, 1), date(2026, 5, 17))
     assert len(slices) == 1
     assert slices[0] == ("2026-05-01T00:00:00", "2026-05-17T23:59:59")
+
+
+def test_build_image_url_goods_uses_pl_jpg():
+    """goods フロアは mono/goods/{cid}/{cid}pl.jpg を使うこと。"""
+    list_url = _build_list_image_url("ho11992", "goods")
+    large_url = _build_large_image_url("ho11992", "goods")
+    assert list_url == "https://pics.dmm.co.jp/mono/goods/ho11992/ho11992pl.jpg"
+    assert large_url == "https://pics.dmm.co.jp/mono/goods/ho11992/ho11992pl.jpg"
+
+
+def test_build_image_url_videoa_uses_pl_jpg():
+    list_url = _build_list_image_url("nask00405", "videoa")
+    large_url = _build_large_image_url("nask00405", "videoa")
+    assert list_url == "https://pics.dmm.co.jp/digital/video/nask00405/nask00405pl.jpg"
+    assert large_url == "https://pics.dmm.co.jp/digital/video/nask00405/nask00405pl.jpg"
+
+
+def test_build_image_url_videoc_uses_jp_jpg():
+    """videoc は pl.jpg が now_printing にリダイレクトされるため jp.jpg / jp-001.jpg を使う。"""
+    list_url = _build_list_image_url("smjx231", "videoc")
+    large_url = _build_large_image_url("smjx231", "videoc")
+    assert list_url == "https://pics.dmm.co.jp/digital/amateur/smjx231/smjx231jp.jpg"
+    assert large_url == "https://pics.dmm.co.jp/digital/amateur/smjx231/smjx231jp-001.jpg"
 
 
 def test_extract_price_list():

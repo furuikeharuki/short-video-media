@@ -338,6 +338,9 @@ def _floor_image_base(floor: str) -> str:
         return "https://pics.dmm.co.jp/digital/video"
     if floor == "videoc":
         return "https://pics.dmm.co.jp/digital/amateur"
+    if floor == "goods":
+        # mono サービスの goods (女優グッズ) は pics.dmm.co.jp/mono/goods/{cid}/{cid}pl.jpg
+        return "https://pics.dmm.co.jp/mono/goods"
     # その他は digital/video を仮定 (見つからないときはフロント側 onError でさらに
     # fallback させる設計)
     return "https://pics.dmm.co.jp/digital/video"
@@ -352,13 +355,16 @@ def _build_list_image_url(content_id: str, floor: str) -> str | None:
                (右半分) をクロップ表示し表ジャケット部分を除去する。
       - videoc (素人): `pl.jpg` は 存在せず now_printing にリダイレクトされるため
                `jp.jpg` (300x300) を使う (`jm.jpg` 100x100 は小さすぎる)
+      - goods (女優グッズ): `pl.jpg` (パッケージ画像) を使う。
+               mono/goods/{cid}/{cid}pl.jpg が CDN 上の正規の画像。
     """
     cid = (content_id or "").strip().lower()
     if not cid:
         return None
     if floor == "videoc":
         return f"{_floor_image_base(floor)}/{cid}/{cid}jp.jpg"
-    # videoa は pl.jpg を使い、CSS で右クロップさせる
+    # videoa / goods は pl.jpg を使う。videoa は CSS で右クロップ、
+    # goods はパッケージ全体をそのまま見せる。
     return f"{_floor_image_base(floor)}/{cid}/{cid}pl.jpg"
 
 
@@ -369,6 +375,7 @@ def _build_large_image_url(content_id: str, floor: str) -> str | None:
       - videoa: `pl.jpg` (800x590) が存在する
       - videoc: `pl.jpg` は **存在せず** now_printing にリダイレクトされる。
                サンプル画像 `jp-001.jpg` (711x800) を使うのが最も鮮明
+      - goods: `pl.jpg` がパッケージ高解像度画像。
     """
     cid = (content_id or "").strip().lower()
     if not cid:
@@ -716,12 +723,18 @@ async def upsert_goods(
         await session.execute(select(Goods).where(Goods.content_id == content_id))
     ).scalar_one_or_none()
 
+    # goods の画像 URL は mono/goods/{cid}/{cid}pl.jpg を優先して使う。
+    # API が返す imageURL.list は pt.jpg (小さい) や jm.jpg のことがあり画質が低いため、
+    # 自前生成の pl.jpg URL を優先し、API レスポンスはフォールバックとして使う。
+    new_image_list = _build_list_image_url(content_id, "goods") or image_urls.get("list")
+    new_image_large = _build_large_image_url(content_id, "goods") or image_urls.get("large")
+
     if existing:
         goods = existing
         goods.title = title
         goods.description = item.get("comment") or goods.description or ""
-        goods.image_url_list = image_urls.get("list") or goods.image_url_list
-        goods.image_url_large = image_urls.get("large") or goods.image_url_large
+        goods.image_url_list = new_image_list or goods.image_url_list
+        goods.image_url_large = new_image_large or goods.image_url_large
         goods.affiliate_url = affiliate_url
         goods.price_list = price_list or goods.price_list
         goods.price_min = price_min if price_min is not None else goods.price_min
@@ -744,8 +757,8 @@ async def upsert_goods(
             title=title,
             slug=slug,
             description=item.get("comment") or "",
-            image_url_list=image_urls.get("list"),
-            image_url_large=image_urls.get("large"),
+            image_url_list=new_image_list,
+            image_url_large=new_image_large,
             affiliate_url=affiliate_url,
             price_list=price_list,
             price_min=price_min,

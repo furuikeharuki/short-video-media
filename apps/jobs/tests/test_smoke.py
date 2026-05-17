@@ -12,6 +12,7 @@ from src.sync_catalog import (  # noqa: E402
     _build_content_id,
     _extract_price_list,
     _extract_review,
+    _month_slices,
     _parse_date,
     _parse_float,
     _parse_int,
@@ -83,6 +84,32 @@ def test_extract_review():
     cnt, avg = _extract_review({})
     assert cnt == 0
     assert avg is None
+
+
+def test_month_slices_basic():
+    # 2024-01-15 〜 2024-03-10 → 1月全、丈。1 スライス、丈。2 スライス (3 月 10 日まで)
+    slices = _month_slices(date(2024, 1, 15), date(2024, 3, 10))
+    assert len(slices) == 3
+    # 最初のスライスは cursor がその月の初日に揃えられる (start より前を含む) → 1/1〜1/31
+    assert slices[0] == ("2024-01-01T00:00:00", "2024-01-31T23:59:59")
+    assert slices[1] == ("2024-02-01T00:00:00", "2024-02-29T23:59:59")  # 2024 は闏年
+    # 最後のスライスは end でトランケートされる
+    assert slices[2] == ("2024-03-01T00:00:00", "2024-03-10T23:59:59")
+
+
+def test_month_slices_year_boundary():
+    # 年をまたぐ (12 月 → 1 月) ケース
+    slices = _month_slices(date(2023, 12, 1), date(2024, 1, 31))
+    assert len(slices) == 2
+    assert slices[0] == ("2023-12-01T00:00:00", "2023-12-31T23:59:59")
+    assert slices[1] == ("2024-01-01T00:00:00", "2024-01-31T23:59:59")
+
+
+def test_month_slices_single_month():
+    # 1 ヶ月以内のケース
+    slices = _month_slices(date(2026, 5, 1), date(2026, 5, 17))
+    assert len(slices) == 1
+    assert slices[0] == ("2026-05-01T00:00:00", "2026-05-17T23:59:59")
 
 
 def test_extract_price_list():

@@ -39,7 +39,7 @@ import time
 import unicodedata
 import uuid
 from dataclasses import dataclass
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -171,10 +171,17 @@ class FetchParams:
     hits: int
     offset: int = 1
     sort: str = "date"
+    # 期間スライス (全件取得時に offset の上限を回避するため)
+    gte_date: str | None = None  # "YYYY-MM-DDT00:00:00"
+    lte_date: str | None = None
+    # 状態診断用 (トータル件数を見るときは hits=1, offset=1)
+    article: str | None = None
+    article_id: str | None = None
 
 
-async def fetch_items(client: httpx.AsyncClient, fp: FetchParams) -> list[dict]:
-    params = {
+async def fetch_items_response(client: httpx.AsyncClient, fp: FetchParams) -> dict:
+    """DMM ItemList API を叩いて result コンテナをそのまま返す。"""
+    params: dict[str, Any] = {
         "api_id": fp.api_id,
         "affiliate_id": fp.affiliate_id,
         "site": fp.site,
@@ -185,6 +192,14 @@ async def fetch_items(client: httpx.AsyncClient, fp: FetchParams) -> list[dict]:
         "sort": fp.sort,
         "output": "json",
     }
+    if fp.gte_date:
+        params["gte_date"] = fp.gte_date
+    if fp.lte_date:
+        params["lte_date"] = fp.lte_date
+    if fp.article:
+        params["article"] = fp.article
+    if fp.article_id:
+        params["article_id"] = fp.article_id
     res = await client.get(DMM_ENDPOINT, params=params, timeout=20)
     if res.status_code >= 400:
         # DMM は 4xx でも JSON でエラー詳細を返すので、それを見えるようにする
@@ -201,8 +216,12 @@ async def fetch_items(client: httpx.AsyncClient, fp: FetchParams) -> list[dict]:
     if status and status != 200:
         msg = result.get("message") or result.get("errors") or data
         raise RuntimeError(f"DMM API status={status}: {msg}")
-    items = result.get("items") or []
-    return items
+    return result
+
+
+async def fetch_items(client: httpx.AsyncClient, fp: FetchParams) -> list[dict]:
+    result = await fetch_items_response(client, fp)
+    return result.get("items") or []
 
 
 # ────────────────────────────────────────────────────────────
@@ -375,9 +394,28 @@ async def upsert_movie(
     affiliate_id: str,
     floor: str,
     dry_run: bool = False,
+    refresh_sample_url: bool = False,
+    actress_filter: set[str] | None = None,
 ) -> None:
+    """DMM API の 1 件を Movie テーブルに upsert する。
+
+    :param refresh_sample_url:
+        True なら既存作品の sample_movie_url を DMM ロジックで再生成した URL で上書きする。
+        False (デフォルト) のときは既存値を保護 (クライアント学習キャッシュを壊さない)。
+    :param actress_filter:
+        与えられたとき、作品に含まれる女優名がこのセットに 1 つも一致しなければ skip。
+        goods フロアで DB に存在する女優に関連する商品だけ保存するために使う。
+    """
     content_id = _build_content_id(item, floor_prefix)
     iteminfo = item.get("iteminfo") or {}
+
+    # goods フロア以外でも使えるフィルタ: DB にいる女優と関連している作品だけ保存する。
+    if actress_filter is not None:
+        actresses_arr = iteminfo.get("actress") or []
+        names_in_item = [a.get("name") for a in actresses_arr if isinstance(a, dict) and a.get("name")]
+        if not any(n in actress_filter for n in names_in_item):
+            counters.skipped += 1
+            return
 
     image_urls = item.get("imageURL") or {}
     sample_movie = (item.get("sampleMovieURL") or {})
@@ -471,7 +509,14 @@ async def upsert_movie(
         new_image_large = image_urls.get("large") or _build_large_image_url(content_id, floor)
         movie.image_url_list = new_image_list or movie.image_url_list
         movie.image_url_large = new_image_large or movie.image_url_large
-        movie.sample_movie_url = sample_movie_url or movie.sample_movie_url
+        # sample_movie_url: クライアントがフォールバックで見つけた有効 URL を
+        # キャッシュしているため、送信でオリジナルロジックに戻さないよう保護する。
+        #   - 毎時 cron (refresh_sample_url=False): 既存値が空のときだけセット
+        #   - フル同期 (refresh_sample_url=True): 常に上書き（月 1 のリセットタイミング）
+        if refresh_sample_url:
+            movie.sample_movie_url = sample_movie_url or movie.sample_movie_url
+        elif not movie.sample_movie_url:
+            movie.sample_movie_url = sample_movie_url
         movie.sample_embed_url = sample_embed_url or movie.sample_embed_url
         # affiliate_url は常に自前生成のもので上書き (既存データの無効リンクを一括で修復する)
         movie.affiliate_url = affiliate_url
@@ -646,17 +691,177 @@ async def _sync_actresses(session: AsyncSession, movie_id: str, actress_items: l
 
 
 # ────────────────────────────────────────────────────────────
-# メイン
+# 期間スライス生成 (全件取得用)
 # ────────────────────────────────────────────────────────────
 
-async def main(*, hits_per_floor: int, floors_filter: list[str] | None, dry_run: bool) -> None:
+def _month_slices(start: date, end: date) -> list[tuple[str, str]]:
+    """start から end までを月単位にスライスして、
+    (gte_date, lte_date) のリストを ISO 形式で返す。
+
+    DMM ItemList API は offset が 50000 までの制限があるため、
+    全件取得するときは gte_date/lte_date で期間を区切って取る。
+    月単位 × 1 スライスあたり最大5万件までカバーする計算。
+    """
+    slices: list[tuple[str, str]] = []
+    # 月の初日に揃える
+    cursor = date(start.year, start.month, 1)
+    while cursor <= end:
+        # その月の末日 = 翼月の初日 - 1 日
+        if cursor.month == 12:
+            next_month = date(cursor.year + 1, 1, 1)
+        else:
+            next_month = date(cursor.year, cursor.month + 1, 1)
+        month_end = min(end, next_month - timedelta(days=1))
+        gte = cursor.isoformat() + "T00:00:00"
+        lte = month_end.isoformat() + "T23:59:59"
+        slices.append((gte, lte))
+        cursor = next_month
+    return slices
+
+
+# ────────────────────────────────────────────────────────────
+# メイン処理
+# ────────────────────────────────────────────────────────────
+
+async def _process_items(
+    session: AsyncSession,
+    items: list[dict],
+    *,
+    prefix: str,
+    counters: UpsertCounters,
+    affiliate_id: str,
+    floor: str,
+    dry_run: bool,
+    refresh_sample_url: bool,
+    actress_filter: set[str] | None,
+) -> None:
+    """取得した items リストを 1 件ずつ upsert してコミットする。"""
+    for item in items:
+        try:
+            await upsert_movie(
+                session,
+                item,
+                prefix,
+                counters,
+                affiliate_id=affiliate_id,
+                floor=floor,
+                dry_run=dry_run,
+                refresh_sample_url=refresh_sample_url,
+                actress_filter=actress_filter,
+            )
+            # 1件ずつコミット: そうしないと 1 件失敗で batch 全体が巻き込まれる
+            if not dry_run:
+                await session.commit()
+        except Exception as e:  # noqa: BLE001
+            print(f"    [ERROR] upsert failed cid={item.get('content_id')}: {e}")
+            counters.errors += 1
+            try:
+                await session.rollback()
+            except Exception:  # noqa: BLE001
+                pass
+
+
+async def _run_floor_window(
+    *,
+    client: httpx.AsyncClient,
+    session: AsyncSession,
+    api_id: str,
+    api_affiliate_id: str,
+    link_affiliate_id: str,
+    site: str,
+    service: str,
+    floor: str,
+    prefix: str,
+    hits_limit: int | None,
+    gte_date: str | None,
+    lte_date: str | None,
+    counters: UpsertCounters,
+    dry_run: bool,
+    refresh_sample_url: bool,
+    actress_filter: set[str] | None,
+) -> None:
+    """一つの (floor, 期間ウィンドウ) を offset でページングして全件取得し、upsert する。
+
+    :param hits_limit:
+        上限件数。未指定 (None) のときは API が返すだけ取り切る (全件モード)。
+    """
+    fetched = 0
+    offset = 1
+    # DMM API の offset 上限 (50000) を超えないようガード
+    MAX_OFFSET = 50000
+    while True:
+        if hits_limit is not None and fetched >= hits_limit:
+            break
+        if offset > MAX_OFFSET:
+            print(f"  [{floor}] reached offset limit ({MAX_OFFSET}), stopping this window")
+            break
+        # 1 回のリクエストで取る件数
+        if hits_limit is None:
+            batch_size = 100
+        else:
+            batch_size = min(100, hits_limit - fetched)
+        fp = FetchParams(
+            api_id=api_id,
+            affiliate_id=api_affiliate_id,
+            site=site,
+            service=service,
+            floor=floor,
+            hits=batch_size,
+            offset=offset,
+            gte_date=gte_date,
+            lte_date=lte_date,
+        )
+        try:
+            items = await fetch_items(client, fp)
+        except (httpx.HTTPError, RuntimeError) as e:
+            print(f"  [ERROR] {floor} offset={offset}: {e}")
+            counters.errors += 1
+            break
+        if not items:
+            print(f"  [{floor}] no more items (offset={offset})")
+            break
+        window = f" {gte_date[:10]}–{lte_date[:10]}" if gte_date and lte_date else ""
+        print(f"  [{floor}]{window} offset={offset} got {len(items)} items")
+        await _process_items(
+            session,
+            items,
+            prefix=prefix,
+            counters=counters,
+            affiliate_id=link_affiliate_id,
+            floor=floor,
+            dry_run=dry_run,
+            refresh_sample_url=refresh_sample_url,
+            actress_filter=actress_filter,
+        )
+        fetched += len(items)
+        offset += len(items)
+        if len(items) < batch_size:
+            break
+        time.sleep(RATE_LIMIT_SLEEP_SEC)
+
+
+async def _load_db_actress_names(session: AsyncSession) -> set[str]:
+    """DB に現在登録されている全女優の名前を返す。goods フロアのフィルタリングに使う。"""
+    rows = (await session.execute(select(Actress.name))).scalars().all()
+    return {n for n in rows if n}
+
+
+async def main(
+    *,
+    mode: str,
+    hits_per_floor: int,
+    floors_filter: list[str] | None,
+    dry_run: bool,
+    refresh_sample_url: bool,
+    start_date: date | None,
+    end_date: date | None,
+) -> None:
     api_id = os.getenv("DMM_API_ID")
     # DMM API 呼び出し用 ID (末尾 -990〜-999 必須)
     api_affiliate_id = os.getenv("DMM_AFFILIATE_ID")
     if not api_id or not api_affiliate_id:
         raise SystemExit("DMM_API_ID / DMM_AFFILIATE_ID が設定されていません")
     # 購入ページ af_id 用 ID。未設定時は API 用 ID をフォールバックとして使う
-    # (クッキー計測はされるので報酬は発生するが、サイト別分析はできない)
     link_affiliate_id = os.getenv("DMM_LINK_AFFILIATE_ID") or api_affiliate_id
     print(
         f"[sync_catalog] api_affiliate_id={api_affiliate_id[:8]}*** "
@@ -672,71 +877,80 @@ async def main(*, hits_per_floor: int, floors_filter: list[str] | None, dry_run:
 
     counters = UpsertCounters()
     # floors_filter 未指定 (cron 例) のときはデフォルトフロア (動画のみ) を使う
-    effective_filter = (
-        set(DEFAULT_FLOOR_NAMES) if floors_filter is None else set(floors_filter)
-    )
+    if mode == "full":
+        # フル同期は動画 2 フロア + goods をデフォルトにする (goods は DB 女優フィルタ付き)
+        effective_filter = (
+            {"videoa", "videoc", "goods"} if floors_filter is None else set(floors_filter)
+        )
+    else:
+        effective_filter = (
+            set(DEFAULT_FLOOR_NAMES) if floors_filter is None else set(floors_filter)
+        )
     targets = [f for f in FLOORS if f[2] in effective_filter]
 
-    print(f"[sync_catalog] start: hits_per_floor={hits_per_floor}, floors={[f[2] for f in targets]}, dry_run={dry_run}")
+    print(
+        f"[sync_catalog] start: mode={mode} hits_per_floor={hits_per_floor} "
+        f"floors={[f[2] for f in targets]} dry_run={dry_run} "
+        f"refresh_sample_url={refresh_sample_url}"
+    )
 
     async with httpx.AsyncClient() as client:
         async with Session() as session:
+            # goods フロアで DB の女優と関連する作品だけ保存するため、先に名前リストをロード
+            db_actress_names: set[str] | None = None
+            if any(f[2] == "goods" for f in targets):
+                db_actress_names = await _load_db_actress_names(session)
+                print(f"[sync_catalog] loaded {len(db_actress_names)} actress names for goods filter")
+
             for site, service, floor, prefix in targets:
-                # 1 リクエスト最大 100 件。hits_per_floor がそれ以上ならページングする
-                fetched = 0
-                offset = 1
-                while fetched < hits_per_floor:
-                    batch_size = min(100, hits_per_floor - fetched)
-                    fp = FetchParams(
+                # goods は常に DB 女優フィルタをかける
+                actress_filter = db_actress_names if floor == "goods" else None
+
+                if mode == "full":
+                    # 期間スライスして全件取得
+                    if start_date is None or end_date is None:
+                        raise SystemExit("full モードでは start_date / end_date が必要")
+                    slices = _month_slices(start_date, end_date)
+                    print(f"  [{floor}] full mode: {len(slices)} month slices ({start_date} .. {end_date})")
+                    for gte, lte in slices:
+                        await _run_floor_window(
+                            client=client,
+                            session=session,
+                            api_id=api_id,
+                            api_affiliate_id=api_affiliate_id,
+                            link_affiliate_id=link_affiliate_id,
+                            site=site,
+                            service=service,
+                            floor=floor,
+                            prefix=prefix,
+                            hits_limit=None,  # 全件取り切る
+                            gte_date=gte,
+                            lte_date=lte,
+                            counters=counters,
+                            dry_run=dry_run,
+                            refresh_sample_url=refresh_sample_url,
+                            actress_filter=actress_filter,
+                        )
+                else:
+                    # incremental モード: 期間指定なし、件数上限だけ
+                    await _run_floor_window(
+                        client=client,
+                        session=session,
                         api_id=api_id,
-                        # API 呼び出しには -990 系の ID を使う (仕様上必須)
-                        affiliate_id=api_affiliate_id,
+                        api_affiliate_id=api_affiliate_id,
+                        link_affiliate_id=link_affiliate_id,
                         site=site,
                         service=service,
                         floor=floor,
-                        hits=batch_size,
-                        offset=offset,
+                        prefix=prefix,
+                        hits_limit=hits_per_floor,
+                        gte_date=None,
+                        lte_date=None,
+                        counters=counters,
+                        dry_run=dry_run,
+                        refresh_sample_url=refresh_sample_url,
+                        actress_filter=actress_filter,
                     )
-                    try:
-                        items = await fetch_items(client, fp)
-                    except (httpx.HTTPError, RuntimeError) as e:
-                        print(f"  [ERROR] {floor} offset={offset}: {e}")
-                        counters.errors += 1
-                        break
-
-                    if not items:
-                        print(f"  [{floor}] no more items (offset={offset})")
-                        break
-
-                    print(f"  [{floor}] offset={offset} got {len(items)} items")
-                    for item in items:
-                        try:
-                            await upsert_movie(
-                                session,
-                                item,
-                                prefix,
-                                counters,
-                                # 購入リンクには サイト紐付け用 ID (-001 等) を使う
-                                affiliate_id=link_affiliate_id,
-                                floor=floor,
-                                dry_run=dry_run,
-                            )
-                            # 1件ずつコミット: そうしないと 1 件失敗で batch 全体が巻き込まれる
-                            if not dry_run:
-                                await session.commit()
-                        except Exception as e:  # noqa: BLE001
-                            print(f"    [ERROR] upsert failed cid={item.get('content_id')}: {e}")
-                            counters.errors += 1
-                            try:
-                                await session.rollback()
-                            except Exception:  # noqa: BLE001
-                                pass
-
-                    fetched += len(items)
-                    offset += len(items)
-                    if len(items) < batch_size:
-                        break
-                    time.sleep(RATE_LIMIT_SLEEP_SEC)
                 # フロア切替時もちょっと休む
                 time.sleep(RATE_LIMIT_SLEEP_SEC)
 
@@ -747,24 +961,68 @@ async def main(*, hits_per_floor: int, floors_filter: list[str] | None, dry_run:
     )
 
 
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--hits", type=int, default=100, help="1 フロアあたりの取得件数 (デフォルト 100)")
+    parser.add_argument(
+        "--mode",
+        choices=["incremental", "full"],
+        default="incremental",
+        help=(
+            "incremental: フロアごとに hits 件だけ取る (デフォルト、毎時 cron 用) / "
+            "full: 期間スライスして全件取る (ブートストラップ / 月 1 用)"
+        ),
+    )
+    parser.add_argument("--hits", type=int, default=100, help="incremental モードでの 1 フロアあたり取得件数 (デフォルト 100)")
     parser.add_argument(
         "--floors",
         type=str,
         default=None,
         help="対象フロアをカンマ区切りで限定 (例: videoa,videoc,goods)",
     )
-    parser.add_argument("--dry-run", action="store_true", help="DB に書き込まずログだけ表示")
+    parser.add_argument(
+        "--start-date",
+        type=str,
+        default="2000-01-01",
+        help="full モードで取得する期間の開始日 (YYYY-MM-DD、デフォルト 2000-01-01)",
+    )
+    parser.add_argument(
+        "--end-date",
+        type=str,
+        default="",
+        help="full モードで取得する期間の終了日 (YYYY-MM-DD、空なら今日)",
+    )
+    parser.add_argument(
+        "--refresh-sample-url",
+        action="store_true",
+        help="sample_movie_url を常に上書き (未指定時は既存値を保護 = クライアント学習キャッシュを壊さない)",
+    )
+    parser.add_argument("--dry-run", action="store_true", help="DB に書き込まずにログだけ表示")
     args = parser.parse_args()
 
     floors_filter = None
     if args.floors:
         floors_filter = [f.strip() for f in args.floors.split(",") if f.strip()]
 
+    # full モードはデフォルトで refresh_sample_url=True (月 1 のリセットタイミング)
+    refresh_sample_url = args.refresh_sample_url or (args.mode == "full")
+
+    start_date: date | None = None
+    end_date: date | None = None
+    if args.mode == "full":
+        start_date = datetime.strptime(args.start_date, "%Y-%m-%d").date()
+        end_date = (
+            datetime.strptime(args.end_date, "%Y-%m-%d").date()
+            if args.end_date
+            else date.today()
+        )
+
     asyncio.run(main(
+        mode=args.mode,
         hits_per_floor=args.hits,
         floors_filter=floors_filter,
         dry_run=args.dry_run,
+        refresh_sample_url=refresh_sample_url,
+        start_date=start_date,
+        end_date=end_date,
     ))

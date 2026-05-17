@@ -15,7 +15,12 @@ from app.services.ranking_service import get_popular_search_genres, get_ranking
 
 
 # 検索数イベントが不足しているときに使う代替ジャンル
-FALLBACK_GENRES = ["素人", "巨乳", "ハーレム"]
+# (DB に実在するジャンル名のみ。技術タグ ハイビジョン/独占配信/単体作品/4K は除外)
+FALLBACK_GENRES = ["巨乳", "痴女", "人妻・主婦"]
+
+# 「本日配信開始」が空のとき遡る日数。primary_date が古いカタログでも
+# セクションを埋められるように広めにとる。
+NEW_RELEASE_FALLBACK_DAYS = 90
 
 router = APIRouter()
 
@@ -28,7 +33,9 @@ async def get_home(
     sections: list[HomeSection] = []
 
     # 1. 本日配信開始
-    new_movies = await get_new_release_movies(db, limit=section_limit)
+    new_movies = await get_new_release_movies(
+        db, limit=section_limit, fallback_days=NEW_RELEASE_FALLBACK_DAYS
+    )
     sections.append(
         HomeSection(
             key="new",

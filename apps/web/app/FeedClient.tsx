@@ -6,8 +6,9 @@ import { useSession } from "next-auth/react";
 import FeedViewer from "@/components/FeedViewer";
 import { markSeen, getOrCreateSeed } from "@/lib/feedOrder";
 import { getFeed } from "@/lib/api/feed";
+import { getHomeSection, type HomeSectionKey } from "@/lib/api/homeSection";
 import { getMovieBySlug } from "@/lib/api/movies";
-import { loadPlaylist, clearPlaylist } from "@/lib/feedPlaylist";
+import { loadPlaylist, clearPlaylist, type PlaylistSource } from "@/lib/feedPlaylist";
 import { logEvent } from "@/lib/api/events";
 import { recordView } from "@/lib/api/me";
 import type { MovieCard } from "@/lib/api/feed";
@@ -72,6 +73,17 @@ function movieDetailToCard(m: MovieDetail): MovieCard {
   };
 }
 
+// section key のホワイトリスト。サーバーと揃えておく。
+const SECTION_KEYS: ReadonlySet<HomeSectionKey> = new Set<HomeSectionKey>([
+  "popular",
+  "new",
+  "recent",
+  "ranking_daily",
+  "ranking_weekly",
+  "ranking_monthly",
+  "genre",
+]);
+
 export default function FeedClient() {
   const searchParams  = useSearchParams();
   const { status: authStatus } = useSession();
@@ -79,6 +91,9 @@ export default function FeedClient() {
   const isFetchingRef = useRef(false);
   const isFetchingMoreRef = useRef(false);
   const nextCursorRef = useRef<string | null>(null);
+  // playlist 経由で起動したときは /api/v1/home/section で継足しするため、
+  // その出所情報 (セクション key / ジャンル名) を保持する。
+  const playlistSourceRef = useRef<PlaylistSource | null>(null);
 
   const [items,        setItems]        = useState<MovieCard[]>([]);
   const [initialIndex, setInitialIndex] = useState(0);
@@ -132,8 +147,16 @@ export default function FeedClient() {
         setInitialIndex(idx);
         setIsEmpty(false);
         setIsLoading(false);
-        nextCursorRef.current = null;
-        saveSession(seed, idx, pl.items, null);
+        // source があれば 20 件以降も /api/v1/home/section で同じ順で取りにいく。
+        // そのとき next_cursor は items.length を offset として使う。
+        if (pl.source && SECTION_KEYS.has(pl.source.key as HomeSectionKey)) {
+          playlistSourceRef.current = pl.source;
+          nextCursorRef.current = String(pl.items.length);
+        } else {
+          playlistSourceRef.current = null;
+          nextCursorRef.current = null;
+        }
+        saveSession(seed, idx, pl.items, nextCursorRef.current);
         // 遷移後は一度だけ使えればよいのでクリア
         clearPlaylist(playlistKey);
         return;
@@ -186,19 +209,42 @@ export default function FeedClient() {
   const fetchMore = useCallback(async () => {
     if (isFetchingMoreRef.current) return;
     const cursor = nextCursorRef.current;
-    const seed   = seedRef.current;
-    if (!cursor || seed === null) return;
+    if (!cursor) return;
     const offset = parseInt(cursor, 10);
     if (Number.isNaN(offset)) return;
 
+    // セッション (ホームの "ランキング" "人気" "ジャンル" など) 経由のときは
+    // /api/v1/home/section で同じ順番で続けて取りにいく。
+    // それ以外 (ふつうの /feed) は従来通り seed と offset で /feed を叩く。
+    const source = playlistSourceRef.current;
+    const seed = seedRef.current;
+
     isFetchingMoreRef.current = true;
     try {
-      const res = await getFeed(offset, 20, seed);
-      nextCursorRef.current = res.next_cursor;
-      if (res.items.length === 0) return;
+      let resItems: MovieCard[];
+      let resCursor: string | null;
+
+      if (source) {
+        const res = await getHomeSection(
+          source.key as HomeSectionKey,
+          offset,
+          20,
+          source.genre,
+        );
+        resItems = res.items;
+        resCursor = res.next_cursor;
+      } else {
+        if (seed === null) return;
+        const res = await getFeed(offset, 20, seed);
+        resItems = res.items;
+        resCursor = res.next_cursor;
+      }
+
+      nextCursorRef.current = resCursor;
+      if (resItems.length === 0) return;
       setItems((prev) => {
         const existing = new Set(prev.map((i) => i.id));
-        const fresh    = res.items.filter((i) => !existing.has(i.id));
+        const fresh    = resItems.filter((i) => !existing.has(i.id));
         if (fresh.length === 0) return prev;
         const merged = [...prev, ...fresh];
         // セッションの items も更新して、モーダル」戻り時にも返せるようにする。
@@ -206,7 +252,14 @@ export default function FeedClient() {
         // 現在保存されている値をそのまま使う。
         try {
           const savedIdx = sessionStorage.getItem(FEED_INDEX_KEY);
-          saveSession(seed, savedIdx ? parseInt(savedIdx, 10) : 0, merged, nextCursorRef.current);
+          // seed がないケース (playlist 経由で初期取得をスキップしたとき) もセッションに
+          // 存在しないとダメなので、-1 でダミーとして保存しておく。
+          saveSession(
+            seed ?? -1,
+            savedIdx ? parseInt(savedIdx, 10) : 0,
+            merged,
+            nextCursorRef.current,
+          );
         } catch { /* ignore */ }
         return merged;
       });

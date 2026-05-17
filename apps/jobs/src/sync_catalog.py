@@ -310,27 +310,33 @@ def _floor_image_base(floor: str) -> str:
 
 
 def _build_list_image_url(content_id: str, floor: str) -> str | None:
-    """一覧・フィード用サムネイル (`ps.jpg` 147x200) の URL を組み立てる。
+    """一覧ページ用サムネイル URL を組み立てる。
 
-    DMM API が返す imageURL.list は `pt.jpg` (90x122) や `jm.jpg` (100x100) の
-    超低解像度になることが多いため、もう一回り大きい `ps.jpg` (147x200) を
-    使うように URL を自前で生成する。
+    フロア別に画像 CDN に登録されている suffix が異なる:
+      - videoa: `ps.jpg` (147x200) が存在する
+      - videoc: `ps.jpg` は **存在せず** now_printing にリダイレクトされる。
+               `jp.jpg` (300x300) を使う (`jm.jpg` 100x100 は小さすぎる)
     """
     cid = (content_id or "").strip().lower()
     if not cid:
         return None
-    return f"{_floor_image_base(floor)}/{cid}/{cid}ps.jpg"
+    suffix = "jp" if floor == "videoc" else "ps"
+    return f"{_floor_image_base(floor)}/{cid}/{cid}{suffix}.jpg"
 
 
 def _build_large_image_url(content_id: str, floor: str) -> str | None:
-    """詳細ページ用の高解像度画像 (`pl.jpg` 800x590) の URL を組み立てる。
+    """フィード・詳細ページ用の高解像度画像 URL を組み立てる。
 
-    DMM API が返す imageURL.large は videoc (素人系) で None になることが多いため、
-    content_id とフロアから `pl.jpg` URL を自前で生成して補う。
+    フロア別に画像 CDN に登録されている suffix が異なる:
+      - videoa: `pl.jpg` (800x590) が存在する
+      - videoc: `pl.jpg` は **存在せず** now_printing にリダイレクトされる。
+               サンプル画像 `jp-001.jpg` (711x800) を使うのが最も鮮明
     """
     cid = (content_id or "").strip().lower()
     if not cid:
         return None
+    if floor == "videoc":
+        return f"{_floor_image_base(floor)}/{cid}/{cid}jp-001.jpg"
     return f"{_floor_image_base(floor)}/{cid}/{cid}pl.jpg"
 
 

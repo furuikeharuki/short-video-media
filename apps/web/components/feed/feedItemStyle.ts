@@ -45,26 +45,41 @@ export const itemStyle = `
   .shimmer {
     position: absolute;
     inset: 0;
-    background: #1a1a1a;
+    background: #000;
     z-index: 1;
     overflow: hidden;
     border-radius: 8px;
   }
-  .shimmer-inner {
+  /* ロード中の背景サムネイル: 動画 (.feed-video) と完全に同じレイアウトで重ねる */
+  .shimmer-thumb {
     position: absolute;
     inset: 0;
-    background: linear-gradient(
-      105deg,
-      transparent 40%,
-      rgba(255,255,255,0.06) 50%,
-      transparent 60%
-    );
-    background-size: 200% 100%;
-    animation: shimmer-slide 1.4s ease-in-out infinite;
+    width: 100%;
+    height: 100%;
+    object-fit: contain;
+    object-position: center center;
+    border-radius: 8px;
+    box-sizing: border-box;
+    display: block;
   }
-  @keyframes shimmer-slide {
-    0%   { background-position: 200% 0; }
-    100% { background-position: -200% 0; }
+  /* サムネイル上で中央をクルクル回るスピナー */
+  .shimmer-spinner {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    width: 48px;
+    height: 48px;
+    margin: -24px 0 0 -24px;
+    border: 4px solid rgba(255, 255, 255, 0.25);
+    border-top-color: #fff;
+    border-radius: 50%;
+    animation: shimmer-spin 0.9s linear infinite;
+    pointer-events: none;
+    z-index: 2;
+  }
+  @keyframes shimmer-spin {
+    0%   { transform: rotate(0deg); }
+    100% { transform: rotate(360deg); }
   }
   .video-bg--interactive {
     cursor: pointer;
@@ -247,13 +262,14 @@ export const itemStyle = `
     100% { opacity: 0; transform: translate(-50%, -50%) scale(1.35); }
   }
   @media (prefers-reduced-motion: reduce) {
-    .shimmer-inner  { animation: none; }
-    .skip-ripple    { animation: none; opacity: 0; }
-    .action-overlay { animation: none; opacity: 0; }
+    .shimmer-spinner { animation: none; }
+    .skip-ripple     { animation: none; opacity: 0; }
+    .action-overlay  { animation: none; opacity: 0; }
   }
   @media (max-width: 767px) {
     .feed-video,
-    .thumbnail-img {
+    .thumbnail-img,
+    .shimmer-thumb {
       padding-bottom: 60px;
     }
     .overlay-wrap {

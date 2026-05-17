@@ -10,6 +10,8 @@ interface Props {
   fastBadgeRef: RefObject<HTMLDivElement>;
   overlayRef: RefObject<HTMLDivElement>;
   videoRef: RefObject<HTMLVideoElement>;
+  thumbnailUrl: string;
+  thumbnailAlt: string;
   onLoadedData: () => void;
   onCanPlay: () => void;
   onError?: (e: React.SyntheticEvent<HTMLVideoElement>) => void;
@@ -30,6 +32,8 @@ export default function FeedItemVideo({
   fastBadgeRef,
   overlayRef,
   videoRef,
+  thumbnailUrl,
+  thumbnailAlt,
   onLoadedData,
   onCanPlay,
   onError,
@@ -53,8 +57,23 @@ export default function FeedItemVideo({
       onMouseLeave={onMouseLeave}
       onClick={onClick}
     >
+      {/*
+        ロード中オーバーレイ。
+        - 背景にサムネイル画像を表示 (動画と同じ contain ・同じ位置)
+        - その上に中央でクルクル回るスピナー
+        動画が canplay に達したら useFeedPlayback.setVideoReady() で display:none にして消す。
+      */}
       <div ref={shimmerRef} className="shimmer" aria-hidden="true">
-        <div className="shimmer-inner" />
+        {thumbnailUrl ? (
+          <img
+            src={thumbnailUrl}
+            alt={thumbnailAlt}
+            className="shimmer-thumb"
+            loading="eager"
+            decoding="async"
+          />
+        ) : null}
+        <div className="shimmer-spinner" />
       </div>
 
       <video

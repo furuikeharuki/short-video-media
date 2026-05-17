@@ -265,6 +265,39 @@ def _build_slug(item: dict, content_id: str) -> str:
     return _slugify(content_id, content_id)
 
 
+def _build_sample_mp4_url(content_id: str) -> str | None:
+    """DMM の content_id から MP4 直リンク URL を組み立てる。
+
+    DMM API が返す `sampleMovieURL.size_*` は実際には HTML プレイヤーページ
+    (iframe 埋め込み用) であり、`<video src>` には使えない。
+    実際の MP4 ファイルは下記パターンで配信されている:
+        //cc3001.dmm.co.jp/litevideo/freepv/{c[0]}/{c[:3]}/{cid}/{cid}_mhb_w.mp4
+
+    例:
+        scop00912 -> //cc3001.dmm.co.jp/litevideo/freepv/s/sco/scop00912/scop00912_mhb_w.mp4
+        hmn00450  -> //cc3001.dmm.co.jp/litevideo/freepv/h/hmn/hmn00450/hmn00450_mhb_w.mp4
+
+    一部の古い作品は `{cid}mhb.mp4` (アンダースコア無し旧形式) でしか配信
+    されていない。クライアント側で onError 時にフォールバックさせる前提で、
+    まずは新形式 (`_mhb_w.mp4`) を採用する。
+    """
+    cid = (content_id or "").strip().lower()
+    if not cid:
+        return None
+    # DMM の content_id には `1sun00055a` `59hez00898` のように数字プレフィックスが
+    # 付くものがある。CDN のパス上は数字部分を除去したアルファベット部分を
+    # 使うため、先頭の数字をすべて除いてからパスを生成する。
+    cid_for_url = cid.lstrip("0123456789")
+    if not cid_for_url or not cid_for_url[0].isalpha():
+        return None
+    prefix1 = cid_for_url[0]
+    prefix3 = cid_for_url[:3]
+    return (
+        f"https://cc3001.dmm.co.jp/litevideo/freepv/"
+        f"{prefix1}/{prefix3}/{cid_for_url}/{cid_for_url}_mhb_w.mp4"
+    )
+
+
 @dataclass
 class UpsertCounters:
     inserted: int = 0
@@ -290,16 +323,24 @@ async def upsert_movie(
     sample_movie = (item.get("sampleMovieURL") or {})
     sample_image = (item.get("sampleImageURL") or {})
 
-    # sample_movie_url を先に解決
-    sample_movie_url = (
+    # DMM API が返す sampleMovieURL.size_720_480 は HTML プレイヤーページ
+    # (www.dmm.co.jp/litevideo/-/part/=/...) であり、<video src> に直接
+    # 渡しても動画として読み込めない。実際の MP4 ファイルは content_id から
+    # 自前で組み立てる必要がある。
+    sample_movie_url = _build_sample_mp4_url(content_id)
+
+    # iframe プレイヤー URL は別カラムに保持 (フォールバック / 埋め込み用途)
+    sample_embed_url = (
         sample_movie.get("size_720_480")
         or sample_movie.get("size_644_414")
         or sample_movie.get("size_560_360")
     )
 
-    # 動画 floor (videoa/videoc) で sample_movie が無いものは取り扱わない
-    # goods など動画系以外は許容
-    if floor in ("videoa", "videoc") and not sample_movie_url:
+    # 動画 floor (videoa/videoc) で API が sample (iframe URL) を返さない
+    # ものは「サンプル動画なし」とみなして取り扱わない。
+    # MP4 直リンクは content_id から機械的に生成できるが、API が sample を
+    # 返さない作品は実際の動画ファイルも存在しないことが多い。
+    if floor in ("videoa", "videoc") and not sample_embed_url:
         counters.skipped += 1
         return
 
@@ -365,7 +406,7 @@ async def upsert_movie(
         movie.image_url_list = image_urls.get("list") or movie.image_url_list
         movie.image_url_large = image_urls.get("large") or movie.image_url_large
         movie.sample_movie_url = sample_movie_url or movie.sample_movie_url
-        # sample_embed_url は DMM ItemList には基本含まれないので既存値を維持
+        movie.sample_embed_url = sample_embed_url or movie.sample_embed_url
         # affiliate_url は常に自前生成のもので上書き (既存データの無効リンクを一括で修復する)
         movie.affiliate_url = affiliate_url
         movie.affiliate_url_en = item.get("affiliateURLs_mobile") or movie.affiliate_url_en
@@ -397,7 +438,7 @@ async def upsert_movie(
             image_url_list=image_urls.get("list"),
             image_url_large=image_urls.get("large"),
             sample_movie_url=sample_movie_url,
-            sample_embed_url=None,
+            sample_embed_url=sample_embed_url,
             affiliate_url=affiliate_url,
             affiliate_url_en=item.get("affiliateURLs_mobile"),
             price_list=price_list,

@@ -4,7 +4,10 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import FeedItem from "@/components/FeedItem";
 import type { MovieCard } from "@/lib/api/feed";
 
-const WINDOW_SIZE = 2;
+// 同時にレンダリングするスライド数 = 中央 + 前後1枚ずつの計3枚。
+// 4枚以上の `<video>` を同時に持つとモバイル Safari の同時接続上限に
+// ぶつかってネットワーク待ちが連鎖し、再生が始まらなくなる。
+const WINDOW_SIZE = 1;
 
 interface Props {
   items: MovieCard[];
@@ -153,21 +156,25 @@ export default function FeedViewer({
       {windowItems.map((item, i) => {
         const absIndex = windowStartRef.current + i;
         const offset   = absIndex - currentIndex;
+        const isActive = offset === 0;
         const transform  = `translateY(calc(${offset * 100}% + ${dragPx}px))`;
         const transition = isDraggingState ? "none" : "transform 0.35s cubic-bezier(0.25,1,0.5,1)";
         return (
           <div
-            key={`${item.id}-${absIndex}`}
+            // key を absIndex に依存させない。スワイプの度に再マウントされて
+            // <video> が読み込み直しになるのを防ぐ。
+            key={item.id}
             className="feed-slide"
             style={{
               transform,
               transition,
-              zIndex:        offset === 0 ? 2 : 1,
-              pointerEvents: offset === 0 ? "auto" : "none",
+              zIndex:        isActive ? 2 : 1,
+              pointerEvents: isActive ? "auto" : "none",
             }}
           >
             <FeedItem
               item={item}
+              isActive={isActive}
               isFirst={absIndex === 0}
               isSecond={absIndex === 1}
             />

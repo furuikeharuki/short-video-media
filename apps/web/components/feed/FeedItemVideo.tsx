@@ -12,6 +12,7 @@ interface Props {
   videoRef: RefObject<HTMLVideoElement>;
   onLoadedData: () => void;
   onCanPlay: () => void;
+  onError?: (e: React.SyntheticEvent<HTMLVideoElement>) => void;
   onTouchStart: (e: React.TouchEvent) => void;
   onTouchEnd: (e: React.TouchEvent) => void;
   onTouchCancel: () => void;
@@ -31,6 +32,7 @@ export default function FeedItemVideo({
   videoRef,
   onLoadedData,
   onCanPlay,
+  onError,
   onTouchStart,
   onTouchEnd,
   onTouchCancel,
@@ -64,6 +66,7 @@ export default function FeedItemVideo({
         preload={preload}
         onLoadedData={onLoadedData}
         onCanPlay={onCanPlay}
+        onError={onError}
         className="feed-video"
         style={{ opacity: 0, transition: "opacity 0.3s ease" }}
       />

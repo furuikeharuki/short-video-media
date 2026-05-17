@@ -128,6 +128,12 @@ const styles = `
     width: 100%; height: 100%;
     object-fit: cover; display: block;
   }
+  /* videoa (プロ作品) は pl.jpg (800x538 見開きジャケット) を使っているため、
+     右半分（メインビジュアル側）をクロップ表示し、左半のジャケット表を除去する。
+     videoc の jp.jpg は正方形なので影響しない。 */
+  .mct-thumb img[src$="pl.jpg"] {
+    object-position: right center;
+  }
   .mct-thumb-fallback {
     width: 100%; height: 100%;
     background: linear-gradient(135deg, #1a1a1a, #2a2a2a);

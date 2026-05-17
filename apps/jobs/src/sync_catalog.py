@@ -313,15 +313,19 @@ def _build_list_image_url(content_id: str, floor: str) -> str | None:
     """一覧ページ用サムネイル URL を組み立てる。
 
     フロア別に画像 CDN に登録されている suffix が異なる:
-      - videoa: `ps.jpg` (147x200) が存在する
-      - videoc: `ps.jpg` は **存在せず** now_printing にリダイレクトされる。
+      - videoa (プロ作品): `pl.jpg` (800x538 見開きジャケット) を使う。
+               CSS 側で `object-position: right center` を指定してメイン画像側
+               (右半分) をクロップ表示し表ジャケット部分を除去する。
+      - videoc (素人): `pl.jpg` は 存在せず now_printing にリダイレクトされるため
                `jp.jpg` (300x300) を使う (`jm.jpg` 100x100 は小さすぎる)
     """
     cid = (content_id or "").strip().lower()
     if not cid:
         return None
-    suffix = "jp" if floor == "videoc" else "ps"
-    return f"{_floor_image_base(floor)}/{cid}/{cid}{suffix}.jpg"
+    if floor == "videoc":
+        return f"{_floor_image_base(floor)}/{cid}/{cid}jp.jpg"
+    # videoa は pl.jpg を使い、CSS で右クロップさせる
+    return f"{_floor_image_base(floor)}/{cid}/{cid}pl.jpg"
 
 
 def _build_large_image_url(content_id: str, floor: str) -> str | None:

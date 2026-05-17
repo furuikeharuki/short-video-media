@@ -6,6 +6,7 @@ const PUBLIC_PATHS = [
   "/api/",
   "/_next/",
   "/favicon",
+  // NextAuthのコールバックとプロキシは年齢認証をスキップ (すでに /api/ でカバーされている)
 ];
 
 export function middleware(request: NextRequest) {

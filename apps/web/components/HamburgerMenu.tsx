@@ -2,19 +2,36 @@
 
 import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
+import { signIn, signOut, useSession } from "next-auth/react";
 
 const MENU_ITEMS = [
   { label: "ホーム", href: "/" },
   { label: "おすすめフィード", href: "/feed" },
+  { label: "マイページ", href: "/mypage", requireAuth: true },
   { label: "お問い合わせ", href: "/contact" },
   { label: "プライバシーポリシー", href: "/privacy" },
   { label: "特定商取引法に基づく表記", href: "/law" },
 ];
 
+const authBtnStyle: React.CSSProperties = {
+  display: "block",
+  width: "100%",
+  padding: "12px",
+  background: "#e91e63",
+  color: "#fff",
+  fontSize: "14px",
+  fontWeight: 700,
+  border: "none",
+  borderRadius: "10px",
+  cursor: "pointer",
+  textAlign: "center",
+};
+
 export default function HamburgerMenu() {
   const [open, setOpen] = useState(false);
   const drawerRef = useRef<HTMLDivElement>(null);
   const btnRef = useRef<HTMLButtonElement>(null);
+  const { status } = useSession();
 
   useEffect(() => {
     if (!open) return;
@@ -109,35 +126,80 @@ export default function HamburgerMenu() {
         </div>
 
         <nav style={{ padding: "8px 0" }}>
-          {MENU_ITEMS.map((item) => (
-            <Link
-              key={item.href}
-              href={item.href}
-              onClick={() => {
-                // ショート (/) に遷移するときは前回のフィードセッションを破棄してランダム再生にする
-                if (item.href === "/feed" && typeof window !== "undefined") {
-                  try {
-                    sessionStorage.removeItem("feed_seed");
-                    sessionStorage.removeItem("feed_index");
-                    sessionStorage.removeItem("feed_items");
-                  } catch {}
-                }
-                setOpen(false);
-              }}
-              style={{
-                display: "block",
-                padding: "14px 24px",
-                color: "#fff",
-                fontSize: "15px",
-                fontWeight: 500,
-                textDecoration: "none",
-                borderBottom: "1px solid rgba(255,255,255,0.06)",
-                transition: "background 0.15s ease",
-              }}
-            >
-              {item.label}
-            </Link>
-          ))}
+          {MENU_ITEMS.map((item) => {
+            // requireAuth のメニュー項目は未ログイン時に非表示
+            if (item.requireAuth && status !== "authenticated") return null;
+            return (
+              <Link
+                key={item.href}
+                href={item.href}
+                onClick={() => {
+                  // ショート (/feed) に遷移するときは前回のフィードセッションを破棄してランダム再生にする
+                  if (item.href === "/feed" && typeof window !== "undefined") {
+                    try {
+                      sessionStorage.removeItem("feed_seed");
+                      sessionStorage.removeItem("feed_index");
+                      sessionStorage.removeItem("feed_items");
+                    } catch {}
+                  }
+                  setOpen(false);
+                }}
+                style={{
+                  display: "block",
+                  padding: "14px 24px",
+                  color: "#fff",
+                  fontSize: "15px",
+                  fontWeight: 500,
+                  textDecoration: "none",
+                  borderBottom: "1px solid rgba(255,255,255,0.06)",
+                  transition: "background 0.15s ease",
+                }}
+              >
+                {item.label}
+              </Link>
+            );
+          })}
+
+          {/* ログイン / ログアウト */}
+          <div style={{ padding: "16px 24px 8px", borderTop: "1px solid rgba(255,255,255,0.08)", marginTop: "8px" }}>
+            {status === "authenticated" ? (
+              <button
+                type="button"
+                onClick={() => {
+                  setOpen(false);
+                  signOut({ callbackUrl: "/" });
+                }}
+                style={authBtnStyle}
+              >
+                ログアウト
+              </button>
+            ) : status === "loading" ? (
+              <div style={{ ...authBtnStyle, opacity: 0.5, textAlign: "center" }}>読み込み中...</div>
+            ) : (
+              <>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setOpen(false);
+                    signIn("twitter", { callbackUrl: "/mypage" });
+                  }}
+                  style={{ ...authBtnStyle, background: "#000", marginBottom: "8px" }}
+                >
+                  X (Twitter) でログイン
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setOpen(false);
+                    signIn("discord", { callbackUrl: "/mypage" });
+                  }}
+                  style={{ ...authBtnStyle, background: "#5865F2" }}
+                >
+                  Discord でログイン
+                </button>
+              </>
+            )}
+          </div>
         </nav>
 
         <div style={{

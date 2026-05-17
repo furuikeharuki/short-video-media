@@ -10,6 +10,7 @@ dependencies = [
   "alembic>=1.13.0",
   "pydantic-settings>=2.0.0",
   "redis[asyncio]>=5.0.0",
+  "pyjwt>=2.9.0",
 ]
 
 [tool.setuptools.packages.find]

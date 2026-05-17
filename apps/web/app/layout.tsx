@@ -1,6 +1,7 @@
 import type { Metadata, Viewport } from "next";
 import Header from "@/components/Header";
 import BottomNav from "@/components/BottomNav";
+import SessionProvider from "@/components/SessionProvider";
 import "./globals.css";
 
 const SITE_NAME = "AV Shorts";
@@ -87,10 +88,12 @@ export default function RootLayout({
         )}
       </head>
       <body>
-        <Header />
-        {children}
-        {modal}
-        <BottomNav />
+        <SessionProvider>
+          <Header />
+          {children}
+          {modal}
+          <BottomNav />
+        </SessionProvider>
       </body>
     </html>
   );

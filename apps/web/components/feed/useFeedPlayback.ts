@@ -41,7 +41,6 @@ export function useFeedPlayback({ slug, title, onOpenModal }: UseFeedPlaybackOpt
   const pcClickTimerRef          = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const [isMuted,      setIsMuted]      = useState(globalIsMuted);
-  const [isBookmarked, setIsBookmarked] = useState(false);
 
   useEffect(() => {
     const sync = () => {
@@ -339,10 +338,6 @@ export function useFeedPlayback({ slug, title, onOpenModal }: UseFeedPlaybackOpt
     }
   }, [fireTogglePlay, fireSkip]);
 
-  const toggleBookmark = useCallback(() => {
-    setIsBookmarked((b) => !b);
-  }, []);
-
   return {
     videoRef,
     sectionRef,
@@ -351,7 +346,6 @@ export function useFeedPlayback({ slug, title, onOpenModal }: UseFeedPlaybackOpt
     fastBadgeRef,
     overlayRef,
     isMuted,
-    isBookmarked,
     setVideoReady,
     handleToggleMute,
     handleShare,
@@ -363,6 +357,5 @@ export function useFeedPlayback({ slug, title, onOpenModal }: UseFeedPlaybackOpt
     handleMouseUp,
     handleMouseLeave,
     handlePcClick,
-    toggleBookmark,
   };
 }

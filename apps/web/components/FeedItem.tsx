@@ -2,6 +2,8 @@
 
 import { useState, useCallback } from "react";
 import type { MovieCard } from "@/lib/api/feed";
+import { useBookmarks } from "@/components/auth/BookmarksProvider";
+import { signIn } from "next-auth/react";
 import { useFeedPlayback } from "./feed/useFeedPlayback";
 import FeedItemVideo from "./feed/FeedItemVideo";
 import FeedItemMeta from "./feed/FeedItemMeta";
@@ -19,10 +21,20 @@ interface Props {
 
 export default function FeedItem({ item, isFirst, isSecond = false }: Props) {
   const [modalSlug, setModalSlug] = useState<string | null>(null);
+  const { isAuthenticated, isBookmarked, toggle } = useBookmarks();
 
   const handleOpenModal = useCallback((slug: string) => {
     setModalSlug(slug);
   }, []);
+
+  const handleToggleBookmark = useCallback(() => {
+    if (!isAuthenticated) {
+      // 未ログインのときは Twitter ログインを促す (主要プロバイダをデフォルトに)
+      signIn("twitter", { callbackUrl: window.location.href });
+      return;
+    }
+    void toggle(item.id);
+  }, [isAuthenticated, toggle, item.id]);
 
   const {
     videoRef,
@@ -32,7 +44,6 @@ export default function FeedItem({ item, isFirst, isSecond = false }: Props) {
     fastBadgeRef,
     overlayRef,
     isMuted,
-    isBookmarked,
     setVideoReady,
     handleToggleMute,
     handleShare,
@@ -44,7 +55,6 @@ export default function FeedItem({ item, isFirst, isSecond = false }: Props) {
     handleMouseUp,
     handleMouseLeave,
     handlePcClick,
-    toggleBookmark,
   } = useFeedPlayback({
     slug: item.slug,
     title: item.title,
@@ -93,9 +103,9 @@ export default function FeedItem({ item, isFirst, isSecond = false }: Props) {
           <FeedItemSideActions
             item={item}
             isMuted={isMuted}
-            isBookmarked={isBookmarked}
+            isBookmarked={isBookmarked(item.id)}
             onToggleMute={handleToggleMute}
-            onToggleBookmark={toggleBookmark}
+            onToggleBookmark={handleToggleBookmark}
             onShare={handleShare}
             onDetail={handleDetail}
           />

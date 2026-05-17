@@ -15,6 +15,9 @@ __pycache__/         # ← 追加
 
 # ===== Node.js =====
 apps/web/node_modules/*
+# ルート直下にうっかり生成された依存関係も除外
+/node_modules/
+/package-lock.json
 apps/web/.next/
 apps/web/out/        # ← 追加
 

@@ -41,9 +41,9 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           # sync_catalog が apps/api のモデルを import するため、両方インストール
-          pip install -e ../api
+          # api は [dev] extras で pytest / httpx も同梱
+          pip install -e "../api[dev]"
           pip install -e .
-          pip install pytest
 
       - name: Run pytest
         env:

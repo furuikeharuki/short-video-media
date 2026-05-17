@@ -305,6 +305,8 @@ export default function FeedItem({ item, isActive, isFirst, isSecond = false }: 
             fastBadgeRef={fastBadgeRef}
             overlayRef={overlayRef}
             videoRef={videoRef}
+            thumbnailUrl={item.image_url_large ?? item.image_url_list ?? ""}
+            thumbnailAlt={item.title}
             onLoadedData={handleLoadedData}
             onCanPlay={() => setVideoReady(true)}
             onError={handleVideoError}

@@ -1,6 +1,6 @@
 """add search_query and created_at index to events
 
-Revision ID: a1b2c3d4e5f6
+Revision ID: 027a75b9c90d
 Revises: e9d2e36472ae
 Create Date: 2026-05-17 03:00:00.000000+00:00
 
@@ -11,7 +11,7 @@ from alembic import op
 import sqlalchemy as sa
 
 
-revision: str = 'a1b2c3d4e5f6'
+revision: str = '027a75b9c90d'
 down_revision: Union[str, None] = 'e9d2e36472ae'
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None

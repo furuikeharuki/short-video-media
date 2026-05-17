@@ -13,9 +13,7 @@ from app.schemas.movie import MovieCard, PriceList
 
 SHUFFLE_CACHE_TTL = 3600
 MOVIES_CACHE_TTL  = 1800
-# v2: 未発売作品 (release_date > today) を除外するフィルタを追加したため
-# 旧キャッシュと区別して無効化する
-SHUFFLE_KEY_PREFIX = "feed:shuffle:v2:"
+SHUFFLE_KEY_PREFIX = "feed:shuffle:"
 MOVIES_KEY_PREFIX  = "movies:data:"
 
 

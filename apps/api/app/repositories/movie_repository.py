@@ -14,32 +14,19 @@ async def get_movie_by_slug(db: AsyncSession, slug: str) -> Movie | None:
 
 
 async def get_all_movie_ids(db: AsyncSession, genres: list[str] | None = None) -> list[str]:
-    """フィード用に全IDを取得。
-
-    以下の条件で絞り込む:
-      - is_visible = True
-      - release_date が未来でない (未発売作品はサンプル動画 URL が CloudFront に
-        まだ存在せず 403 になるため除外)。release_date が NULL の作品は配信日不明
-        として残す。
-      - genres 指定時は全ジャンルを AND で含む作品のみ
-    """
-    today = date.today()
-    base_filters = [
-        Movie.is_visible.is_(True),
-        (Movie.release_date.is_(None)) | (Movie.release_date <= today),
-    ]
+    """全IDを取得。genresが指定された場合はAND条件で絞り込む。"""
     if genres:
         # AND: 各ジャンルをすべて持つ作品のみ
         query = (
             select(Movie.id)
             .join(Movie.genres)
-            .where(*base_filters, Genre.name.in_(genres))
+            .where(Genre.name.in_(genres))
             .group_by(Movie.id)
             .having(func.count(Genre.id.distinct()) == len(genres))
             .order_by(Movie.id)
         )
     else:
-        query = select(Movie.id).where(*base_filters).order_by(Movie.id)
+        query = select(Movie.id).order_by(Movie.id)
     result = await db.execute(query)
     return list(result.scalars().all())
 
@@ -59,24 +46,12 @@ async def get_movies_paginated(
     limit: int = 20,
     genres: list[str] | None = None,
 ) -> tuple[list[Movie], int]:
-    """フィード用にページング取得。
-
-    `get_all_movie_ids` と同じ条件で絞り込む:
-      - is_visible = True
-      - release_date が未来でない (未発売作品はサンプル動画 URL が CloudFront に
-        まだ存在せず 403 になるため除外)
-    """
-    today = date.today()
-    visibility_filters = [
-        Movie.is_visible.is_(True),
-        (Movie.release_date.is_(None)) | (Movie.release_date <= today),
-    ]
     if genres:
         # AND: 各ジャンルをすべて持つ作品のみ
         subq = (
             select(Movie.id)
             .join(Movie.genres)
-            .where(*visibility_filters, Genre.name.in_(genres))
+            .where(Genre.name.in_(genres))
             .group_by(Movie.id)
             .having(func.count(Genre.id.distinct()) == len(genres))
             .subquery()
@@ -84,8 +59,8 @@ async def get_movies_paginated(
         base_query = select(Movie).where(Movie.id.in_(select(subq)))
         count_query = select(func.count()).select_from(subq)
     else:
-        base_query = select(Movie).where(*visibility_filters)
-        count_query = select(func.count()).select_from(Movie).where(*visibility_filters)
+        base_query = select(Movie)
+        count_query = select(func.count()).select_from(Movie)
 
     count_result = await db.execute(count_query)
     total = count_result.scalar_one()

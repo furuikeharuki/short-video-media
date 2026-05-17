@@ -7,7 +7,8 @@ from app.db.models.genre import Genre
 
 
 async def search_movies(db: AsyncSession, query: str) -> list[Movie]:
-    """title / description / actress.name / genre.name の部分一致検索"""
+    """title / description / actress.name / genre.name /
+    director_name / maker_name / label_name の部分一致検索"""
     q = f"%{query}%"
 
     actress_sub = (
@@ -27,6 +28,9 @@ async def search_movies(db: AsyncSession, query: str) -> list[Movie]:
             or_(
                 Movie.title.ilike(q),
                 Movie.description.ilike(q),
+                Movie.director_name.ilike(q),
+                Movie.maker_name.ilike(q),
+                Movie.label_name.ilike(q),
                 Movie.id.in_(actress_sub),
                 Movie.id.in_(genre_sub),
             )

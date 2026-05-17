@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useRef } from "react";
 import AffiliateLink from "@/components/analytics/affiliate-link";
@@ -51,22 +52,15 @@ export default function MovieModal({ movie }: { movie: MovieDetail }) {
   const hasReview = movie.review_count > 0 && movie.review_average != null;
 
   // 監督 / メーカー / レーベル をタップしたら検索結果一覧へ
-  // インターセプトモーダル上なので router.push() した時点で自然にモーダルが閉じる
-  const navigateToSearch = (value: string) => {
-    router.push(`/search?q=${encodeURIComponent(value)}`);
-  };
-
+  // Next.js の <Link> ならインターセプトモーダルを脱出して検索ページへ遷移できる
   const searchLink = (value: string) => (
-    <a
+    <Link
       href={`/search?q=${encodeURIComponent(value)}`}
-      onClick={(e) => {
-        e.preventDefault();
-        navigateToSearch(value);
-      }}
       style={metaLinkStyle}
+      prefetch={false}
     >
       {value}
-    </a>
+    </Link>
   );
 
   const metaRows: { label: string; value: React.ReactNode }[] = [

@@ -92,9 +92,16 @@ async def get_new_release_movies(
     on_date: date | None = None,
     fallback_days: int = 7,
     limit: int = 20,
+    offset: int = 0,
 ) -> list[Movie]:
     """本日配信開始作品。今日付の primary_date を優先し、
-    ゼロ件なら直近 fallback_days 日でフォールバック。"""
+    ゼロ件なら直近 fallback_days 日でフォールバック。
+
+    offset/limit は SQL レベルで適用。主クエリとフォールバッククエリを
+    スイッチして使う仕様はそのままだが、キーセットがずれるのを防ぐため
+    「主クエリで 1 件でもひったら その offset/limit をそのまま適用し、
+    一件もなければ フォールバック側で offset/limit を適用」とする。
+    """
     target = on_date or date.today()
     stmt = (
         select(Movie)
@@ -103,12 +110,26 @@ async def get_new_release_movies(
             Movie.primary_date == target,
         )
         .order_by(desc(Movie.review_count), Movie.id)
+        .offset(offset)
         .limit(limit)
     )
     result = await db.execute(stmt)
     movies = list(result.scalars().unique().all())
     if movies:
         return movies
+
+    # offset が 0 より大きい = 主クエリで見せる件数を超えている。
+    # 今日付の件数だけを SQL で数えて、フォールバックに進むときは
+    # offset から「今日付の全件数」を差し引いて計算し直す。
+    if offset > 0:
+        count_stmt = select(func.count(Movie.id)).where(
+            Movie.is_visible.is_(True),
+            Movie.primary_date == target,
+        )
+        today_total = int((await db.execute(count_stmt)).scalar_one())
+        fb_offset = max(0, offset - today_total)
+    else:
+        fb_offset = 0
 
     # フォールバック: 直近 fallback_days 日の配信を返す
     since = target - timedelta(days=fallback_days)
@@ -120,7 +141,9 @@ async def get_new_release_movies(
             Movie.primary_date >= since,
             Movie.primary_date <= target,
         )
-        .order_by(desc(Movie.primary_date), desc(Movie.review_count))
+        # ページネーション安定化のため二次キーに Movie.id を追加。
+        .order_by(desc(Movie.primary_date), desc(Movie.review_count), Movie.id)
+        .offset(fb_offset)
         .limit(limit)
     )
     result2 = await db.execute(stmt2)
@@ -133,9 +156,10 @@ async def get_recent_release_movies(
     today: date | None = None,
     days: int = 30,
     limit: int = 20,
+    offset: int = 0,
 ) -> list[Movie]:
     """「新着」セクション: 今日を除いた直近 days 日以内に配信開始された作品を、
-    primary_date 降順 (新しいものが上) で返す。
+    primary_date 降順 (新しいものが上) で SQL OFFSET/LIMIT で返す。
     """
     t = today or date.today()
     since = t - timedelta(days=days)
@@ -148,6 +172,7 @@ async def get_recent_release_movies(
             Movie.primary_date < t,  # 今日を除く
         )
         .order_by(desc(Movie.primary_date), desc(Movie.review_count), Movie.id)
+        .offset(offset)
         .limit(limit)
     )
     result = await db.execute(stmt)
@@ -159,8 +184,9 @@ async def get_movies_by_genre(
     *,
     genre_name: str,
     limit: int = 20,
+    offset: int = 0,
 ) -> list[Movie]:
-    """指定ジャンルを含む作品を人気順 (review_count) で返す。"""
+    """指定ジャンルを含む作品を人気順 (review_count) で SQL OFFSET/LIMIT で返す。"""
     stmt = (
         select(Movie)
         .join(Movie.genres)
@@ -169,6 +195,7 @@ async def get_movies_by_genre(
             Genre.name == genre_name,
         )
         .order_by(desc(Movie.review_count), Movie.id)
+        .offset(offset)
         .limit(limit)
     )
     result = await db.execute(stmt)
@@ -180,43 +207,67 @@ async def get_fallback_ranking_movies(
     *,
     limit: int = 20,
     window_days: int | None = None,
+    offset: int = 0,
 ) -> list[Movie]:
     """イベントデータが不足しているときの代替ランキング。
 
     window_days を指定すると、直近 N 日に配信開始 (primary_date) された
     作品の中で review_count 降順を返す。
-    ヒット件数が limit に満たない場合は、全体の review_count 降順で補充する。
+    ヒット件数が足りない場合は、全体の review_count 降順で補充する。
+
+    offset は "window + 補充の連結した仸ストリーム上での位置"。
+    データ量がどれだけ広がっても OFFSET + LIMIT しか SQL を抓たないように、
+    各ステップで COUNT(*) を求めて offset を振り分ける。
     """
     movies: list[Movie] = []
     seen_ids: set[str] = set()
 
     if window_days is not None and window_days > 0:
         since = date.today() - timedelta(days=window_days)
-        stmt_window = (
-            select(Movie)
-            .where(
-                Movie.is_visible.is_(True),
-                Movie.primary_date.is_not(None),
-                Movie.primary_date >= since,
-            )
-            .order_by(desc(Movie.review_count), desc(Movie.review_average), Movie.id)
-            .limit(limit)
+        where_window = (
+            Movie.is_visible.is_(True),
+            Movie.primary_date.is_not(None),
+            Movie.primary_date >= since,
         )
-        result = await db.execute(stmt_window)
-        for m in result.scalars().unique().all():
-            if m.id not in seen_ids:
-                movies.append(m)
-                seen_ids.add(m.id)
+        # window クエリの総件数を求めて、offset を window/補充に振り分ける
+        window_total = int(
+            (await db.execute(select(func.count(Movie.id)).where(*where_window))).scalar_one()
+        )
+        if offset < window_total:
+            stmt_window = (
+                select(Movie)
+                .where(*where_window)
+                .order_by(
+                    desc(Movie.review_count), desc(Movie.review_average), Movie.id
+                )
+                .offset(offset)
+                .limit(limit)
+            )
+            result = await db.execute(stmt_window)
+            for m in result.scalars().unique().all():
+                if m.id not in seen_ids:
+                    movies.append(m)
+                    seen_ids.add(m.id)
+            fb_offset = 0  # window で offset を消化した
+        else:
+            fb_offset = offset - window_total
+    else:
+        fb_offset = offset
 
     if len(movies) >= limit:
         return movies[:limit]
 
     # 補充: 全体の review_count 降順
+    # window で取れた分を除いた残りを取り、重複を選んで取り除く。
+    # SQL OFFSET は window クエリとは独立のストリームの中で適用されるため、
+    # 重複除去で閐認たる件数を加望して多めに取る (limit の 2 倍)。
+    need = limit - len(movies)
     stmt = (
         select(Movie)
         .where(Movie.is_visible.is_(True))
         .order_by(desc(Movie.review_count), desc(Movie.review_average), Movie.id)
-        .limit(limit * 2)
+        .offset(fb_offset)
+        .limit(need * 2)
     )
     result = await db.execute(stmt)
     for m in result.scalars().unique().all():

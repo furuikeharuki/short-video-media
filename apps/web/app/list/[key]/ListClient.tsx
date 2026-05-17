@@ -153,7 +153,8 @@ export default function ListClient({
             movie={item}
             aspect="portrait"
             fluid
-            rank={ranked ? index + 1 : undefined}
+            // ランキングセクションでも順位バッジは 100 位まで、101 件目以降はバッジなし。
+            rank={ranked && index < 100 ? index + 1 : undefined}
             playlist={{
               key: `list-${sectionKey}`,
               title,

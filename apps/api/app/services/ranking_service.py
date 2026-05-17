@@ -38,11 +38,17 @@ async def get_ranking(
     *,
     period: str,
     limit: int = 20,
+    offset: int = 0,
 ) -> list[MovieCard]:
+    """期間ランキング。offset/limit は SQL レベルで適用されるため、
+    データ量がどれだけ増えても 1 ページあたりの計算量は limit 件に収まる。
+    """
     if period not in VALID_PERIODS:
         raise ValueError(f"period must be one of {VALID_PERIODS}")
 
-    ranked = await aggregate_view_ranking(db, period=period, limit=limit)
+    ranked = await aggregate_view_ranking(
+        db, period=period, limit=limit, offset=offset
+    )
     slugs = [s for s, _ in ranked if s]
 
     if slugs:
@@ -52,7 +58,10 @@ async def get_ranking(
 
     # フォールバック: イベントデータ不足のとき
     movies = await get_fallback_ranking_movies(
-        db, limit=limit, window_days=_FALLBACK_WINDOW_DAYS[period]
+        db,
+        limit=limit,
+        window_days=_FALLBACK_WINDOW_DAYS[period],
+        offset=offset,
     )
     return [_to_card(m) for m in movies]
 
@@ -61,11 +70,13 @@ async def get_popular_all_time(
     db: AsyncSession,
     *,
     limit: int = 20,
+    offset: int = 0,
 ) -> list[MovieCard]:
     """「人気」セクション: 全期間の view イベント計順。
     view イベントが不足しているときは全体の review_count 順 (windowなし) で補う。
+    SQL OFFSET/LIMIT でページネーション。
     """
-    ranked = await aggregate_view_ranking_all_time(db, limit=limit)
+    ranked = await aggregate_view_ranking_all_time(db, limit=limit, offset=offset)
     slugs = [s for s, _ in ranked if s]
 
     if slugs:
@@ -73,7 +84,9 @@ async def get_popular_all_time(
         if movies:
             return [_to_card(m) for m in movies]
 
-    movies = await get_fallback_ranking_movies(db, limit=limit, window_days=None)
+    movies = await get_fallback_ranking_movies(
+        db, limit=limit, window_days=None, offset=offset
+    )
     return [_to_card(m) for m in movies]
 
 

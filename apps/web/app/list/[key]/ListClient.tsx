@@ -10,8 +10,6 @@ type Props = {
   title: string;
   /** 順位バッジを出すか (人気・ランキング系) */
   ranked: boolean;
-  initialItems: MovieCard[];
-  initialNextCursor: string | null;
 };
 
 /**
@@ -27,45 +25,45 @@ function columnsForWidth(w: number): number {
   return 3;
 }
 
-/** 表示列数に応じた次ページの取得件数。
- *  列数の倍数になるように選んで、連続スクロールしたときに行の末端が半端にならないようにする。
+/** 表示列数に応じたバッチ件数。列数の倍数 (= 行末が必ず揃う) になるよう選ぶ。
  *  3 列 → 21 (7 行)、5 列 → 20 (4 行)、7 列 → 21 (3 行)。 */
 function batchSize(columns: number): number {
-  if (columns === 3) return 21; // 7 行
-  if (columns === 5) return 20; // 4 行
-  return 21; // 7 列で 3 行
+  if (columns === 3) return 21;
+  if (columns === 5) return 20;
+  return 21;
 }
 
 /**
  * セクションの「もっと見る」先。
- * SSR で初期 20 件を受け取り、画面下に来たら /api/v1/home/section で次の 1 バッチを取りにいく。
- * バッチサイズは現在の表示列数の倍数 (3/5/7 列いずれでも半端が出ない件数) に揃える。
+ * SSR では初期表示分を取らず、クライアントマウント時に画面幅から列数を確定してから
+ * 列の倍数の件数で取りにいく。これで初期表示・追加読み込みのいずれも行末が必ず揃う。
  * カードをタップすると同じ並びで /feed に遷移する (MovieCardThumb の playlist 機構)。
  */
 export default function ListClient({
   sectionKey,
   title,
   ranked,
-  initialItems,
-  initialNextCursor,
 }: Props) {
-  const [items, setItems] = useState<MovieCard[]>(initialItems);
-  const [nextCursor, setNextCursor] = useState<string | null>(initialNextCursor);
+  const [items, setItems] = useState<MovieCard[]>([]);
+  const [nextCursor, setNextCursor] = useState<string | null>(null);
   const [isLoadingMore, setIsLoadingMore] = useState(false);
+  const [isInitialLoading, setIsInitialLoading] = useState(true);
   const fetchingRef = useRef(false);
   const sentinelRef = useRef<HTMLDivElement | null>(null);
+  // 列数は初期マウント時に 1 回だけ確定させる (途中でブレイクポイントを跨いでも
+  // 取得件数が混在するとグリッドの整列が崩れるため意図的に固定する)。
+  const columnsRef = useRef<number | null>(null);
 
   const fetchMore = useCallback(async () => {
     if (fetchingRef.current) return;
-    if (!nextCursor) return;
-    const offset = parseInt(nextCursor, 10);
-    if (Number.isNaN(offset)) return;
+    if (columnsRef.current === null) return;
     fetchingRef.current = true;
     setIsLoadingMore(true);
     try {
-      const cols =
-        typeof window !== "undefined" ? columnsForWidth(window.innerWidth) : 3;
-      const limit = batchSize(cols);
+      const cursor = nextCursor;
+      const offset = cursor === null ? 0 : parseInt(cursor, 10);
+      if (Number.isNaN(offset)) return;
+      const limit = batchSize(columnsRef.current);
       const res = await getHomeSection(sectionKey, offset, limit);
       setItems((prev) => {
         const seen = new Set(prev.map((i) => i.id));
@@ -80,6 +78,28 @@ export default function ListClient({
       setIsLoadingMore(false);
     }
   }, [sectionKey, nextCursor]);
+
+  // 初回マウント時: window.innerWidth から列数を確定し、その列の倍数で 1 ページ目を取得する。
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      columnsRef.current = columnsForWidth(window.innerWidth);
+      const limit = batchSize(columnsRef.current);
+      try {
+        const res = await getHomeSection(sectionKey, 0, limit);
+        if (cancelled) return;
+        setItems(res.items);
+        setNextCursor(res.next_cursor);
+      } catch (e) {
+        console.error("section initial load failed", e);
+      } finally {
+        if (!cancelled) setIsInitialLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [sectionKey]);
 
   // 画面末尾の sentinel が見えたら次ページを取る。
   useEffect(() => {
@@ -96,6 +116,21 @@ export default function ListClient({
     io.observe(el);
     return () => io.disconnect();
   }, [fetchMore]);
+
+  if (isInitialLoading) {
+    return (
+      <main className="list-main">
+        <div className="list-meta">
+          <h1 className="list-title">{title}</h1>
+        </div>
+        <div className="list-initial-loading" role="status" aria-live="polite">
+          <span className="list-spinner" aria-hidden="true" />
+          <span className="list-load-label">読み込み中…</span>
+        </div>
+        <style>{pageCSS}</style>
+      </main>
+    );
+  }
 
   if (items.length === 0) {
     return (
@@ -199,6 +234,16 @@ const pageCSS = `
     color: rgba(255,255,255,0.6);
     font-size: 13px;
     min-height: 48px;
+  }
+  /* 初期表示中のフルロード表示 */
+  .list-initial-loading {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 10px;
+    padding: 80px 16px;
+    color: rgba(255,255,255,0.6);
+    font-size: 13px;
   }
   .list-spinner {
     width: 18px; height: 18px;

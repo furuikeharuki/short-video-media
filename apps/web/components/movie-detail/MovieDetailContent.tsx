@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import AffiliateLink from "@/components/analytics/affiliate-link";
 import type { MovieDetail } from "@/lib/api/movies";
 
@@ -21,12 +22,23 @@ export default function MovieDetailContent({ movie }: Props) {
   const price = movie.price_list?.sale_price ?? movie.price_list?.list_price ?? movie.price_min;
   const hasReview = movie.review_count > 0 && movie.review_average != null;
 
-  const metaRows = [
+  // 監督 / メーカー / レーベル をタップしたら検索結果一覧へ
+  const searchLink = (value: string) => (
+    <Link
+      href={`/search?q=${encodeURIComponent(value)}`}
+      className="mdc-meta-link"
+      prefetch={false}
+    >
+      {value}
+    </Link>
+  );
+
+  const metaRows: { label: string; value: React.ReactNode }[] = [
     { label: "出演",         value: movie.actresses.length > 0 ? movie.actresses.join(" / ") : NA },
     { label: "シリーズ",     value: movie.series_name ?? NA },
-    { label: "監督",         value: movie.director_name ?? NA },
-    { label: "メーカー",     value: movie.maker_name ?? NA },
-    { label: "レーベル",     value: movie.label_name ?? NA },
+    { label: "監督",         value: movie.director_name ? searchLink(movie.director_name) : NA },
+    { label: "メーカー",     value: movie.maker_name ? searchLink(movie.maker_name) : NA },
+    { label: "レーベル",     value: movie.label_name ? searchLink(movie.label_name) : NA },
     { label: "収録時間",     value: movie.volume != null ? `${movie.volume}分` : NA },
     { label: "配信開始日",   value: formatDate(movie.delivery_date) },
     { label: "商品発売日",   value: formatDate(movie.release_date) },
@@ -144,6 +156,11 @@ export default function MovieDetailContent({ movie }: Props) {
           font-size: 13px; color: rgba(255,255,255,0.75);
           line-height: 1.6; word-break: break-all;
         }
+        .mdc-meta-link {
+          color: #7cb7ff; text-decoration: none;
+          border-bottom: 1px solid rgba(124,183,255,0.3);
+        }
+        .mdc-meta-link:active { opacity: 0.7; }
         .mdc-description {
           font-size: 14px; line-height: 1.8; color: rgba(255,255,255,0.6);
           margin-bottom: 20px;

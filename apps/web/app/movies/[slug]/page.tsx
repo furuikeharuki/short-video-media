@@ -5,6 +5,7 @@ import type { Metadata } from "next";
 import AffiliateLink from "@/components/analytics/affiliate-link";
 import DetailViewTracker from "@/components/analytics/detail-view-tracker";
 import BackButton from "@/components/BackButton";
+import ActressLink from "@/components/ActressLink";
 import { getMovieBySlug } from "@/lib/api/movies";
 
 const SITE_NAME = "AV Shorts";
@@ -79,13 +80,15 @@ export default async function MovieDetailPage({ params }: PageProps) {
     );
 
     // 出演女優を女優詳細ページへリンク化
+    // ActressLink を使うことで、クリック時に現在の動画詳細URLをsessionStorageに保存し、
+    // 女優詳細ページの戻るボタンで確実にこの動画詳細ページに戻れるようにする。
     const actressLinks = (names: string[]): React.ReactNode => (
       <>
         {names.map((n, i) => (
           <span key={`${n}-${i}`}>
-            <Link href={`/actresses/${encodeURIComponent(n)}`} style={styles.metaLink}>
+            <ActressLink name={n} style={styles.metaLink}>
               {n}
-            </Link>
+            </ActressLink>
             {i < names.length - 1 && " / "}
           </span>
         ))}

@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import AffiliateLink from "@/components/analytics/affiliate-link";
+import ActressLink from "@/components/ActressLink";
 import type { MovieDetail } from "@/lib/api/movies";
 
 const NA = "----";
@@ -34,17 +35,14 @@ export default function MovieDetailContent({ movie }: Props) {
   );
 
   // 出演女優を女優詳細ページへリンク化
+  // ActressLink を使うことで sessionStorage に現在URLを記録し、女優ページの戻るで戻ってこれる
   const actressLinks = (names: string[]): React.ReactNode => (
     <>
       {names.map((n, i) => (
         <span key={`${n}-${i}`}>
-          <Link
-            href={`/actresses/${encodeURIComponent(n)}`}
-            className="mdc-meta-link"
-            prefetch={false}
-          >
+          <ActressLink name={n} className="mdc-meta-link">
             {n}
-          </Link>
+          </ActressLink>
           {i < names.length - 1 && " / "}
         </span>
       ))}

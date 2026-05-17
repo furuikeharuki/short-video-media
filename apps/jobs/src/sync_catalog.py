@@ -298,6 +298,33 @@ def _build_sample_mp4_url(content_id: str) -> str | None:
     )
 
 
+def _build_large_image_url(content_id: str, floor: str) -> str | None:
+    """DMM の content_id からサムネイル (`ps.jpg` 147x200) の URL を組み立てる。
+
+    DMM API が返す imageURL.large は videoc (素人系) で None になることが多く、
+    フィードのサムネイルが超低解像度の `pt.jpg` (90x122) や `jm.jpg` (100x100)
+    にフォールバックして画質が著しく悪く見える原因になっている。
+    content_id から `ps.jpg` (147x200) の URL を自前で生成して補う。
+
+    pattern:
+        videoa: https://pics.dmm.co.jp/digital/video/{cid}/{cid}ps.jpg
+        videoc: https://pics.dmm.co.jp/digital/amateur/{cid}/{cid}ps.jpg
+    """
+    cid = (content_id or "").strip().lower()
+    if not cid:
+        return None
+    # フロアによってパスが違う (video / amateur / mono / etc)
+    if floor == "videoa":
+        base = "https://pics.dmm.co.jp/digital/video"
+    elif floor == "videoc":
+        base = "https://pics.dmm.co.jp/digital/amateur"
+    else:
+        # その他は digital/video を仮定 (見つからないときはフロント側 onError でさらに
+        # fallback させる設計)
+        base = "https://pics.dmm.co.jp/digital/video"
+    return f"{base}/{cid}/{cid}ps.jpg"
+
+
 @dataclass
 class UpsertCounters:
     inserted: int = 0
@@ -403,8 +430,11 @@ async def upsert_movie(
         movie.title = title
         movie.description = item.get("comment") or movie.description or ""
         movie.volume = _parse_int(item.get("volume"))
+        # API が返す large が空のときは content_id から pl.jpg URL を生成して補う。
+        # (videoc で large が None になるケースをカバーしてサムネイル画質を保つ)
+        new_image_large = image_urls.get("large") or _build_large_image_url(content_id, floor)
         movie.image_url_list = image_urls.get("list") or movie.image_url_list
-        movie.image_url_large = image_urls.get("large") or movie.image_url_large
+        movie.image_url_large = new_image_large or movie.image_url_large
         movie.sample_movie_url = sample_movie_url or movie.sample_movie_url
         movie.sample_embed_url = sample_embed_url or movie.sample_embed_url
         # affiliate_url は常に自前生成のもので上書き (既存データの無効リンクを一括で修復する)
@@ -436,7 +466,10 @@ async def upsert_movie(
             description=item.get("comment") or "",
             volume=_parse_int(item.get("volume")),
             image_url_list=image_urls.get("list"),
-            image_url_large=image_urls.get("large"),
+            image_url_large=(
+                image_urls.get("large")
+                or _build_large_image_url(content_id, floor)
+            ),
             sample_movie_url=sample_movie_url,
             sample_embed_url=sample_embed_url,
             affiliate_url=affiliate_url,

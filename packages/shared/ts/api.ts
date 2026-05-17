@@ -25,15 +25,16 @@ export const ENDPOINTS = {
     `${API_V1_BASE}/actresses/${encodeURIComponent(name)}`,
 } as const;
 
-/** apps/api/app/repositories/event_repository.py の ALLOWED_EVENT_TYPES と一致させること */
+/**
+ * apps/api/app/repositories/event_repository.py の ALLOWED_EVENT_TYPES と
+ * apps/web/lib/analytics/analytics.ts の BackendEventType とも一致させること。
+ */
 export const EVENT_TYPES = [
   "view",
   "play",
+  "detail_click",
   "affiliate_click",
   "search",
-  "share",
-  "favorite_add",
-  "favorite_remove",
 ] as const;
 
 export type EventType = (typeof EVENT_TYPES)[number];

@@ -1,10 +1,11 @@
 import re
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 from sqlalchemy import update
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.rate_limit import EventRateLimiter, get_sample_url_rate_limiter
 from app.db.models.movie import Movie
 from app.db.session import get_db
 from app.schemas.movie import MovieDetail
@@ -47,14 +48,19 @@ _SAMPLE_URL_RE = re.compile(
 async def report_sample_url(
     slug: str,
     payload: SampleUrlReport,
+    request: Request,
     db: AsyncSession = Depends(get_db),
+    limiter: EventRateLimiter = Depends(get_sample_url_rate_limiter),
 ) -> dict:
     """クライアントが見つけた有効な sample_movie_url を DB に保存する。
 
     - URL フォーマットの検証のみで、実际にダウンロード可能かは信頼しない。
       (CDN がサーバーから GeoIP でブロックしているため)
     - 同じ URL だったら何もしない (冪等)。
+    - IP ごとにレート制限をかけて、sample_movie_url を連打で上書きされるのを防ぐ。
     """
+    limiter.check(request)
+
     url = payload.sample_movie_url.strip()
     if not _SAMPLE_URL_RE.match(url):
         raise HTTPException(status_code=400, detail="invalid sample_movie_url format")

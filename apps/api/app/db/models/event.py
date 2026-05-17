@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime, timezone
 
-from sqlalchemy import func
+from sqlalchemy import Index, func
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base
@@ -9,6 +9,11 @@ from app.db.base import Base
 
 class Event(Base):
     __tablename__ = "events"
+    # 集計クエリ (event_type + created_at) 用の複合 index。
+    # マイグレーション 6c7d92a4f1b8 と一致させること。
+    __table_args__ = (
+        Index("ix_events_type_created", "event_type", "created_at"),
+    )
 
     id: Mapped[str] = mapped_column(primary_key=True, default=lambda: str(uuid.uuid4()))
     # view / play / detail_click / affiliate_click / search

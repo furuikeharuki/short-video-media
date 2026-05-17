@@ -56,6 +56,20 @@ class Settings(BaseSettings):
     EVENTS_RATE_LIMIT_PER_SECOND: int = 10
     EVENTS_RATE_LIMIT_PER_MINUTE: int = 120
 
+    # sample-url 報告 API のレート制限 (per IP)。
+    # 通常は 1 ユーザー 1 作品につき 1 回だけ呼ばれるため、events より厳しめに絞る。
+    SAMPLE_URL_RATE_LIMIT_PER_SECOND: int = 2
+    SAMPLE_URL_RATE_LIMIT_PER_MINUTE: int = 30
+
+    # ─────────────────────────────────────────────
+    # DB 接続プール (asyncpg)
+    # ─────────────────────────────────────────────
+    # Railway Postgres は idle 接続を約 5 分で切断するため pool_recycle を 300s に。
+    DB_POOL_SIZE: int = 10
+    DB_MAX_OVERFLOW: int = 20
+    DB_POOL_RECYCLE: int = 300
+    DB_POOL_PRE_PING: bool = True
+
     @property
     def allowed_origins_list(self) -> list[str]:
         return [origin.strip() for origin in self.ALLOWED_ORIGINS.split(",") if origin.strip()]

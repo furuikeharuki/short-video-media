@@ -78,3 +78,15 @@ _event_limiter = EventRateLimiter(
 
 def get_event_rate_limiter() -> EventRateLimiter:
     return _event_limiter
+
+
+# sample-url 報告 API 用のリミッタ。
+# events と独立したカウンターを持つため、イベント連打とは干渉しない。
+_sample_url_limiter = EventRateLimiter(
+    per_second=settings.SAMPLE_URL_RATE_LIMIT_PER_SECOND,
+    per_minute=settings.SAMPLE_URL_RATE_LIMIT_PER_MINUTE,
+)
+
+
+def get_sample_url_rate_limiter() -> EventRateLimiter:
+    return _sample_url_limiter

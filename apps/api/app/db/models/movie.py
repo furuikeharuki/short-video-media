@@ -1,6 +1,6 @@
 import uuid
 
-from sqlalchemy import Date, ForeignKey, Integer, Numeric, String, Text, UniqueConstraint
+from sqlalchemy import Date, ForeignKey, Index, Integer, Numeric, String, Text, UniqueConstraint
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -9,6 +9,11 @@ from app.db.base import Base
 
 class Movie(Base):
     __tablename__ = "movies"
+    # フィード/ランキング用の複合 index。マイグレーション 6c7d92a4f1b8 と一致させること。
+    __table_args__ = (
+        Index("ix_movies_visible_primary_date", "is_visible", "primary_date"),
+        Index("ix_movies_visible_review_count", "is_visible", "review_count"),
+    )
 
     id: Mapped[str] = mapped_column(primary_key=True, default=lambda: str(uuid.uuid4()))
 

@@ -15,8 +15,31 @@ type Props = {
 };
 
 /**
+ * 画面幅に応じた表示列数。CSS の grid-template-columns と必ず一致させること。
+ * (search-grid と同じブレイクポイント)
+ *   default     : 3 列
+ *   >= 640px    : 5 列
+ *   >= 1024px   : 7 列
+ */
+function columnsForWidth(w: number): number {
+  if (w >= 1024) return 7;
+  if (w >= 640) return 5;
+  return 3;
+}
+
+/** 表示列数に応じた次ページの取得件数。
+ *  列数の倍数になるように選んで、連続スクロールしたときに行の末端が半端にならないようにする。
+ *  3 列 → 21 (7 行)、5 列 → 20 (4 行)、7 列 → 21 (3 行)。 */
+function batchSize(columns: number): number {
+  if (columns === 3) return 21; // 7 行
+  if (columns === 5) return 20; // 4 行
+  return 21; // 7 列で 3 行
+}
+
+/**
  * セクションの「もっと見る」先。
- * SSR で初期 20 件を受け取り、画面下に来たら /api/v1/home/section で次の 20 件を取りにいく。
+ * SSR で初期 20 件を受け取り、画面下に来たら /api/v1/home/section で次の 1 バッチを取りにいく。
+ * バッチサイズは現在の表示列数の倍数 (3/5/7 列いずれでも半端が出ない件数) に揃える。
  * カードをタップすると同じ並びで /feed に遷移する (MovieCardThumb の playlist 機構)。
  */
 export default function ListClient({
@@ -28,6 +51,7 @@ export default function ListClient({
 }: Props) {
   const [items, setItems] = useState<MovieCard[]>(initialItems);
   const [nextCursor, setNextCursor] = useState<string | null>(initialNextCursor);
+  const [isLoadingMore, setIsLoadingMore] = useState(false);
   const fetchingRef = useRef(false);
   const sentinelRef = useRef<HTMLDivElement | null>(null);
 
@@ -37,8 +61,12 @@ export default function ListClient({
     const offset = parseInt(nextCursor, 10);
     if (Number.isNaN(offset)) return;
     fetchingRef.current = true;
+    setIsLoadingMore(true);
     try {
-      const res = await getHomeSection(sectionKey, offset, 20);
+      const cols =
+        typeof window !== "undefined" ? columnsForWidth(window.innerWidth) : 3;
+      const limit = batchSize(cols);
+      const res = await getHomeSection(sectionKey, offset, limit);
       setItems((prev) => {
         const seen = new Set(prev.map((i) => i.id));
         const fresh = res.items.filter((i) => !seen.has(i.id));
@@ -49,6 +77,7 @@ export default function ListClient({
       console.error("section fetchMore failed", e);
     } finally {
       fetchingRef.current = false;
+      setIsLoadingMore(false);
     }
   }, [sectionKey, nextCursor]);
 
@@ -100,8 +129,13 @@ export default function ListClient({
           />
         ))}
       </div>
-      {/* 次ページ取得用 sentinel */}
-      <div ref={sentinelRef} className="list-sentinel" aria-hidden="true" />
+      {/* 次ページ取得用 sentinel + ロード表示 */}
+      {nextCursor && (
+        <div ref={sentinelRef} className="list-load-more" role="status" aria-live="polite">
+          <span className="list-spinner" aria-hidden="true" />
+          <span className="list-load-label">{isLoadingMore ? "読み込み中…" : "さらに読み込みます"}</span>
+        </div>
+      )}
       <div className="list-footer-spacer" />
       <style>{pageCSS}</style>
     </main>
@@ -155,6 +189,25 @@ const pageCSS = `
       margin: 0 auto;
     }
   }
-  .list-sentinel { height: 1px; }
+  /* 末尾の「次を読み込み中」表示 + IntersectionObserver の sentinel を兼ねる */
+  .list-load-more {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 10px;
+    padding: 20px 16px;
+    color: rgba(255,255,255,0.6);
+    font-size: 13px;
+    min-height: 48px;
+  }
+  .list-spinner {
+    width: 18px; height: 18px;
+    border: 2px solid rgba(255,255,255,0.18);
+    border-top-color: #fff;
+    border-radius: 50%;
+    animation: list-spin 0.8s linear infinite;
+  }
+  @keyframes list-spin { to { transform: rotate(360deg); } }
+  .list-load-label { line-height: 1; }
   .list-footer-spacer { height: 24px; }
 `;

@@ -54,6 +54,5 @@ const feedStyle = `
   }
 
   .video-bg { position: absolute; inset: 0; }
-  .thumbnail-bg { position: absolute; inset: 0; }
-  .thumbnail-img { width: 100%; height: 100%; object-fit: cover; display: block; }
+  /* .thumbnail-bg / .thumbnail-img のスタイルは feedItemStyle.ts で一元管理 */
 `;

@@ -53,6 +53,7 @@ sys.path.insert(0, str(_REPO_ROOT / "apps" / "api"))
 
 from app.db.models.actress import Actress  # noqa: E402
 from app.db.models.genre import Genre  # noqa: E402
+from app.db.models.goods import ActressGoods, Goods  # noqa: E402
 from app.db.models.movie import Movie, MovieActress, MovieGenre  # noqa: E402
 from app.db.models.series import Series  # noqa: E402
 
@@ -406,6 +407,19 @@ async def upsert_movie(
         与えられたとき、作品に含まれる女優名がこのセットに 1 つも一致しなければ skip。
         goods フロアで DB に存在する女優に関連する商品だけ保存するために使う。
     """
+    # goods フロアは Movie ではなく Goods テーブルに振り分ける
+    if floor == "goods":
+        await upsert_goods(
+            session,
+            item,
+            floor_prefix,
+            counters,
+            affiliate_id=affiliate_id,
+            dry_run=dry_run,
+            actress_filter=actress_filter,
+        )
+        return
+
     content_id = _build_content_id(item, floor_prefix)
     iteminfo = item.get("iteminfo") or {}
 
@@ -636,6 +650,149 @@ async def _sync_genres(session: AsyncSession, movie_id: str, names: list[str]) -
         if g.id not in linked_ids:
             session.add(MovieGenre(movie_id=movie_id, genre_id=g.id))
             linked_ids.add(g.id)
+
+
+# ───────────────────────────────────────────────────────────
+# Goods (女優グッズ) upsert
+# ───────────────────────────────────────────────────────────
+
+async def upsert_goods(
+    session: AsyncSession,
+    item: dict,
+    floor_prefix: str,
+    counters: UpsertCounters,
+    *,
+    affiliate_id: str,
+    dry_run: bool = False,
+    actress_filter: set[str] | None = None,
+) -> None:
+    """DMM goods フロアの 1 件を Goods テーブルに upsert する。
+
+    Movie とは独立したテーブルに保存し、女優詳細ページの「関連商品」セクションでだけ
+    参照する。sample_movie_url / sample_embed_url / director / series はない。
+
+    actress_filter が与えられたとき、商品に含まれる女優名がセットに 1 つも一致しなければ skip。
+    さらに、一致した女優だけを ActressGoods リンクに追加する (新規女優はここでは追加しない)。
+    """
+    iteminfo = item.get("iteminfo") or {}
+
+    # 商品に関連する女優名を抽出
+    actresses_arr = iteminfo.get("actress") or []
+    actress_names = [
+        a.get("name") for a in actresses_arr
+        if isinstance(a, dict) and a.get("name")
+    ]
+
+    # DB 女優フィルタ: 1 つも一致しない商品は保存しない
+    if actress_filter is not None:
+        matched_names = [n for n in actress_names if n in actress_filter]
+        if not matched_names:
+            counters.skipped += 1
+            return
+    else:
+        matched_names = actress_names
+
+    content_id = _build_content_id(item, floor_prefix)
+    image_urls = item.get("imageURL") or {}
+
+    title = item.get("title") or item.get("name") or "(無題)"
+    affiliate_url = _build_affiliate_url(content_id, "goods", affiliate_id)
+    price_list, price_min = _extract_price_list(item)
+    review_count, review_avg = _extract_review(item)
+
+    def _first_name(key: str) -> str | None:
+        arr = iteminfo.get(key) or []
+        if isinstance(arr, list) and arr:
+            return arr[0].get("name")
+        return None
+
+    maker_name = _first_name("maker")
+    label_name = _first_name("label")
+
+    release_date = _parse_date(item.get("date"))
+    primary_date = release_date
+
+    existing = (
+        await session.execute(select(Goods).where(Goods.content_id == content_id))
+    ).scalar_one_or_none()
+
+    if existing:
+        goods = existing
+        goods.title = title
+        goods.description = item.get("comment") or goods.description or ""
+        goods.image_url_list = image_urls.get("list") or goods.image_url_list
+        goods.image_url_large = image_urls.get("large") or goods.image_url_large
+        goods.affiliate_url = affiliate_url
+        goods.price_list = price_list or goods.price_list
+        goods.price_min = price_min if price_min is not None else goods.price_min
+        goods.release_date = release_date or goods.release_date
+        goods.primary_date = primary_date or goods.primary_date
+        goods.review_count = max(review_count, goods.review_count or 0)
+        goods.review_average = (
+            review_avg if review_avg is not None else goods.review_average
+        )
+        goods.maker_name = maker_name or goods.maker_name
+        goods.label_name = label_name or goods.label_name
+        goods.product_id = item.get("product_id") or goods.product_id
+        counters.updated += 1
+    else:
+        slug = _build_slug(item, content_id)
+        goods = Goods(
+            id=str(uuid.uuid4()),
+            content_id=content_id,
+            product_id=item.get("product_id"),
+            title=title,
+            slug=slug,
+            description=item.get("comment") or "",
+            image_url_list=image_urls.get("list"),
+            image_url_large=image_urls.get("large"),
+            affiliate_url=affiliate_url,
+            price_list=price_list,
+            price_min=price_min,
+            release_date=release_date,
+            primary_date=primary_date,
+            review_count=review_count,
+            review_average=review_avg,
+            maker_name=maker_name,
+            label_name=label_name,
+            is_visible=True,
+        )
+        if not dry_run:
+            session.add(goods)
+            await session.flush()
+        counters.inserted += 1
+
+    # 女優リンク (既存女優だけ): DB を見て actress_filter に一致した名前の女優を探す
+    if not dry_run and matched_names:
+        await _link_goods_actresses(session, goods.id, matched_names)
+
+
+async def _link_goods_actresses(
+    session: AsyncSession, goods_id: str, actress_names: list[str]
+) -> None:
+    """商品と (既存) 女優の多対多リンクを設定する。未登録女優はここでは作らない。"""
+    if not actress_names:
+        return
+    actresses = (
+        await session.execute(
+            select(Actress).where(Actress.name.in_(actress_names))
+        )
+    ).scalars().all()
+    if not actresses:
+        return
+
+    existing_links = (
+        await session.execute(
+            select(ActressGoods.actress_id).where(ActressGoods.goods_id == goods_id)
+        )
+    ).scalars().all()
+    linked_ids = set(existing_links)
+    for pos, actress in enumerate(actresses):
+        if actress.id not in linked_ids:
+            session.add(
+                ActressGoods(goods_id=goods_id, actress_id=actress.id, position=pos)
+            )
+            linked_ids.add(actress.id)
 
 
 async def _sync_actresses(session: AsyncSession, movie_id: str, actress_items: list[dict]) -> None:

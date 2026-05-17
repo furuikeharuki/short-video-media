@@ -31,3 +31,6 @@ class Actress(Base):
     movies: Mapped[list["Movie"]] = relationship(  # noqa: F821
         secondary="movie_actresses", back_populates="actresses", lazy="selectin"
     )
+    goods: Mapped[list["Goods"]] = relationship(  # noqa: F821
+        secondary="actress_goods", back_populates="actresses", lazy="selectin"
+    )

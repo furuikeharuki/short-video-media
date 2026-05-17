@@ -1,6 +1,21 @@
 import { cache } from "react";
 
-import type { MovieCard } from "./feed";
+import type { MovieCard, PriceList } from "./feed";
+
+export type GoodsCard = {
+  id: string;
+  content_id: string | null;
+  title: string;
+  slug: string;
+  image_url_list: string | null;
+  image_url_large: string | null;
+  affiliate_url: string;
+  price_list: PriceList | null;
+  price_min: number | null;
+  review_count: number;
+  review_average: number | null;
+  maker_name: string | null;
+};
 
 export type ActressProfile = {
   id: number;
@@ -34,6 +49,7 @@ export type ActressDetail = {
   profile: ActressProfile;
   stats: ActressStats;
   movies: MovieCard[];
+  goods: GoodsCard[];
 };
 
 const API_BASE_URL =

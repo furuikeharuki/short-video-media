@@ -84,7 +84,7 @@ export default async function ActressDetailPage({ params }: PageProps) {
     throw e;
   }
 
-  const { profile, stats, movies } = detail;
+  const { profile, stats, movies, goods } = detail;
   const heroImg = profile.image_url_large ?? profile.image_url_small ?? profile.thumbnail_url ?? "";
   const age = calcAge(profile.birthday);
 
@@ -226,6 +226,44 @@ export default async function ActressDetailPage({ params }: PageProps) {
             />
           )}
         </section>
+
+        {goods.length > 0 && (
+          <section style={styles.section}>
+            <h2 style={styles.sectionTitle}>関連商品 ({goods.length})</h2>
+            <div className="goods-grid">
+              {goods.map((g) => {
+                const img = g.image_url_large ?? g.image_url_list ?? "";
+                return (
+                  <a
+                    key={g.id}
+                    href={g.affiliate_url}
+                    target="_blank"
+                    rel="noopener noreferrer sponsored"
+                    style={styles.goodsCard}
+                    title={g.title}
+                  >
+                    <div style={styles.goodsThumbWrap}>
+                      {img ? (
+                        <img
+                          src={img}
+                          alt={g.title}
+                          loading="lazy"
+                          style={styles.goodsThumb}
+                        />
+                      ) : (
+                        <div style={styles.goodsThumbPlaceholder}>No Image</div>
+                      )}
+                    </div>
+                    <div style={styles.goodsTitle}>{g.title}</div>
+                    {g.price_min != null && (
+                      <div style={styles.goodsPrice}>¥{g.price_min.toLocaleString()}</div>
+                    )}
+                  </a>
+                );
+              })}
+            </div>
+          </section>
+        )}
       </div>
       <style>{pageCSS}</style>
     </main>
@@ -402,6 +440,51 @@ const styles: Record<string, React.CSSProperties> = {
     textAlign: "center" as const,
     padding: "20px 0",
   },
+  goodsCard: {
+    display: "flex",
+    flexDirection: "column" as const,
+    gap: "6px",
+    background: "rgba(255,255,255,0.04)",
+    border: "1px solid rgba(255,255,255,0.08)",
+    borderRadius: "10px",
+    padding: "8px",
+    textDecoration: "none",
+    color: "#fff",
+  },
+  goodsThumbWrap: {
+    width: "100%",
+    aspectRatio: "1 / 1",
+    overflow: "hidden",
+    borderRadius: "6px",
+    background: "#111",
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  goodsThumb: {
+    width: "100%",
+    height: "100%",
+    objectFit: "contain" as const,
+    display: "block",
+  },
+  goodsThumbPlaceholder: {
+    color: "rgba(255,255,255,0.3)",
+    fontSize: "11px",
+  },
+  goodsTitle: {
+    fontSize: "11px",
+    lineHeight: 1.4,
+    color: "rgba(255,255,255,0.85)",
+    display: "-webkit-box",
+    WebkitBoxOrient: "vertical" as const,
+    WebkitLineClamp: 2,
+    overflow: "hidden",
+  },
+  goodsPrice: {
+    fontSize: "12px",
+    fontWeight: 700,
+    color: "#ff6b9a",
+  },
 };
 
 const pageCSS = `
@@ -421,5 +504,17 @@ const pageCSS = `
     .search-grid {
       grid-template-columns: repeat(7, minmax(0, 1fr));
     }
+  }
+  .goods-grid {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 10px;
+    padding: 8px 0 0;
+  }
+  @media (min-width: 640px) {
+    .goods-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+  }
+  @media (min-width: 1024px) {
+    .goods-grid { grid-template-columns: repeat(6, minmax(0, 1fr)); }
   }
 `;

@@ -39,6 +39,10 @@ on:
         description: "対象フロア (カンマ区切り、空なら videoa,videoc,goods)"
         required: false
         default: ""
+      actress_profile_args:
+        description: "sync_actress_profiles への追加引数 (例: --only-missing / --limit 100 / 空文字で全女優更新)"
+        required: false
+        default: "--only-missing"
       dry_run:
         description: "DB に書かずに動作確認だけ行う"
         required: false
@@ -101,3 +105,23 @@ jobs:
           fi
           echo "Running: python -m src.sync_catalog ${ARGS}"
           python -m src.sync_catalog ${ARGS}
+
+      # sync_catalog で新規女優が追加される可能性があるため、その後で
+      # ActressSearch API を使って DB の全女優のプロフィールを更新する。
+      # 女優のプロフィールはほぼ静的 (生年月日や出身地) なので、3 ホップ目以降に
+      # 定期実行するだけで十分。デフォルトでは --only-missing で未取得の女優に絞る。
+      - name: Run sync_actress_profiles
+        env:
+          DMM_API_ID: ${{ secrets.DMM_API_ID }}
+          DMM_AFFILIATE_ID: ${{ secrets.DMM_AFFILIATE_ID }}
+          DMM_LINK_AFFILIATE_ID: ${{ secrets.DMM_LINK_AFFILIATE_ID }}
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          DRY_RUN_INPUT: ${{ github.event.inputs.dry_run || 'false' }}
+          PROFILE_ARGS_INPUT: ${{ github.event.inputs.actress_profile_args || '--only-missing' }}
+        run: |
+          ARGS="${PROFILE_ARGS_INPUT}"
+          if [ "${DRY_RUN_INPUT}" = "true" ]; then
+            ARGS="${ARGS} --dry-run"
+          fi
+          echo "Running: python -m src.sync_actress_profiles ${ARGS}"
+          python -m src.sync_actress_profiles ${ARGS}

@@ -20,23 +20,110 @@ interface Props {
   onGenreClick?: (genre: string) => void;
 }
 
-// MP4 ファイル名のフォールバック順。
-// 1. _mhb_w.mp4 (新形式 / 大多数の作品)
-// 2. mhb.mp4    (古い作品、アンダースコア無し旧形式)
-// 3. _dmb_w.mp4 (中サイズフォールバック)
-const MP4_FALLBACK_SUFFIXES = ["_mhb_w.mp4", "mhb.mp4", "_dmb_w.mp4"];
+// DMM のサンプル動画 URL は content_id の表記 (ゼロパディング有無) と
+// MP4 ファイル名の suffix でパターンが規則化されているが、作品によって
+// どの組み合わせが使われているかが違うため、クライアント側で順番に試して見つける。
+//
+// 例: mmmb00181 -> mmmb181 (CDN 上はパディング無し), scop00912 -> scop912 etc.
+//      一部の作品はパディング有りの URL で配信されているため、両方試す。
+const MP4_SUFFIXES = ["_mhb_w.mp4", "mhb.mp4", "_dmb_w.mp4", "dmb.mp4"] as const;
 
-function switchSuffix(url: string, attemptIndex: number): string | null {
-  // オリジナルは attemptIndex=0 として使うので、フォールバック是 attemptIndex>=1。
-  if (attemptIndex <= 0 || attemptIndex >= MP4_FALLBACK_SUFFIXES.length) return null;
-  // 現在の suffix を attemptIndex番目のものへ置換
-  for (const suf of MP4_FALLBACK_SUFFIXES) {
-    if (url.endsWith(suf)) {
-      return url.slice(0, -suf.length) + MP4_FALLBACK_SUFFIXES[attemptIndex];
+// 数字部の先頭のゼロを削る。
+// mmmb00181 -> mmmb181 / scop00912 -> scop912 / 1sun00054a -> 1sun54a / host00001 -> host1
+function stripPad(cid: string): string {
+  // 先頭の数字、中央の英字、数字、末尾の英字 (任意) を拾う
+  const m = cid.match(/^(\d*)([a-zA-Z_]+)(\d+)([a-zA-Z]?)$/);
+  if (!m) return cid;
+  const [, prefixNum, alpha, num, tail] = m;
+  const stripped = String(parseInt(num, 10));
+  return `${prefixNum}${alpha}${stripped}${tail}`;
+}
+
+// litevideo/freepv URL をパースして cid を取り出し、別の suffix / パディング
+// バリエーションでフォールバック URL を生成する。
+function parseSampleUrl(url: string): { cid: string; suffix: string } | null {
+  const m = url.match(/\/litevideo\/freepv\/[a-z0-9_]\/[a-z0-9_]+\/([a-zA-Z0-9_]+)\/\1((?:_mhb_w|mhb|_dmb_w|dmb)\.mp4)$/);
+  if (!m) return null;
+  return { cid: m[1], suffix: m[2] };
+}
+
+// 先頭の数字 prefix を削る。 1sun54a -> sun54a / 59hez892 -> hez892
+function stripNumPrefix(cid: string): string {
+  return cid.replace(/^\d+/, "");
+}
+
+function buildSampleUrl(cid: string, suffix: string): string {
+  const lower = cid.toLowerCase();
+  // CDN パスの prefix に使う cid は先頭の数字を除いたもの。
+  const cidForPath = lower.replace(/^\d+/, "");
+  if (!cidForPath || !/^[a-z]/.test(cidForPath)) return "";
+  const c0 = cidForPath[0];
+  const c3 = cidForPath.slice(0, 3);
+  return `https://cc3001.dmm.co.jp/litevideo/freepv/${c0}/${c3}/${lower}/${lower}${suffix}`;
+}
+
+// content_id からパディングを 4 桁・5 桁で試す。
+// DMM の作品表記は 4 桁 (mmmb0181) や 5 桁 (mmmb00181) が混在するため、両方試す。
+function zeroPadCid(cid: string, width: number): string {
+  const m = cid.match(/^(\d*)([a-zA-Z_]+)(\d+)([a-zA-Z]?)$/);
+  if (!m) return cid;
+  const [, prefixNum, alpha, num, tail] = m;
+  return `${prefixNum}${alpha}${num.padStart(width, "0")}${tail}`;
+}
+
+// フォールバック候補 URL を生成。cid の表記 (パディング有無/数字prefix有無) × suffix の全組み合わせを試す。
+function switchSuffix(url: string, attemptIndex: number, contentId: string | null): string | null {
+  if (attemptIndex <= 0) return null;
+  const parsed = parseSampleUrl(url);
+  if (!parsed) return null;
+  const { suffix: origSuffix } = parsed;
+
+  // DB 上の content_id を起点に cid バリエーションを組み立てる。
+  // パターン:
+  //   - content_id そのまま (例: mmmb00181, 1sun00054a)
+  //   - 4 桁ゼロパディング (mmmb0181)
+  //   - 5 桁ゼロパディング (mmmb00181)
+  //   - ゼロパディング無し (mmmb181)
+  //   - 数字prefix 除去× 上記各パターン
+  const cid = (contentId || "").toLowerCase();
+  const noNum = stripNumPrefix(cid);
+  const cidVariants = new Set<string>();
+  for (const base of [cid, noNum]) {
+    if (!base) continue;
+    cidVariants.add(base);
+    cidVariants.add(stripPad(base));
+    cidVariants.add(zeroPadCid(base, 4));
+    cidVariants.add(zeroPadCid(base, 5));
+  }
+
+  const candidates: string[] = [];
+  const seen = new Set<string>();
+  const addCandidate = (u: string) => {
+    if (u && !seen.has(u)) {
+      seen.add(u);
+      candidates.push(u);
+    }
+  };
+  // まずはオリジナル URL を 0 番目に入れておく (重複チェックのため)
+  addCandidate(url);
+  // suffix を先に試してから cid variant を換える (同じ cid で suffix 違いのほうがヒットしやすい)
+  // オリジナル URL の cid を使う
+  const origCid = parsed.cid;
+  for (const suf of MP4_SUFFIXES) {
+    if (suf === origSuffix) continue;
+    addCandidate(buildSampleUrl(origCid, suf));
+  }
+  for (const variant of cidVariants) {
+    if (variant === origCid) continue;
+    for (const suf of MP4_SUFFIXES) {
+      addCandidate(buildSampleUrl(variant, suf));
     }
   }
-  return null;
+  return candidates[attemptIndex] ?? null;
 }
+
+// フォールバック試行回数の上限 (cid variants 最大 8 種× suffix 4 種 = 最大32 候補)
+const MAX_MP4_ATTEMPTS = 32;
 
 export default function FeedItem({ item, isActive, isFirst, isSecond = false }: Props) {
   const [modalSlug, setModalSlug] = useState<string | null>(null);
@@ -89,22 +176,22 @@ export default function FeedItem({ item, isActive, isFirst, isSecond = false }: 
   const videoSrc = (() => {
     if (!item.sample_movie_url) return null;
     if (mp4Attempt === 0) return item.sample_movie_url;
-    return switchSuffix(item.sample_movie_url, mp4Attempt) ?? item.sample_movie_url;
+    return switchSuffix(item.sample_movie_url, mp4Attempt, item.content_id ?? "") ?? item.sample_movie_url;
   })();
 
   const handleVideoError = useCallback(() => {
     // 次のフォールバック URL があればそれを試す
     if (!item.sample_movie_url) return;
     const nextAttempt = mp4Attempt + 1;
-    const nextUrl = switchSuffix(item.sample_movie_url, nextAttempt);
+    const nextUrl = switchSuffix(item.sample_movie_url, nextAttempt, item.content_id ?? "");
     if (nextUrl) {
       setMp4Attempt(nextAttempt);
     }
     // これ以上フォールバックが無い場合はサムネイル表示に落ちる
-  }, [item.sample_movie_url, mp4Attempt]);
+  }, [item.sample_movie_url, item.content_id, mp4Attempt]);
 
   // フォールバックを使い果たしたかどうか
-  const isMp4Exhausted = mp4Attempt >= MP4_FALLBACK_SUFFIXES.length - 1;
+  const isMp4Exhausted = mp4Attempt >= MAX_MP4_ATTEMPTS;
   // 中央のスライド (isActive=true) だけ <video> を描画する。
   // 隣接スライドはサムネイルのみ表示して、同時に複数の
   // <video> 読み込みが走らないようにする。これでモバイル Safari の

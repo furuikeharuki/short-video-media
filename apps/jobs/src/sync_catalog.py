@@ -265,6 +265,21 @@ def _build_slug(item: dict, content_id: str) -> str:
     return _slugify(content_id, content_id)
 
 
+def _strip_zero_padding(cid: str) -> str:
+    """DMM content_id の中央数字部の先頭ゼロを削る。
+
+    例: mmmb00181 -> mmmb181 / scop00912 -> scop912 / 1sun00054a -> 1sun54a / host00001 -> host1
+    パターン: 先頭数字(任意) + 英字ブロック + 数字 + 末尾英字(任意)
+    マッチしないときはそのまま返す。
+    """
+    import re as _re
+    m = _re.match(r"^(\d*)([a-zA-Z_]+)(\d+)([a-zA-Z]?)$", cid)
+    if not m:
+        return cid
+    prefix_num, alpha, num, tail = m.groups()
+    return f"{prefix_num}{alpha}{int(num)}{tail}"
+
+
 def _build_sample_mp4_url(content_id: str) -> str | None:
     """DMM の content_id から MP4 直リンク URL を組み立てる。
 
@@ -273,28 +288,27 @@ def _build_sample_mp4_url(content_id: str) -> str | None:
     実際の MP4 ファイルは下記パターンで配信されている:
         //cc3001.dmm.co.jp/litevideo/freepv/{c[0]}/{c[:3]}/{cid}/{cid}_mhb_w.mp4
 
-    例:
-        scop00912 -> //cc3001.dmm.co.jp/litevideo/freepv/s/sco/scop00912/scop00912_mhb_w.mp4
-        hmn00450  -> //cc3001.dmm.co.jp/litevideo/freepv/h/hmn/hmn00450/hmn00450_mhb_w.mp4
-
-    一部の古い作品は `{cid}mhb.mp4` (アンダースコア無し旧形式) でしか配信
-    されていない。クライアント側で onError 時にフォールバックさせる前提で、
-    まずは新形式 (`_mhb_w.mp4`) を採用する。
+    重要: 多くの作品で CDN のパスに使われる cid は DMM API の content_id
+    と同じではなく、中央数字部の先頭ゼロパディングが剣げた表記になっている。
+    例: API の content_id `mmmb00181` -> CDN パスは `mmmb181`
+          API の content_id `scop00912` -> CDN パスは `scop912`
+    そのため、サーバー側では パディング無しをデフォルトとし、クライアント側で
+    onError 時にパディング有り・別 suffix を順番に試す。
     """
     cid = (content_id or "").strip().lower()
     if not cid:
         return None
-    # DMM の content_id には `1sun00055a` `59hez00898` のように数字プレフィックスが
-    # 付くものがある。CDN のパス上は数字部分を除去したアルファベット部分を
-    # 使うため、先頭の数字をすべて除いてからパスを生成する。
-    cid_for_url = cid.lstrip("0123456789")
+    # ゼロパディングを削った表記を使う
+    cid_no_pad = _strip_zero_padding(cid)
+    # CDN パスの prefix に使う cid は先頭の数字を除いたもの。
+    cid_for_url = cid_no_pad.lstrip("0123456789")
     if not cid_for_url or not cid_for_url[0].isalpha():
         return None
     prefix1 = cid_for_url[0]
     prefix3 = cid_for_url[:3]
     return (
         f"https://cc3001.dmm.co.jp/litevideo/freepv/"
-        f"{prefix1}/{prefix3}/{cid_for_url}/{cid_for_url}_mhb_w.mp4"
+        f"{prefix1}/{prefix3}/{cid_no_pad}/{cid_no_pad}_mhb_w.mp4"
     )
 
 

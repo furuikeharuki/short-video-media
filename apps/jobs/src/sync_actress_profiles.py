@@ -90,8 +90,12 @@ def _swap_af_id(url: str | None, link_affiliate_id: str) -> str | None:
     """
     if not url:
         return None
-    # URL 中の "affiliate=xxxxxx-990" などを置換
-    return re.sub(r"affiliate=[A-Za-z0-9_-]+", f"affiliate={link_affiliate_id}", url)
+    # ActressSearch API の返す listURL.digital は 以下のような形式:
+    #   https://al.fanza.co.jp/?lurl=...&af_id=avshorts0512-990&ch=api
+    # "affiliate=" / "af_id=" 両方を置換対象にする。
+    url = re.sub(r"affiliate=[A-Za-z0-9_-]+", f"affiliate={link_affiliate_id}", url)
+    url = re.sub(r"af_id=[A-Za-z0-9_-]+", f"af_id={link_affiliate_id}", url)
+    return url
 
 
 @dataclass

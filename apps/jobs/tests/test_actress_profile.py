@@ -52,6 +52,16 @@ def test_swap_af_id_no_match_returns_original():
     assert out == url
 
 
+def test_swap_af_id_replaces_af_id_param():
+    """ActressSearch API の listURL は af_id= パラメータで返るため、
+    これも購入ページ紐付け用 ID に置換されること。
+    """
+    url = "https://al.fanza.co.jp/?lurl=https%3A%2F%2Fvideo.dmm.co.jp%2Fav%2Flist%2F&af_id=avshorts0512-990&ch=api"
+    out = _swap_af_id(url, "avshorts0512-001")
+    assert "af_id=avshorts0512-001" in out
+    assert "af_id=avshorts0512-990" not in out
+
+
 class _FakeResponse:
     def __init__(self, payload: dict, status_code: int = 200):
         self._payload = payload

@@ -106,29 +106,27 @@ export default async function ActressDetailPage({ params }: PageProps) {
 
   return (
     <main style={styles.main}>
-      <BackButton />
-
-      <div style={styles.hero}>
-        {heroImg && (
-          <img src={heroImg} alt="" aria-hidden="true" style={styles.heroBlur} />
-        )}
-        {heroImg ? (
-          <img
-            src={heroImg}
-            alt={profile.name}
-            style={styles.heroImg}
-            loading="eager"
-            width={400}
-            height={600}
-          />
-        ) : (
-          <div style={styles.heroPlaceholder}>No Image</div>
-        )}
+      <div style={styles.topBar}>
+        <BackButton />
       </div>
 
       <div style={styles.body}>
-        <h1 style={styles.name}>{profile.name}</h1>
-        {profile.ruby && <p style={styles.ruby}>{profile.ruby}</p>}
+        <div style={styles.profileHeader}>
+          {heroImg ? (
+            <img
+              src={heroImg}
+              alt={profile.name}
+              style={styles.avatar}
+              loading="eager"
+              width={108}
+              height={108}
+            />
+          ) : (
+            <div style={styles.avatarPlaceholder}>No Image</div>
+          )}
+          <h1 style={styles.name}>{profile.name}</h1>
+          {profile.ruby && <p style={styles.ruby}>{profile.ruby}</p>}
+        </div>
 
         <div style={styles.statsRow}>
           <div style={styles.statBox}>
@@ -282,55 +280,57 @@ const styles: Record<string, React.CSSProperties> = {
     color: "#fff",
     fontFamily: "-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif",
   },
-  hero: {
+  topBar: {
     position: "relative" as const,
     width: "100%",
-    height: "50svh",
-    overflow: "hidden",
-    background: "#111",
-    display: "flex",
-    alignItems: "center",
-    justifyContent: "center",
+    height: "56px",
     flexShrink: 0,
   },
-  heroBlur: {
-    position: "absolute" as const,
-    inset: 0,
-    width: "100%",
-    height: "100%",
-    objectFit: "cover" as const,
-    filter: "blur(24px) brightness(0.3)",
-    transform: "scale(1.1)",
-    display: "block",
-  },
-  heroImg: {
-    position: "relative" as const,
-    zIndex: 1,
-    width: "auto",
-    height: "100%",
-    maxWidth: "calc(100% - 60px)",
-    objectFit: "contain" as const,
-    display: "block",
-    borderRadius: "8px",
-  },
-  heroPlaceholder: {
-    color: "rgba(255,255,255,0.4)",
-    fontSize: "14px",
-  },
   body: {
-    padding: "20px 16px 80px",
+    padding: "4px 16px 80px",
+  },
+  profileHeader: {
+    display: "flex",
+    flexDirection: "column" as const,
+    alignItems: "center" as const,
+    gap: "10px",
+    marginBottom: "20px",
+    paddingTop: "4px",
+  },
+  avatar: {
+    width: "108px",
+    height: "108px",
+    objectFit: "cover" as const,
+    borderRadius: "50%",
+    border: "2px solid rgba(255,255,255,0.12)",
+    background: "#111",
+    display: "block",
+  },
+  avatarPlaceholder: {
+    width: "108px",
+    height: "108px",
+    borderRadius: "50%",
+    background: "#1a1a1a",
+    border: "2px solid rgba(255,255,255,0.08)",
+    color: "rgba(255,255,255,0.35)",
+    fontSize: "11px",
+    display: "flex",
+    alignItems: "center" as const,
+    justifyContent: "center" as const,
   },
   name: {
-    fontSize: "clamp(22px, 6vw, 30px)",
+    fontSize: "clamp(20px, 5.5vw, 26px)",
     fontWeight: 700,
     lineHeight: 1.3,
-    marginBottom: "4px",
     color: "#fff",
+    textAlign: "center" as const,
+    margin: 0,
   },
   ruby: {
     fontSize: "12px",
     color: "rgba(255,255,255,0.45)",
-    marginBottom: "18px",
+    textAlign: "center" as const,
+    margin: 0,
   },
   statsRow: {
     display: "flex",

@@ -723,11 +723,20 @@ async def upsert_goods(
         await session.execute(select(Goods).where(Goods.content_id == content_id))
     ).scalar_one_or_none()
 
-    # goods の画像 URL は mono/goods/{cid}/{cid}pl.jpg を優先して使う。
-    # API が返す imageURL.list は pt.jpg (小さい) や jm.jpg のことがあり画質が低いため、
-    # 自前生成の pl.jpg URL を優先し、API レスポンスはフォールバックとして使う。
-    new_image_list = _build_list_image_url(content_id, "goods") or image_urls.get("list")
-    new_image_large = _build_large_image_url(content_id, "goods") or image_urls.get("large")
+    # goods の画像 URL は DMM API が返す imageURL をそのまま使う。
+    # videoa/videoc と違い goods では cid から pl.jpg URL を自前生成しても now_printing に
+    # リダイレクトされるケースが多いため (商品ごとに画像パスが不揃い)、
+    # API が返す URL を信頼する。UI 側で onError fallback してプレースホルダーを出す。
+    new_image_list = image_urls.get("list") or image_urls.get("small")
+    new_image_large = image_urls.get("large") or image_urls.get("list")
+    # 調査用ログ: 最初の 3 件だけ API が返す imageURL の生データを出す
+    if counters.inserted + counters.updated < 3:
+        print(
+            f"  [goods debug] cid={content_id} "
+            f"imageURL.list={image_urls.get('list')!r} "
+            f"imageURL.large={image_urls.get('large')!r} "
+            f"imageURL.small={image_urls.get('small')!r}"
+        )
 
     if existing:
         goods = existing

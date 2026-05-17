@@ -6,7 +6,7 @@ export default function BackButton() {
   return (
     <button
       onClick={() => router.back()}
-      aria-label="フィードに戻る"
+      aria-label="前のページに戻る"
       style={{
         position: 'absolute',
         top: '16px',

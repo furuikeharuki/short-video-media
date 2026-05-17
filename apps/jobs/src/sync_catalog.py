@@ -15,8 +15,10 @@ GitHub Actions の cron で 1 時間ごとに実行する想定。
   - 紐づくジャンル / 女優 / シリーズ / メーカー / レーベル / 監督も登録
 
 環境変数:
-  - DMM_API_ID
-  - DMM_AFFILIATE_ID
+  - DMM_API_ID              : DMM Webservice の API ID
+  - DMM_AFFILIATE_ID        : DMM API 呼び出し用 ID (末尾 -990〜-999 必須)
+  - DMM_LINK_AFFILIATE_ID   : 購入ページ紐付け用 ID (例: xxxxxx-001)
+                              未設定時は DMM_AFFILIATE_ID をフォールバック
   - DATABASE_URL
 
 使い方:
@@ -516,9 +518,17 @@ async def _sync_actresses(session: AsyncSession, movie_id: str, actress_items: l
 
 async def main(*, hits_per_floor: int, floors_filter: list[str] | None, dry_run: bool) -> None:
     api_id = os.getenv("DMM_API_ID")
-    affiliate_id = os.getenv("DMM_AFFILIATE_ID")
-    if not api_id or not affiliate_id:
+    # DMM API 呼び出し用 ID (末尾 -990〜-999 必須)
+    api_affiliate_id = os.getenv("DMM_AFFILIATE_ID")
+    if not api_id or not api_affiliate_id:
         raise SystemExit("DMM_API_ID / DMM_AFFILIATE_ID が設定されていません")
+    # 購入ページ af_id 用 ID。未設定時は API 用 ID をフォールバックとして使う
+    # (クッキー計測はされるので報酬は発生するが、サイト別分析はできない)
+    link_affiliate_id = os.getenv("DMM_LINK_AFFILIATE_ID") or api_affiliate_id
+    print(
+        f"[sync_catalog] api_affiliate_id={api_affiliate_id[:8]}*** "
+        f"link_affiliate_id={link_affiliate_id[:8]}***"
+    )
 
     db_url = os.getenv("DATABASE_URL")
     if not db_url:
@@ -546,7 +556,8 @@ async def main(*, hits_per_floor: int, floors_filter: list[str] | None, dry_run:
                     batch_size = min(100, hits_per_floor - fetched)
                     fp = FetchParams(
                         api_id=api_id,
-                        affiliate_id=affiliate_id,
+                        # API 呼び出しには -990 系の ID を使う (仕様上必須)
+                        affiliate_id=api_affiliate_id,
                         site=site,
                         service=service,
                         floor=floor,
@@ -572,7 +583,8 @@ async def main(*, hits_per_floor: int, floors_filter: list[str] | None, dry_run:
                                 item,
                                 prefix,
                                 counters,
-                                affiliate_id=affiliate_id,
+                                # 購入リンクには サイト紐付け用 ID (-001 等) を使う
+                                affiliate_id=link_affiliate_id,
                                 floor=floor,
                                 dry_run=dry_run,
                             )

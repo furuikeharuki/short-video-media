@@ -7,9 +7,11 @@ name: Sync Catalog (DMM ItemList)
 #   - 手動実行 (workflow_dispatch) も可。--hits を指定して任意件数を取得できる。
 #
 # 必要な Secrets:
-#   - DMM_API_ID         : DMM アフィリエイト管理画面で発行する API ID
-#   - DMM_AFFILIATE_ID   : DMM のアフィリエイト ID (例: xxxxxx-990)
-#   - DATABASE_URL       : 本番 Postgres への接続文字列 (Railway Public URL)
+#   - DMM_API_ID              : DMM アフィリエイト管理画面で発行する API ID
+#   - DMM_AFFILIATE_ID        : DMM API 呼び出し用 ID (末尾 -990〜-999 必須)
+#   - DMM_LINK_AFFILIATE_ID   : 購入ページに付ける af_id (末尾 -001 などサイト紐付け用)
+#                               未設定時は DMM_AFFILIATE_ID をフォールバックで使用
+#   - DATABASE_URL            : 本番 Postgres への接続文字列 (Railway Public URL)
 
 on:
   schedule:
@@ -65,6 +67,7 @@ jobs:
         env:
           DMM_API_ID: ${{ secrets.DMM_API_ID }}
           DMM_AFFILIATE_ID: ${{ secrets.DMM_AFFILIATE_ID }}
+          DMM_LINK_AFFILIATE_ID: ${{ secrets.DMM_LINK_AFFILIATE_ID }}
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
           HITS: ${{ github.event.inputs.hits || '100' }}
           FLOORS_INPUT: ${{ github.event.inputs.floors || '' }}

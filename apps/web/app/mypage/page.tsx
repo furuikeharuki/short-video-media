@@ -132,10 +132,22 @@ function BookmarkList({ items }: { items: BookmarkItem[] }) {
       </div>
     );
   }
+  // ブックマーク一覧をそのままプレイリスト化し、タップした作品からフィード再生を開始する
+  const movies = items.map((b) => b.movie);
   return (
     <div className="mypage-grid">
-      {items.map((b) => (
-        <MovieCardThumb key={b.movie.id} movie={b.movie as MovieCard} aspect="portrait" />
+      {items.map((b, index) => (
+        <MovieCardThumb
+          key={b.movie.id}
+          movie={b.movie as MovieCard}
+          aspect="portrait"
+          playlist={{
+            key: `mypage-bookmarks-${b.movie.id}`,
+            title: "ブックマーク",
+            startIndex: index,
+            items: movies,
+          }}
+        />
       ))}
     </div>
   );
@@ -145,10 +157,22 @@ function ViewList({ items }: { items: ViewItem[] }) {
   if (items.length === 0) {
     return <div className="mypage-empty">まだ視聴履歴がありません。</div>;
   }
+  // 視聴履歴一覧をそのままプレイリスト化し、タップした作品からフィード再生を開始する
+  const movies = items.map((v) => v.movie);
   return (
     <div className="mypage-grid">
-      {items.map((v) => (
-        <MovieCardThumb key={v.movie.id} movie={v.movie as MovieCard} aspect="portrait" />
+      {items.map((v, index) => (
+        <MovieCardThumb
+          key={v.movie.id}
+          movie={v.movie as MovieCard}
+          aspect="portrait"
+          playlist={{
+            key: `mypage-views-${v.movie.id}`,
+            title: "視聴履歴",
+            startIndex: index,
+            items: movies,
+          }}
+        />
       ))}
     </div>
   );
@@ -241,6 +265,8 @@ const styles = `
     grid-template-columns: repeat(3, 1fr);
     gap: 8px;
   }
+  /* MovieCardThumb はデフォルトで width: 140px 固定なので、グリッドセルいっぱいに伸ばす */
+  .mypage-grid > .mct { width: 100%; }
   @media (max-width: 480px) {
     .mypage-grid { grid-template-columns: repeat(2, 1fr); }
   }

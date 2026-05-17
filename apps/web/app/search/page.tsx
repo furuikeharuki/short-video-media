@@ -26,7 +26,11 @@ export default async function SearchPage({ searchParams }: Props) {
         {items.length === 0 ? (
           <p style={styles.empty}>該当する作品が見つかりませんでした</p>
         ) : (
-          <SearchGrid items={items} />
+          <SearchGrid
+            items={items}
+            playlistKey={`search-genre-${genreTag}`}
+            playlistTitle={`#${genreTag}`}
+          />
         )}
         <style>{pageCSS}</style>
       </main>
@@ -58,7 +62,11 @@ export default async function SearchPage({ searchParams }: Props) {
       {items.length === 0 ? (
         <p style={styles.empty}>該当する作品が見つかりませんでした</p>
       ) : (
-        <SearchGrid items={items} />
+        <SearchGrid
+          items={items}
+          playlistKey={`search-q-${query}`}
+          playlistTitle={`「${query}」の検索結果`}
+        />
       )}
       <style>{pageCSS}</style>
     </main>
@@ -96,9 +104,11 @@ const pageCSS = `
   .search-grid {
     display: grid;
     grid-template-columns: repeat(3, 1fr);
-    gap: 2px;
-    padding: 2px;
+    gap: 8px;
+    padding: 8px;
   }
+  /* MovieCardThumb はデフォルトで width: 140px 固定なので、グリッドセルいっぱいに伸ばす */
+  .search-grid > .mct { width: 100%; }
   @media (min-width: 640px) {
     .search-grid { grid-template-columns: repeat(5, 1fr); }
   }

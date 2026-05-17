@@ -34,8 +34,8 @@ const css = `
   .search-grid {
     display: grid;
     grid-template-columns: repeat(3, 1fr);
-    gap: 2px;
-    padding: 2px;
+    gap: 8px;
+    padding: 8px;
   }
   @media (min-width: 640px)  { .search-grid { grid-template-columns: repeat(5, 1fr); } }
   @media (min-width: 1024px) {
@@ -47,9 +47,10 @@ const css = `
   }
   .skeleton-card {
     position: relative;
-    aspect-ratio: 9 / 16;
+    aspect-ratio: 9 / 13;
     background: #1a1a1a;
     overflow: hidden;
+    border-radius: 10px;
   }
   .skeleton-inner {
     position: absolute;

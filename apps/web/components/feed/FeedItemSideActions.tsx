@@ -52,8 +52,16 @@ export default function FeedItemSideActions({
       <button
         className={`side-btn${isBookmarked ? " side-btn--active" : ""}`}
         aria-label="ブックマーク"
-        onTouchEnd={(e) => { e.stopPropagation(); onToggleBookmark(e); }}
-        onClick={(e) => { e.stopPropagation(); onToggleBookmark(e); }}
+        onTouchEnd={(e) => {
+          e.stopPropagation();
+          // touchend → click の二重発火を防止
+          e.preventDefault();
+          onToggleBookmark(e);
+        }}
+        onClick={(e) => {
+          e.stopPropagation();
+          onToggleBookmark(e);
+        }}
       >
         <svg
           width="26" height="26" viewBox="0 0 24 24"

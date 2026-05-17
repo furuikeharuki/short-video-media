@@ -1,92 +1,41 @@
 "use client";
 
-import { useRouter } from "next/navigation";
+import MovieCardThumb from "@/components/home/MovieCardThumb";
 import type { MovieCard } from "@/lib/api/feed";
-
-const STORAGE_KEY = "search_feed_items";
 
 interface Props {
   items: MovieCard[];
+  /** プレイリスト識別子の一部 (検索ワード / ジャンル名 など、一意になればOK)。 */
+  playlistKey?: string;
+  /** プレイリストの UI 表示用タイトル。 */
+  playlistTitle?: string;
 }
 
-export default function SearchGrid({ items }: Props) {
-  const router = useRouter();
-
-  const handleClick = (item: MovieCard) => {
-    try {
-      sessionStorage.setItem(STORAGE_KEY, JSON.stringify(items));
-    } catch {
-      // sessionStorage 使用不可な環境では無視
-    }
-    router.push(`/search/feed?id=${encodeURIComponent(item.id)}`);
-  };
-
+/**
+ * 検索結果カードグリッド。
+ * 視聴履歴・ブックマーク欄と同じ MovieCardThumb を使い、サムネ・2 行タイトル・女優名を表示する。
+ * タップすると検索結果の順序でフィード再生が始まる (playlist 機構)。
+ */
+export default function SearchGrid({
+  items,
+  playlistKey = "search",
+  playlistTitle,
+}: Props) {
   return (
     <div className="search-grid">
       {items.map((item, index) => (
-        <div
+        <MovieCardThumb
           key={item.id}
-          onClick={() => handleClick(item)}
-          style={cardStyle}
-        >
-          <div style={thumbWrapStyle}>
-            <img
-              src={item.image_url_list ?? item.image_url_large ?? ""}
-              alt={item.title}
-              style={thumbStyle}
-              loading={index < 6 ? "eager" : "lazy"}
-              width={360}
-              height={640}
-            />
-            {item.sample_movie_url && (
-              <span style={playBadgeStyle}>▶</span>
-            )}
-          </div>
-          <p style={cardTitleStyle}>{item.title}</p>
-        </div>
+          movie={item}
+          aspect="portrait"
+          playlist={{
+            key: `${playlistKey}-${item.id}`,
+            title: playlistTitle,
+            startIndex: index,
+            items,
+          }}
+        />
       ))}
     </div>
   );
 }
-
-const cardStyle: React.CSSProperties = {
-  display: "block",
-  cursor: "pointer",
-  color: "#fff",
-  position: "relative",
-  WebkitTapHighlightColor: "transparent",
-};
-const thumbWrapStyle: React.CSSProperties = {
-  position: "relative",
-  width: "100%",
-  paddingBottom: "177.77%",
-  background: "#111",
-  overflow: "hidden",
-};
-const thumbStyle: React.CSSProperties = {
-  position: "absolute",
-  inset: 0,
-  width: "100%",
-  height: "100%",
-  objectFit: "cover",
-  display: "block",
-  transition: "transform 0.2s ease",
-};
-const playBadgeStyle: React.CSSProperties = {
-  position: "absolute",
-  bottom: "6px",
-  left: "6px",
-  fontSize: "12px",
-  color: "rgba(255,255,255,0.8)",
-  textShadow: "0 1px 4px rgba(0,0,0,0.8)",
-};
-const cardTitleStyle: React.CSSProperties = {
-  fontSize: "11px",
-  lineHeight: 1.3,
-  padding: "4px 4px 8px",
-  color: "rgba(255,255,255,0.75)",
-  display: "-webkit-box",
-  WebkitLineClamp: 2,
-  WebkitBoxOrient: "vertical",
-  overflow: "hidden",
-};

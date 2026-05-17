@@ -113,12 +113,21 @@ _SLUG_RE = re.compile(r"[^a-z0-9\-]+")
 
 def _slugify(s: str, fallback: str) -> str:
     """ASCII 化して slug を作る。日本語などはローマ字化せずハッシュ的に
-    フォールバック識別子で安全な slug にする。"""
+    フォールバック識別子で安全な slug にする。
+
+    同名で別 ID のレコード (例: シリーズ "NTR" が複数) で slug が衝突しないよう、
+    fallback (content_id 等) を必ず suffix として付与してユニーク化する。
+    """
     n = unicodedata.normalize("NFKD", s)
     n = n.encode("ascii", "ignore").decode("ascii").lower()
     n = _SLUG_RE.sub("-", n).strip("-")
+    fb = _SLUG_RE.sub("-", fallback.lower()).strip("-") if fallback else ""
     if not n:
-        n = fallback.lower()
+        # ASCII 化で空になった場合は fallback だけを使う
+        return (fb or "item")[:80]
+    # fallback (=content_id 等) が n と異なる場合のみ suffix として付与
+    if fb and fb != n:
+        return f"{n[:60]}-{fb}"[:80]
     return n[:80]
 
 
@@ -512,12 +521,16 @@ async def main(*, hits_per_floor: int, floors_filter: list[str] | None, dry_run:
                     for item in items:
                         try:
                             await upsert_movie(session, item, prefix, counters, dry_run=dry_run)
+                            # 1件ずつコミット: そうしないと 1 件失敗で batch 全体が巻き込まれる
+                            if not dry_run:
+                                await session.commit()
                         except Exception as e:  # noqa: BLE001
                             print(f"    [ERROR] upsert failed cid={item.get('content_id')}: {e}")
                             counters.errors += 1
-
-                    if not dry_run:
-                        await session.commit()
+                            try:
+                                await session.rollback()
+                            except Exception:  # noqa: BLE001
+                                pass
 
                     fetched += len(items)
                     offset += len(items)

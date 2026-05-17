@@ -39,9 +39,14 @@ def test_parse_date():
 
 
 def test_slugify():
-    assert _slugify("ABC-123", "fallback") == "abc-123"
-    # 日本語は ascii 化されないので fallback が使われる
+    # fallback が name と違うときは suffix として付与される (同名製品で slug が衝突しないよう)
+    assert _slugify("ABC-123", "fallback") == "abc-123-fallback"
+    # fallback と ascii 化後の name が一致する場合は suffix 不要
+    assert _slugify("ABC-123", "abc-123") == "abc-123"
+    # 日本語は ascii 化で空になるので fallback が使われる
     assert _slugify("あいうえお", "ho11992") == "ho11992"
+    # 同名シリーズ "NTR" でも content_id が違えば slug がユニークになる
+    assert _slugify("NTR", "183234") != _slugify("NTR", "183235")
 
 
 def test_build_content_id():

@@ -1,6 +1,6 @@
 import type { Metadata } from "next";
 import { notFound } from "next/navigation";
-import { getHomeSection, type HomeSectionKey } from "@/lib/api/homeSection";
+import { type HomeSectionKey } from "@/lib/api/homeSection";
 import ListClient from "./ListClient";
 
 type Props = {
@@ -10,7 +10,7 @@ type Props = {
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
 
-/** key → 画面のタイトル & key='genre' 以外で使える "もっと見る" 先 */
+/** key → 画面のタイトル。ジャンルは別ルート (/search?genre=...) を使うのでここでは扱わない。 */
 const KEY_TITLES: Record<string, string> = {
   popular: "人気",
   new: "本日配信開始",
@@ -47,24 +47,7 @@ export default async function ListPage({ params }: Props) {
     key === "ranking_weekly" ||
     key === "ranking_monthly";
 
-  // SSR で 1 ページ目だけ取ってくる。続きはクライアントが /api/v1/home/section を直接叩く。
-  let initialItems: Awaited<ReturnType<typeof getHomeSection>>["items"] = [];
-  let initialNextCursor: string | null = null;
-  try {
-    const res = await getHomeSection(key, 0, 20);
-    initialItems = res.items;
-    initialNextCursor = res.next_cursor;
-  } catch {
-    // エラー時は空で続行
-  }
-
-  return (
-    <ListClient
-      sectionKey={key}
-      title={title}
-      ranked={ranked}
-      initialItems={initialItems}
-      initialNextCursor={initialNextCursor}
-    />
-  );
+  // 初期表示分の取得はクライアントに任せる (画面幅から列数を確定したうえで
+  // 列の倍数で取りにいくため)。
+  return <ListClient sectionKey={key} title={title} ranked={ranked} />;
 }

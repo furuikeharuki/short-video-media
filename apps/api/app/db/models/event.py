@@ -19,8 +19,11 @@ class Event(Base):
     next_path: Mapped[str | None]
     # search イベント用。ユーザーが検索ボックスに入れたタグ名 / クエリ。
     search_query: Mapped[str | None] = mapped_column(index=True)
+    # カラムは TIMESTAMP WITHOUT TIME ZONE (naive UTC)。
+    # tz-aware の datetime を渡すと asyncpg が型不一致で DataError を投げるため、
+    # default は naive UTC で返す。
     created_at: Mapped[datetime] = mapped_column(
-        default=lambda: datetime.now(timezone.utc),
+        default=lambda: datetime.now(timezone.utc).replace(tzinfo=None),
         server_default=func.now(),
         index=True,
     )

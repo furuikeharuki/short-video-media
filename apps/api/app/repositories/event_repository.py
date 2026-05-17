@@ -41,8 +41,14 @@ async def insert_event(
 
 
 def _since(period: str) -> datetime:
-    """daily=24h, weekly=7d, monthly=30d を返す (UTC)。"""
-    now = datetime.now(timezone.utc)
+    """daily=24h, weekly=7d, monthly=30d 前の閾値を返す。
+
+    　events.created_at カラムは TIMESTAMP WITHOUT TIME ZONE (naive UTC) なので、
+    　比較オペランドも naive UTC で揃える。
+    　(aware datetime を渡すと asyncpg が can't subtract offset-naive and
+    　 offset-aware datetimes エラーを投げる)
+    """
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
     if period == "daily":
         return now - timedelta(days=1)
     if period == "weekly":

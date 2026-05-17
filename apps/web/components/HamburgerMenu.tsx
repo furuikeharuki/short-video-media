@@ -4,7 +4,8 @@ import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 
 const MENU_ITEMS = [
-  { label: "トップ", href: "/" },
+  { label: "ホーム", href: "/home" },
+  { label: "おすすめフィード", href: "/" },
   { label: "お問い合わせ", href: "/contact" },
   { label: "プライバシーポリシー", href: "/privacy" },
   { label: "特定商取引法に基づく表記", href: "/law" },

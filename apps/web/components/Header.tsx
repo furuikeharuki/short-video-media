@@ -4,6 +4,7 @@ import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { FALLBACK_TAGS } from "@/lib/api/tags";
 import HamburgerMenu from "@/components/HamburgerMenu";
+import { logEvent } from "@/lib/api/events";
 
 const FEED_SEED_KEY  = "feed_seed";
 const FEED_INDEX_KEY = "feed_index";
@@ -80,6 +81,8 @@ export default function Header() {
       if (!trimmed) return;
       setOpen(false);
       setQuery("");
+      // 人気ジャンル集計用に search イベントを送る (失敗は無視)
+      logEvent({ event_type: "search", search_query: trimmed });
       router.push(`/search?q=${encodeURIComponent(trimmed)}`);
     },
     [router]

@@ -1,4 +1,6 @@
-from sqlalchemy import select, func
+from datetime import date, timedelta
+
+from sqlalchemy import desc, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.models.movie import Movie
@@ -66,3 +68,99 @@ async def get_movies_paginated(
     query = base_query.order_by(Movie.id).offset(offset).limit(limit)
     result = await db.execute(query)
     return list(result.scalars().all()), total
+
+
+async def get_movies_by_slugs_ordered(
+    db: AsyncSession,
+    slugs: list[str],
+) -> list[Movie]:
+    """slug リストの順番を保ったまま作品を返す。"""
+    if not slugs:
+        return []
+    result = await db.execute(
+        select(Movie).where(Movie.slug.in_(slugs), Movie.is_visible.is_(True))
+    )
+    movies = list(result.scalars().unique().all())
+    order_index = {s: i for i, s in enumerate(slugs)}
+    movies.sort(key=lambda m: order_index.get(m.slug, 1 << 30))
+    return movies
+
+
+async def get_new_release_movies(
+    db: AsyncSession,
+    *,
+    on_date: date | None = None,
+    fallback_days: int = 7,
+    limit: int = 20,
+) -> list[Movie]:
+    """本日配信開始作品。今日付の primary_date を優先し、
+    ゼロ件なら直近 fallback_days 日でフォールバック。"""
+    target = on_date or date.today()
+    stmt = (
+        select(Movie)
+        .where(
+            Movie.is_visible.is_(True),
+            Movie.primary_date == target,
+        )
+        .order_by(desc(Movie.review_count), Movie.id)
+        .limit(limit)
+    )
+    result = await db.execute(stmt)
+    movies = list(result.scalars().unique().all())
+    if movies:
+        return movies
+
+    # フォールバック: 直近 fallback_days 日の配信を返す
+    since = target - timedelta(days=fallback_days)
+    stmt2 = (
+        select(Movie)
+        .where(
+            Movie.is_visible.is_(True),
+            Movie.primary_date.is_not(None),
+            Movie.primary_date >= since,
+            Movie.primary_date <= target,
+        )
+        .order_by(desc(Movie.primary_date), desc(Movie.review_count))
+        .limit(limit)
+    )
+    result2 = await db.execute(stmt2)
+    return list(result2.scalars().unique().all())
+
+
+async def get_movies_by_genre(
+    db: AsyncSession,
+    *,
+    genre_name: str,
+    limit: int = 20,
+) -> list[Movie]:
+    """指定ジャンルを含む作品を人気順 (review_count) で返す。"""
+    stmt = (
+        select(Movie)
+        .join(Movie.genres)
+        .where(
+            Movie.is_visible.is_(True),
+            Genre.name == genre_name,
+        )
+        .order_by(desc(Movie.review_count), Movie.id)
+        .limit(limit)
+    )
+    result = await db.execute(stmt)
+    return list(result.scalars().unique().all())
+
+
+async def get_fallback_ranking_movies(
+    db: AsyncSession,
+    *,
+    limit: int = 20,
+) -> list[Movie]:
+    """イベントデータが不足しているときの代替ランキング。
+    review_average * log(review_count+1) といった複雑なものはやめて、
+    シンプルに review_count desc で返す。"""
+    stmt = (
+        select(Movie)
+        .where(Movie.is_visible.is_(True))
+        .order_by(desc(Movie.review_count), desc(Movie.review_average), Movie.id)
+        .limit(limit)
+    )
+    result = await db.execute(stmt)
+    return list(result.scalars().unique().all())

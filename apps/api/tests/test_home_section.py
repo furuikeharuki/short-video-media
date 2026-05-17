@@ -141,6 +141,32 @@ def test_section_unknown_key_400(client: TestClient) -> None:
     assert res.status_code == 400
 
 
+def test_section_ranking_paginates_past_100(client: TestClient) -> None:
+    """ランキングが 100 件で門ちされず、100 件を越えても「もっと見る」で進めること。
+
+    以前は fetch_size=max(offset+limit, 100) だったため、ランキングが例えサーバで
+    1000 件あっても 100 件目以降を取れなかった。
+    このテストではモックを 200 件返すようにして、offset=100 でも
+    次ページが返ることを確認する。
+    """
+    import app.api.v1.endpoints.home as h
+
+    async def big_ranking(db, period, limit):  # type: ignore[no-untyped-def]
+        return [_card(i) for i in range(min(limit, 200))]
+
+    h.get_ranking = big_ranking  # type: ignore[assignment]
+
+    # offset=100 = "もっと見る" で 100 件目を越えたところ。
+    res = client.get(
+        "/api/v1/home/section",
+        params={"key": "ranking_daily", "offset": 100, "limit": 20},
+    )
+    assert res.status_code == 200
+    data = res.json()
+    assert len(data["items"]) == 20  # 101 〜 120 件目
+    assert data["next_cursor"] == "120"  # まだ続く
+
+
 def test_home_sections_order_and_titles(client: TestClient) -> None:
     """/api/v1/home がユーザー要望の順番とタイトルでセクションを返すこと。"""
     # ジャンル系はモック差し替えしていないため、それらに依存せずに上位 6 セクションだけ確認する。

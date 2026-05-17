@@ -131,13 +131,16 @@ async def get_home(
 # section ごとの "もっと見る" ・ フィード継足し用エンドポイント。
 # offset/limit を受け取り、同じ並び順で指定区間を返す。
 # ランキング・人気は集計システム上 1 クエリで offset したりできず、
-# offset+limit 件取ってサーバ側でスライスして返す。それでもシンプルで不具合は出ない。
+# offset+limit+1 件取ってサーバ側でスライスして返す。
+# +1 の部分を見て "次のページがあるか" を判定する。
 async def _slice_response(
     items: list, offset: int, limit: int
 ) -> FeedResponse:
     page = items[offset : offset + limit]
     next_offset = offset + limit
-    next_cursor = str(next_offset) if next_offset < len(items) else None
+    # フェッチ側で fetch_size = offset + limit + 1 取っているので、
+    # len(items) > next_offset なら「もう 1 件余裕がある = 次がある」と判定できる。
+    next_cursor = str(next_offset) if len(items) > next_offset else None
     return FeedResponse(items=page, next_cursor=next_cursor)
 
 
@@ -160,8 +163,9 @@ async def get_home_section(
     - key='genre'           : ジャンル絞り込み (必ず genre クエリを伴う)
     """
     # ロシアンドールでも広めに一括取得してサーバ側で slice するシンプル実装。
-    # ランキングは取れる位置に上限があるため fetch_size を 100 門上げる。
-    fetch_size = max(offset + limit, 100)
+    # 以前は fetch_size=max(offset+limit, 100) だったためランキングが 100 件で門ちされていた。
+    # +1 件分余計に取っておき、それが返ってくるかどうかで "次がある" を判定する。
+    fetch_size = offset + limit + 1
 
     if key == "popular":
         items = await get_popular_all_time(db, limit=fetch_size)

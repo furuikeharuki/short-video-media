@@ -79,33 +79,49 @@ async def get_home(
     daily = await get_ranking(db, period="daily", limit=section_limit)
     sections.append(HomeSection(key="ranking_daily", title="デイリーランキング", items=daily))
 
-    # 5-7. 検索数の高いジャンル 1〜3
+    # 7-9. 検索数の高いジャンル 1〜3
     # 検索イベントがあるなら検索数順。不足分は DB に存在する「作品数の多いジャンル」で補充する。
     popular_raw = await get_popular_search_genres(db, period="weekly", limit=10)
-    popular = [g for g in popular_raw if g not in GENRE_EXCLUDE]
-    seen: set[str] = set(popular)
-    if len(popular) < 3:
-        fallback = await get_top_genres_by_movie_count(
-            db, limit=10, exclude=GENRE_EXCLUDE | seen
-        )
-        for g in fallback:
-            if len(popular) >= 3:
-                break
-            if g in seen:
-                continue
-            popular.append(g)
-            seen.add(g)
+    popular_candidates = [g for g in popular_raw if g not in GENRE_EXCLUDE]
 
-    for i, genre_name in enumerate(popular[:3], start=1):
-        movies = await get_movies_by_genre(db, genre_name=genre_name, limit=section_limit)
-        sections.append(
+    # 個々のジャンルで作品を取り、空セクションになるものはスキップする
+    genre_sections: list[HomeSection] = []
+    used: set[str] = set()
+    rank = 0
+
+    async def _try_add(name: str) -> None:
+        nonlocal rank
+        if rank >= 3 or name in used:
+            return
+        movies = await get_movies_by_genre(db, genre_name=name, limit=section_limit)
+        if not movies:
+            return
+        rank += 1
+        used.add(name)
+        genre_sections.append(
             HomeSection(
-                key=f"genre_{i}",
-                title=f"#{genre_name}",
-                subtitle=f"検索数の高いジャンル{i}",
-                genre=genre_name,
+                key=f"genre_{rank}",
+                title=f"#{name}",
+                subtitle=f"検索数の高いジャンル{rank}",
+                genre=name,
                 items=[_to_card(m) for m in movies],
             )
         )
+
+    for g in popular_candidates:
+        await _try_add(g)
+        if rank >= 3:
+            break
+
+    if rank < 3:
+        fallback = await get_top_genres_by_movie_count(
+            db, limit=10, exclude=GENRE_EXCLUDE | used
+        )
+        for g in fallback:
+            await _try_add(g)
+            if rank >= 3:
+                break
+
+    sections.extend(genre_sections)
 
     return HomeResponse(sections=sections)

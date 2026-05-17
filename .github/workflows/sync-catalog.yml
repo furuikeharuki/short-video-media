@@ -1,0 +1,81 @@
+name: Sync Catalog (DMM ItemList)
+
+# DMM (FANZA) ItemList API から作品データを定期取得して本番 DB に保存するワークフロー。
+#
+# トリガー:
+#   - cron: 1 時間ごと (毎時 0 分)
+#   - 手動実行 (workflow_dispatch) も可。--hits を指定して任意件数を取得できる。
+#
+# 必要な Secrets:
+#   - DMM_API_ID         : DMM アフィリエイト管理画面で発行する API ID
+#   - DMM_AFFILIATE_ID   : DMM のアフィリエイト ID (例: xxxxxx-990)
+#   - DATABASE_URL       : 本番 Postgres への接続文字列 (Railway Public URL)
+
+on:
+  schedule:
+    # UTC で毎時 0 分に実行 = JST でも毎時 0 分
+    - cron: "0 * * * *"
+  workflow_dispatch:
+    inputs:
+      hits:
+        description: "1 フロアあたりの取得件数"
+        required: false
+        default: "100"
+      floors:
+        description: "対象フロア (カンマ区切り、例: videoa,videoc,goods)"
+        required: false
+        default: ""
+      dry_run:
+        description: "DB に書かずに動作確認だけ行う"
+        required: false
+        default: "false"
+
+concurrency:
+  group: sync-catalog-prod
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    name: Sync DMM Catalog to DB
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    defaults:
+      run:
+        working-directory: apps/jobs
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          # apps/api のモデルを再利用するため、両方インストール
+          pip install -e ../api
+          pip install -e .
+
+      - name: Run sync_catalog
+        env:
+          DMM_API_ID: ${{ secrets.DMM_API_ID }}
+          DMM_AFFILIATE_ID: ${{ secrets.DMM_AFFILIATE_ID }}
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          HITS: ${{ github.event.inputs.hits || '100' }}
+          FLOORS_INPUT: ${{ github.event.inputs.floors || '' }}
+          DRY_RUN_INPUT: ${{ github.event.inputs.dry_run || 'false' }}
+        run: |
+          ARGS="--hits ${HITS}"
+          if [ -n "${FLOORS_INPUT}" ]; then
+            ARGS="${ARGS} --floors ${FLOORS_INPUT}"
+          fi
+          if [ "${DRY_RUN_INPUT}" = "true" ]; then
+            ARGS="${ARGS} --dry-run"
+          fi
+          echo "Running: python -m src.sync_catalog ${ARGS}"
+          python -m src.sync_catalog ${ARGS}

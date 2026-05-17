@@ -158,7 +158,8 @@ const backdropStyle: React.CSSProperties = {
 
 const modalStyle: React.CSSProperties = {
   position: "fixed",
-  top: "52px",
+  // ヘッダー全体の実高さ（AffiliateNotice 込み）にピッタリ描画させる
+  top: "var(--header-h, 52px)" as unknown as string,
   left: 0,
   right: 0,
   bottom: 0,

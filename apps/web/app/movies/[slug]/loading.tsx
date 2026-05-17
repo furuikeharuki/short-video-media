@@ -3,7 +3,7 @@ export default function MovieDetailLoading() {
     <div
       style={{
         position: "fixed",
-        top: "52px",
+        top: "var(--header-h, 52px)",
         left: 0,
         right: 0,
         bottom: 0,

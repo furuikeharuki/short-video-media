@@ -30,13 +30,14 @@ html, body {
 
 /* ━━━ ヘッダー ━━━━━━━━━━━━━━━━━━━━━━━━ */
 
+/*
+  .site-header-wrapper（Header.tsx で fixed 配置）内に置かれる前提に変更。
+  ラッパー側で位置決めするため、ここでは見た目だけを担当する。
+  ラッパー外で単独使用された場合のフォールバックとして position は維持する。
+*/
 .site-header {
-  position: fixed;
-  top: 0;
-  left: 0;
-  right: 0;
-  z-index: 100;
-  height: var(--header-h);
+  position: relative;
+  height: 52px;
   display: flex;
   align-items: center;
   justify-content: space-between;

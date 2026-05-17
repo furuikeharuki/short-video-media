@@ -20,6 +20,7 @@ apps/web/node_modules/*
 /package-lock.json
 apps/web/.next/
 apps/web/out/        # ← 追加
+apps/web/tsconfig.tsbuildinfo  # TypeScript インクリメンタルビルドキャッシュ
 
 # ===== OS / エディタ =====
 .DS_Store            # ← 追加

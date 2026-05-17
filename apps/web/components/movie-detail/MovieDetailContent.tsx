@@ -33,8 +33,26 @@ export default function MovieDetailContent({ movie }: Props) {
     </Link>
   );
 
+  // 出演女優を女優詳細ページへリンク化
+  const actressLinks = (names: string[]): React.ReactNode => (
+    <>
+      {names.map((n, i) => (
+        <span key={`${n}-${i}`}>
+          <Link
+            href={`/actresses/${encodeURIComponent(n)}`}
+            className="mdc-meta-link"
+            prefetch={false}
+          >
+            {n}
+          </Link>
+          {i < names.length - 1 && " / "}
+        </span>
+      ))}
+    </>
+  );
+
   const metaRows: { label: string; value: React.ReactNode }[] = [
-    { label: "出演",         value: movie.actresses.length > 0 ? movie.actresses.join(" / ") : NA },
+    { label: "出演",         value: movie.actresses.length > 0 ? actressLinks(movie.actresses) : NA },
     { label: "シリーズ",     value: movie.series_name ?? NA },
     { label: "監督",         value: movie.director_name ? fieldLink("director", movie.director_name) : NA },
     { label: "メーカー",     value: movie.maker_name ? fieldLink("maker", movie.maker_name) : NA },

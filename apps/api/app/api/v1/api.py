@@ -1,5 +1,6 @@
 from fastapi import APIRouter
 
+from app.api.v1.endpoints.actresses import router as actresses_router
 from app.api.v1.endpoints.auth import router as auth_router
 from app.api.v1.endpoints.events import router as events_router
 from app.api.v1.endpoints.feed import router as feed_router
@@ -22,3 +23,4 @@ api_router.include_router(rankings_router, tags=["rankings"])
 api_router.include_router(home_router, tags=["home"])
 api_router.include_router(auth_router, tags=["auth"])
 api_router.include_router(me_router, tags=["me"])
+api_router.include_router(actresses_router, tags=["actresses"])

@@ -235,10 +235,12 @@ async def get_top_genres_by_movie_count(
     limit: int = 10,
     exclude: set[str] | None = None,
 ) -> list[str]:
-    """作品数の多い genre 名を上から limit 件返す。技術タグ除外。"""
+    """表示可能 (is_visible=True) な作品を多く含む genre 名を limit 件返す。"""
     stmt = (
         select(Genre.name, func.count(MovieGenre.movie_id).label("c"))
         .join(MovieGenre, MovieGenre.genre_id == Genre.id)
+        .join(Movie, Movie.id == MovieGenre.movie_id)
+        .where(Movie.is_visible.is_(True))
         .group_by(Genre.name)
         .order_by(desc("c"))
         .limit(limit * 3)  # 除外後 limit 件残る余裕

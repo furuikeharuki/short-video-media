@@ -167,6 +167,60 @@ def test_section_ranking_paginates_past_100(client: TestClient) -> None:
     assert data["next_cursor"] == "120"  # まだ続く
 
 
+def test_section_returns_full_limit_when_visible_filter_drops_some(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """リポジトリ層の visible filter で間引かれても、要求 limit 件をきっちり返す。
+
+    実環境では `get_movies_by_slugs_ordered` などが `Movie.is_visible.is_(True)` で
+    間引くため、limit=21 を要求しても 20 件しか返ってこないことがある。
+    その場合 3 列グリッドでは 20 件 = 6 行 + 端数 1 となり、次バッチの 21 件と
+    あわせると 41 件 → 列がずれる。
+    エンドポイント側で余裕をもって fetch_size を取り、サービス層が十分件数を
+    持っていれば limit 件ぴったり返すように修正したことを担保するテスト。
+    """
+    # service 層は limit ぶん要求されても "15% 間引いた" 件数しか返さないシミュレーション
+    async def lossy_popular(db, limit):  # type: ignore[no-untyped-def]
+        # たくさんある中で is_visible=True なのは 200 件、と仮定。
+        # ただし 1 件あたり 15% は visible=False で落ちるので、結果的に
+        # 「要求件数の 85%」しか返ってこないケースを再現。
+        kept = int(min(limit, 200) * 0.85)
+        return [_card(i) for i in range(kept)]
+
+    monkeypatch.setattr(home_endpoint, "get_popular_all_time", lossy_popular)
+
+    client = TestClient(app)
+    res = client.get(
+        "/api/v1/home/section", params={"key": "popular", "offset": 0, "limit": 21}
+    )
+    assert res.status_code == 200
+    data = res.json()
+    # fetch_size = max(0 + 21*2, 0 + 21 + 10) = 42 → 0.85*42 = 35 件取得 → 先頭 21 件返却
+    assert len(data["items"]) == 21
+    # 35 >= 21 なので次ページがあると判定される
+    assert data["next_cursor"] == "21"
+
+
+def test_section_returns_none_when_truly_at_end(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """サービス層が limit 未満しか返さないとき (本当に末尾) は next_cursor=None。"""
+    async def small_popular(db, limit):  # type: ignore[no-untyped-def]
+        # 全部で 10 件しかない
+        return [_card(i) for i in range(min(limit, 10))]
+
+    monkeypatch.setattr(home_endpoint, "get_popular_all_time", small_popular)
+
+    client = TestClient(app)
+    res = client.get(
+        "/api/v1/home/section", params={"key": "popular", "offset": 0, "limit": 21}
+    )
+    assert res.status_code == 200
+    data = res.json()
+    assert len(data["items"]) == 10
+    assert data["next_cursor"] is None
+
+
 def test_home_sections_order_and_titles(client: TestClient) -> None:
     """/api/v1/home がユーザー要望の順番とタイトルでセクションを返すこと。"""
     # ジャンル系はモック差し替えしていないため、それらに依存せずに上位 6 セクションだけ確認する。

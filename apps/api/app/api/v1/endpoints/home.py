@@ -131,16 +131,20 @@ async def get_home(
 # section ごとの "もっと見る" ・ フィード継足し用エンドポイント。
 # offset/limit を受け取り、同じ並び順で指定区間を返す。
 # ランキング・人気は集計システム上 1 クエリで offset したりできず、
-# offset+limit+1 件取ってサーバ側でスライスして返す。
-# +1 の部分を見て "次のページがあるか" を判定する。
+# offset+limit 件取ってサーバ側でスライスして返す。
+# next_cursor は "要求 limit に達したかどうか" で判定する。
+# - page が limit 件ぴったり返ったら "次がある可能性あり" として next_cursor を返す。
+#   (そのとき実際には末尾だったケースは、クライアントが 1 回余計にフェッチして空を受け取るだけ)
+# - page が limit 未満なら末尾確定として None を返す。
+#
+# 注意: サービス層で visible filter 等で間引かれる場合、中途のページで "limit 未満" になって
+# 本来続くはずのスクロールが打ち止まるリスクがあるため、呼び出し側で余裕をもって
+# 取り (fetch_size = offset + limit * 2 など) サービスが足りるなら "limit 件以上" を返せるようにしている。
 async def _slice_response(
     items: list, offset: int, limit: int
 ) -> FeedResponse:
     page = items[offset : offset + limit]
-    next_offset = offset + limit
-    # フェッチ側で fetch_size = offset + limit + 1 取っているので、
-    # len(items) > next_offset なら「もう 1 件余裕がある = 次がある」と判定できる。
-    next_cursor = str(next_offset) if len(items) > next_offset else None
+    next_cursor = str(offset + limit) if len(page) >= limit else None
     return FeedResponse(items=page, next_cursor=next_cursor)
 
 
@@ -162,10 +166,13 @@ async def get_home_section(
     - key='recent'          : 新着 (直近1ヶ月、今日を除く)
     - key='genre'           : ジャンル絞り込み (必ず genre クエリを伴う)
     """
-    # ロシアンドールでも広めに一括取得してサーバ側で slice するシンプル実装。
-    # 以前は fetch_size=max(offset+limit, 100) だったためランキングが 100 件で門ちされていた。
-    # +1 件分余計に取っておき、それが返ってくるかどうかで "次がある" を判定する。
-    fetch_size = offset + limit + 1
+    # 広めに一括取得してサーバ側で slice するシンプル実装。
+    # リポジトリ層で is_visible フィルタなどの間引きが起きても
+    # "要求 limit 件をちゃんと返せる" よう余裕をもったサイズで取得する。
+    # (limit * 2 と limit + 10 の大きい方。例: limit=21 → 42)
+    # それでもなお間引かれて limit 未満しか返らない場合は、実質末尾とみなして
+    # next_cursor=None となり、クライアントは継足しを停止する。
+    fetch_size = max(offset + limit * 2, offset + limit + 10)
 
     if key == "popular":
         items = await get_popular_all_time(db, limit=fetch_size)

@@ -71,6 +71,8 @@ export default function FeedItemVideo({
             className="shimmer-thumb"
             loading="eager"
             decoding="async"
+            draggable={false}
+            onContextMenu={(e) => e.preventDefault()}
           />
         ) : null}
         <div className="shimmer-spinner" />
@@ -86,6 +88,11 @@ export default function FeedItemVideo({
         onLoadedData={onLoadedData}
         onCanPlay={onCanPlay}
         onError={onError}
+        onContextMenu={(e) => e.preventDefault()}
+        controlsList="nodownload noremoteplayback nofullscreen noplaybackrate"
+        disablePictureInPicture
+        disableRemotePlayback
+        x-webkit-airplay="deny"
         className="feed-video"
         style={{ opacity: 0, transition: "opacity 0.3s ease" }}
       />

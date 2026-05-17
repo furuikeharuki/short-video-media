@@ -256,8 +256,11 @@ export function useFeedPlayback({ slug, title, isActive, onOpenModal }: UseFeedP
     };
   }, [playVideo, isActive]);
 
+  // 長押しメニュー・右クリックメニューをフィードアイテム全体で拒否する。
+  // 動画コンテナだけだと、サムネイルのみ表示中のスライドやボトムバーの押下でコンテキストメニューが出てしまうため、
+  // section 全体に当てる。タッチや右クリック、iOS の長押し保存ダイアログをそもそも出さないようにする。
   useEffect(() => {
-    const el = containerRef.current;
+    const el = sectionRef.current;
     if (!el) return;
     const prevent = (e: Event) => e.preventDefault();
     el.addEventListener("contextmenu", prevent);

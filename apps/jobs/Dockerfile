@@ -50,6 +50,11 @@ RUN python -m playwright install chromium
 
 WORKDIR /app/apps/jobs
 
+# Custom Start Command や railway run から `python -m src.xxx` を実行しても
+# モジュールを見つけられるよう PYTHONPATH を明示
+# (Railway は Dockerfile の WORKDIR を Custom Start Command に引き継がないことがあるため)
+ENV PYTHONPATH=/app/apps/jobs
+
 # デフォルトでは sync_catalog を 1 回実行する
 # MP4 URL 抽出ジョブを動かす場合は CMD を上書きして実行する:
 #   railway run --service jobs python -m src.extract_mp4_urls --cid 1sun00052a --dry-run

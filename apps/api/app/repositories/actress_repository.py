@@ -4,6 +4,7 @@ from sqlalchemy import desc, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.models.actress import Actress
+from app.db.models.goods import ActressGoods, Goods
 from app.db.models.movie import Movie
 
 
@@ -19,6 +20,31 @@ async def get_actress_by_slug(db: AsyncSession, slug: str) -> Actress | None:
     stmt = select(Actress).where(Actress.slug == slug).limit(1)
     result = await db.execute(stmt)
     return result.scalar_one_or_none()
+
+
+async def get_goods_by_actress_id(
+    db: AsyncSession,
+    actress_id: int,
+    *,
+    limit: int = 40,
+) -> list[Goods]:
+    """指定女優に関連するグッズを、primary_date 降順 → 評価順で返す。"""
+    stmt = (
+        select(Goods)
+        .join(ActressGoods, ActressGoods.goods_id == Goods.id)
+        .where(
+            ActressGoods.actress_id == actress_id,
+            Goods.is_visible.is_(True),
+        )
+        .order_by(
+            desc(Goods.primary_date),
+            desc(Goods.review_count),
+            Goods.id,
+        )
+        .limit(limit)
+    )
+    result = await db.execute(stmt)
+    return list(result.scalars().unique().all())
 
 
 async def get_movies_by_actress_id(

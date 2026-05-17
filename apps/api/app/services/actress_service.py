@@ -4,9 +4,10 @@ from app.repositories.actress_repository import (
     aggregate_actress_stats,
     get_actress_by_name,
     get_actress_by_slug,
+    get_goods_by_actress_id,
     get_movies_by_actress_id,
 )
-from app.schemas.actress import ActressDetail, ActressProfile, ActressStats
+from app.schemas.actress import ActressDetail, ActressProfile, ActressStats, GoodsCard
 from app.schemas.movie import MovieCard, PriceList
 
 
@@ -30,14 +31,32 @@ def _to_card(movie) -> MovieCard:
     )
 
 
+def _to_goods_card(goods) -> GoodsCard:
+    return GoodsCard(
+        id=goods.id,
+        content_id=goods.content_id,
+        title=goods.title,
+        slug=goods.slug,
+        image_url_list=goods.image_url_list,
+        image_url_large=goods.image_url_large,
+        affiliate_url=goods.affiliate_url or "",
+        price_list=PriceList.model_validate(goods.price_list) if goods.price_list else None,
+        price_min=goods.price_min,
+        review_count=goods.review_count or 0,
+        review_average=float(goods.review_average) if goods.review_average else None,
+        maker_name=goods.maker_name,
+    )
+
+
 async def get_actress_detail_service(
     db: AsyncSession,
     *,
     name: str | None = None,
     slug: str | None = None,
     movie_limit: int = 60,
+    goods_limit: int = 40,
 ) -> ActressDetail | None:
-    """女優詳細 (プロフィール + 出演作品 + 集計) を返す。"""
+    """女優詳細 (プロフィール + 出演作品 + 関連商品 + 集計) を返す。"""
     actress = None
     if slug:
         actress = await get_actress_by_slug(db, slug)
@@ -47,6 +66,7 @@ async def get_actress_detail_service(
         return None
 
     movies = await get_movies_by_actress_id(db, actress.id, limit=movie_limit)
+    goods = await get_goods_by_actress_id(db, actress.id, limit=goods_limit)
     stats_dict = aggregate_actress_stats(movies)
 
     profile = ActressProfile(
@@ -71,5 +91,11 @@ async def get_actress_detail_service(
 
     stats = ActressStats(**stats_dict)
     items = [_to_card(m) for m in movies]
+    goods_items = [_to_goods_card(g) for g in goods]
 
-    return ActressDetail(profile=profile, stats=stats, movies=items)
+    return ActressDetail(
+        profile=profile,
+        stats=stats,
+        movies=items,
+        goods=goods_items,
+    )

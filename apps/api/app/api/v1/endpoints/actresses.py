@@ -12,13 +12,16 @@ router = APIRouter()
 async def read_actress(
     name: str,
     movie_limit: int = Query(60, ge=1, le=200),
+    goods_limit: int = Query(40, ge=0, le=100),
     db: AsyncSession = Depends(get_db),
 ) -> ActressDetail:
     """女優詳細を返す。
     name はパスパラメータの女優名 (URL デコード済み) を完全一致で検索する。
-    DMM 女優検索 API 由来のプロフィール、出演作品、集計値を含む。
+    DMM 女優検索 API 由来のプロフィール、出演作品、関連商品、集計値を含む。
     """
-    detail = await get_actress_detail_service(db, name=name, movie_limit=movie_limit)
+    detail = await get_actress_detail_service(
+        db, name=name, movie_limit=movie_limit, goods_limit=goods_limit
+    )
     if detail is None:
         raise HTTPException(status_code=404, detail="Actress not found")
     return detail

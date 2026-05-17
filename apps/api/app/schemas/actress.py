@@ -1,6 +1,22 @@
 from pydantic import BaseModel
 
-from app.schemas.movie import MovieCard
+from app.schemas.movie import MovieCard, PriceList
+
+
+class GoodsCard(BaseModel):
+    """女優詳細ページの「関連商品」セクションで使うグッズ表示用カード"""
+    id: str
+    content_id: str | None = None
+    title: str
+    slug: str
+    image_url_list: str | None = None
+    image_url_large: str | None = None
+    affiliate_url: str
+    price_list: PriceList | None = None
+    price_min: int | None = None
+    review_count: int = 0
+    review_average: float | None = None
+    maker_name: str | None = None
 
 
 class ActressProfile(BaseModel):
@@ -44,3 +60,4 @@ class ActressDetail(BaseModel):
     profile: ActressProfile
     stats: ActressStats
     movies: list[MovieCard] = []
+    goods: list[GoodsCard] = []

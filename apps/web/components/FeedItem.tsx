@@ -79,6 +79,7 @@ export default function FeedItem({ item, isActive, isFirst, isSecond = false }: 
   } = useFeedPlayback({
     slug: item.slug,
     title: item.title,
+    isActive,
     onOpenModal: handleOpenModal,
   });
 

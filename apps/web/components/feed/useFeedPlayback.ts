@@ -39,10 +39,11 @@ export function markFeedGesture(): void {
 interface UseFeedPlaybackOptions {
   slug: string;
   title: string;
+  isActive: boolean;
   onOpenModal: (slug: string) => void;
 }
 
-export function useFeedPlayback({ slug, title, onOpenModal }: UseFeedPlaybackOptions) {
+export function useFeedPlayback({ slug, title, isActive, onOpenModal }: UseFeedPlaybackOptions) {
   // 初回マウント時に一回だけショートボタンフラグを消費
   consumeStartUnmutedFlag();
 
@@ -130,8 +131,14 @@ export function useFeedPlayback({ slug, title, onOpenModal }: UseFeedPlaybackOpt
       const ce = e as CustomEvent<{ ratio: number }>;
       const video = videoRef.current;
       if (!video || !isActiveRef.current) return;
-      const target = ce.detail.ratio * (video.duration || 0);
-      video.currentTime = target;
+      const dur = video.duration;
+      if (!Number.isFinite(dur) || dur <= 0) return;
+      const target = Math.max(0, Math.min(dur, ce.detail.ratio * dur));
+      try {
+        video.currentTime = target;
+      } catch {
+        /* seek 不可能なタイミングは無視 */
+      }
     };
     window.addEventListener("video-seek", handler);
     return () => window.removeEventListener("video-seek", handler);
@@ -175,34 +182,70 @@ export function useFeedPlayback({ slug, title, onOpenModal }: UseFeedPlaybackOpt
     return () => window.removeEventListener("modal-close", onModalClose);
   }, [playVideo]);
 
+  // isActive を ref に同期させて、IntersectionObserver や modal-close / video-seek リスナーから
+  // 最新の状態を参照できるようにする。
+  useEffect(() => {
+    isActiveRef.current = isActive;
+  }, [isActive]);
+
+  // 親 (FeedViewer) で isActive=true になったタイミングで自動再生を試みる。
+  // <video> 要素は isActive=true のときだけマウントされるので、ここで videoRef.current は
+  // マウント直後に存在するようになる。effect の deps に isActive を含めることで、
+  // 再マウントごとに新しい video 要素に対して playVideo が呼ばれる。
+  useEffect(() => {
+    if (!isActive) return;
+    const video = videoRef.current;
+    if (!video) return;
+    isActiveRef.current = true;
+    isMutedRef.current = globalIsMuted;
+    setIsMuted(globalIsMuted);
+    // 同期で muted 属性を反映してから play を呼ぶ
+    video.muted = globalIsMuted;
+    playVideo(video, false);
+  }, [isActive, playVideo]);
+
+  // isActive=false に切り替わったタイミングで video を停止・リセット。
+  // <video> 要素自体はこの直後にアンマウントされるが、進捗 UI のリセットも兼ねる。
+  useEffect(() => {
+    if (isActive) return;
+    const video = videoRef.current;
+    isActiveRef.current = false;
+    stopProgressLoop();
+    if (video) {
+      video.pause();
+      video.currentTime = 0;
+      video.playbackRate = 1;
+      video.muted = globalIsMuted;
+    }
+    isPlayingRef.current = false;
+    setVideoReady(false);
+    setFastBadge(false);
+    window.dispatchEvent(new CustomEvent("video-progress", { detail: { progress: 0 } }));
+  }, [isActive, setVideoReady, setFastBadge, stopProgressLoop]);
+
+  // フォールバック: 念のため IntersectionObserver でも監視する。
+  // (端末向きを変えたときや SSR ハイドレート直後など、isActive prop の同期前に発火するケースに備える)
   useEffect(() => {
     const video = videoRef.current;
     if (!video) return;
     const playObserver = new IntersectionObserver(([entry]) => {
       if (entry.isIntersecting) {
-        isActiveRef.current = true;
-        isMutedRef.current = globalIsMuted;
-        setIsMuted(globalIsMuted);
-        playVideo(video, false);
-      } else {
-        isActiveRef.current = false;
-        stopProgressLoop();
-        video.pause();
-        video.currentTime = 0;
-        video.playbackRate = 1;
-        video.muted = globalIsMuted;
-        isPlayingRef.current = false;
-        setVideoReady(false);
-        setFastBadge(false);
-        window.dispatchEvent(new CustomEvent("video-progress", { detail: { progress: 0 } }));
+        if (!isActiveRef.current) {
+          isActiveRef.current = true;
+          isMutedRef.current = globalIsMuted;
+          setIsMuted(globalIsMuted);
+          playVideo(video, false);
+        } else if (video.paused) {
+          // 既に active だが paused のとき (モーダル戻りなど) は再生再開
+          playVideo(video, false);
+        }
       }
     }, { threshold: PLAY_THRESHOLD });
     playObserver.observe(video);
     return () => {
       playObserver.disconnect();
-      stopProgressLoop();
     };
-  }, [playVideo, setVideoReady, setFastBadge, stopProgressLoop]);
+  }, [playVideo, isActive]);
 
   useEffect(() => {
     const el = containerRef.current;

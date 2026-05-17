@@ -4,6 +4,10 @@ export const itemStyle = `
     inset: 0;
     overflow: hidden;
     background: #000;
+    /* 長押しメニューをコンテナごと拒否 */
+    -webkit-touch-callout: none;
+    -webkit-user-select: none;
+    user-select: none;
   }
   .feed-video {
     position: absolute;
@@ -14,6 +18,11 @@ export const itemStyle = `
     object-position: center center;
     border-radius: 8px;
     box-sizing: border-box;
+    /* iOS/Android の長押しメニュー（保存・コピー・共有）を完全に抑止 */
+    -webkit-touch-callout: none;
+    -webkit-user-select: none;
+    user-select: none;
+    pointer-events: none;
   }
   /* サムネイル (非アクティブスライド または動画ロード中) は
      動画と同じサイズ・アスペクトで画面内に収まるよう contain させる。 */
@@ -22,6 +31,10 @@ export const itemStyle = `
     inset: 0;
     overflow: hidden;
     background: #000;
+    /* 長押しメニューをコンテナごと拒否 */
+    -webkit-touch-callout: none;
+    -webkit-user-select: none;
+    user-select: none;
   }
   .thumbnail-img {
     position: absolute;
@@ -33,6 +46,12 @@ export const itemStyle = `
     border-radius: 8px;
     box-sizing: border-box;
     display: block;
+    /* サムネイル画像の長押し保存・ドラッグを抑止 */
+    -webkit-touch-callout: none;
+    -webkit-user-select: none;
+    user-select: none;
+    -webkit-user-drag: none;
+    pointer-events: none;
   }
   .overlay-wrap {
     position: absolute;
@@ -61,6 +80,12 @@ export const itemStyle = `
     border-radius: 8px;
     box-sizing: border-box;
     display: block;
+    /* 長押し保存・ドラッグを抑止 */
+    -webkit-touch-callout: none;
+    -webkit-user-select: none;
+    user-select: none;
+    -webkit-user-drag: none;
+    pointer-events: none;
   }
   /* サムネイル上で中央をクルクル回るスピナー */
   .shimmer-spinner {

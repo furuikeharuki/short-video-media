@@ -319,7 +319,10 @@ export default function FeedItem({ item, isActive, isFirst, isSecond = false }: 
             onClick={handlePcClick}
           />
         ) : (
-          <div className="thumbnail-bg">
+          <div
+            className="thumbnail-bg"
+            onContextMenu={(e) => e.preventDefault()}
+          >
             <img
               src={item.image_url_large ?? item.image_url_list ?? ""}
               alt={item.title}
@@ -327,6 +330,8 @@ export default function FeedItem({ item, isActive, isFirst, isSecond = false }: 
               loading={isFirst ? "eager" : "lazy"}
               width={720}
               height={1280}
+              draggable={false}
+              onContextMenu={(e) => e.preventDefault()}
             />
           </div>
         )}

@@ -1,9 +1,10 @@
 name: Sync Catalog (DMM ItemList)
 
-# DMM (FANZA) ItemList API から作品データを定期取得して本番 DB に保存するワークフロー。
+# DMM (FANZA) ItemList API から最新作品データを定期取得して本番 DB に保存するワークフロー。
+# 全件取得 (ブートストラップ / 月 1) は sync-catalog-full.yml を使う。
 #
 # トリガー:
-#   - cron: 1 時間ごと (毎時 0 分)
+#   - cron: 2 時間ごと (各偶数時 0 分 UTC = 同じタイミングの JST)
 #   - 手動実行 (workflow_dispatch) も可。--hits を指定して任意件数を取得できる。
 #
 # 必要な Secrets:
@@ -15,8 +16,9 @@ name: Sync Catalog (DMM ItemList)
 
 on:
   schedule:
-    # UTC で毎時 0 分に実行 = JST でも毎時 0 分
-    - cron: "0 * * * *"
+    # UTC で 2 時間に 1 回 (00, 02, 04, ... 分)
+    # JST でも 2 時間に 1 回のタイミングになる。
+    - cron: "0 */2 * * *"
   workflow_dispatch:
     inputs:
       hits:

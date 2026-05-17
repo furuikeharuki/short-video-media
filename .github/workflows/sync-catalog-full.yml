@@ -4,7 +4,7 @@ name: Sync Catalog (Full / Bootstrap)
 # 期間スライス (gte_date/lte_date 月単位) で offset 上限 (50000) を回避する。
 #
 # トリガー:
-#   - cron: 毎月 1 日 02:00 JST (= 月初の深夜) に定期実行
+#   - cron: 毎月 1 日 10:00 JST (= 月初の午前、トラフィックが少ない時間帯) に定期実行
 #   - 手動実行 (workflow_dispatch) で start_date / end_date / floors を任意指定
 #
 # 仕様:
@@ -22,9 +22,9 @@ name: Sync Catalog (Full / Bootstrap)
 
 on:
   schedule:
-    # 毎月 1 日 17:00 UTC = 翌 2 日 02:00 JST
-    # (cron に 1 日 02:00 JST を直接指定できないため UTC で前日 17:00 を指定)
-    - cron: "0 17 1 * *"
+    # 毎月 1 日 01:00 UTC = 毎月 1 日 10:00 JST
+    # アダルトサイトは夜中にアクセスが集中するため、日中の低トラフィック帯に実行する
+    - cron: "0 1 1 * *"
   workflow_dispatch:
     inputs:
       start_date:

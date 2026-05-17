@@ -64,11 +64,15 @@ async def aggregate_view_ranking(
     *,
     period: str,
     limit: int = 20,
+    offset: int = 0,
 ) -> list[tuple[str, int]]:
     """期間内の event_type='view' を slug 単位で集計し、(slug, count) を降順で返す。
 
     現在 movies テーブルに存在している slug のみを集計対象とする。
     (DB リセット前のレガシー slug や、sync で除外された slug を上位に出さない)
+
+    offset/limit を SQL レベルで適用するので、データが何件あっても
+    1 ページあたりの計算量は limit 件だけ。
     """
     since = _since(period)
     stmt = (
@@ -81,7 +85,11 @@ async def aggregate_view_ranking(
             Movie.is_visible.is_(True),
         )
         .group_by(Event.slug)
-        .order_by(desc("c"))
+        # 二次キーに slug を与えてソートを安定化させる。
+        # (count の tie でページごとに順序が変わってしまうと、
+        #  クライアント側で重複・欠落が起きるため)
+        .order_by(desc("c"), Event.slug)
+        .offset(offset)
         .limit(limit)
     )
     result = await db.execute(stmt)
@@ -92,10 +100,12 @@ async def aggregate_view_ranking_all_time(
     db: AsyncSession,
     *,
     limit: int = 20,
+    offset: int = 0,
 ) -> list[tuple[str, int]]:
     """全期間の event_type='view' を slug 単位で集計し、(slug, count) を降順で返す。「人気」セクション用。
 
     現在 movies テーブルに存在している slug のみを集計対象とする。
+    SQL レベルで offset/limit を適用。
     """
     stmt = (
         select(Event.slug, func.count(Event.id).label("c"))
@@ -106,7 +116,9 @@ async def aggregate_view_ranking_all_time(
             Movie.is_visible.is_(True),
         )
         .group_by(Event.slug)
-        .order_by(desc("c"))
+        # ページネーション安定化のため二次キーを追加。
+        .order_by(desc("c"), Event.slug)
+        .offset(offset)
         .limit(limit)
     )
     result = await db.execute(stmt)

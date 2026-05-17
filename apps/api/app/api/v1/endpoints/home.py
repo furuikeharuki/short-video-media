@@ -128,23 +128,33 @@ async def get_home(
     return HomeResponse(sections=sections)
 
 
+
 # section ごとの "もっと見る" ・ フィード継足し用エンドポイント。
-# offset/limit を受け取り、同じ並び順で指定区間を返す。
-# ランキング・人気は集計システム上 1 クエリで offset したりできず、
-# offset+limit 件取ってサーバ側でスライスして返す。
-# next_cursor は "要求 limit に達したかどうか" で判定する。
-# - page が limit 件ぴったり返ったら "次がある可能性あり" として next_cursor を返す。
-#   (そのとき実際には末尾だったケースは、クライアントが 1 回余計にフェッチして空を受け取るだけ)
-# - page が limit 未満なら末尾確定として None を返す。
+# offset/limit を受け取り、同じ並び順で指定区間を SQL OFFSET/LIMIT で返す。
 #
-# 注意: サービス層で visible filter 等で間引かれる場合、中途のページで "limit 未満" になって
-# 本来続くはずのスクロールが打ち止まるリスクがあるため、呼び出し側で余裕をもって
-# 取り (fetch_size = offset + limit * 2 など) サービスが足りるなら "limit 件以上" を返せるようにしている。
-async def _slice_response(
-    items: list, offset: int, limit: int
-) -> FeedResponse:
-    page = items[offset : offset + limit]
-    next_cursor = str(offset + limit) if len(page) >= limit else None
+# ページネーション設計:
+# - サーバは limit + 1 件を SQL に渡して「ルックアヘッド 1 件」だけ余分に取る。
+# - len(items) > limit なら次ページあり → next_cursor = str(offset + limit)
+# - len(items) <= limit なら末尾確定 → next_cursor = None
+# これでデータが 10 万件規模になっても 1 ページあたりの計算量は limit 件に収まる。
+#
+# 並び順の安定性:
+# 集計クエリ (aggregate_view_ranking / _all_time) は count desc だけだと tie で
+# 順序が不安定になるため、二次キーとして Event.slug を追加している。
+# 同様に movie_repository 側も Movie.id を二次キーにして、offset をぶん進めても
+# ページ間で重複・欠落が起きないようにしている。
+
+
+def _to_response(items: list, offset: int, limit: int) -> FeedResponse:
+    """limit+1 件取った items を FeedResponse に変換する。
+
+    items は最大 limit+1 件しか入っていない前提。
+    len(items) > limit なら「次ページあり」と判定し、
+    クライアントに返すのは先頭 limit 件のみ。
+    """
+    has_next = len(items) > limit
+    page = items[:limit]
+    next_cursor = str(offset + limit) if has_next else None
     return FeedResponse(items=page, next_cursor=next_cursor)
 
 
@@ -156,58 +166,58 @@ async def get_home_section(
     genre: str | None = Query(default=None),
     db: AsyncSession = Depends(get_db),
 ) -> FeedResponse:
-    """ホームセクションと同じ順番で、offset+limit の区間を返す。
+    """ホームセクションと同じ順番で、offset+limit の区間を SQL OFFSET/LIMIT で返す。
 
     - key='popular'         : 総視聴回数順 (人気)
-    - key='ranking_daily'   : デイリーランキング
+    - key='ranking_daily'   : 日間ランキング
     - key='ranking_weekly'  : 週間ランキング
     - key='ranking_monthly' : 月間ランキング
-    - key='new'             : 本日配信開始 (最大1ページだけ、以降null)
+    - key='new'             : 本日配信開始 (今日付ゼロ件ならフォールバック)
     - key='recent'          : 新着 (直近1ヶ月、今日を除く)
     - key='genre'           : ジャンル絞り込み (必ず genre クエリを伴う)
     """
-    # 広めに一括取得してサーバ側で slice するシンプル実装。
-    # リポジトリ層で is_visible フィルタなどの間引きが起きても
-    # "要求 limit 件をちゃんと返せる" よう余裕をもったサイズで取得する。
-    # (limit * 2 と limit + 10 の大きい方。例: limit=21 → 42)
-    # それでもなお間引かれて limit 未満しか返らない場合は、実質末尾とみなして
-    # next_cursor=None となり、クライアントは継足しを停止する。
-    fetch_size = max(offset + limit * 2, offset + limit + 10)
+    # "次ページがあるか" 判定用に 1 件余分に取る。
+    # クライアントに返すのはその 1 件を除いた 先頭 limit 件だけ。
+    fetch_limit = limit + 1
 
     if key == "popular":
-        items = await get_popular_all_time(db, limit=fetch_size)
-        return await _slice_response(items, offset, limit)
+        items = await get_popular_all_time(db, limit=fetch_limit, offset=offset)
+        return _to_response(items, offset, limit)
 
     if key == "ranking_daily":
-        items = await get_ranking(db, period="daily", limit=fetch_size)
-        return await _slice_response(items, offset, limit)
+        items = await get_ranking(db, period="daily", limit=fetch_limit, offset=offset)
+        return _to_response(items, offset, limit)
 
     if key == "ranking_weekly":
-        items = await get_ranking(db, period="weekly", limit=fetch_size)
-        return await _slice_response(items, offset, limit)
+        items = await get_ranking(db, period="weekly", limit=fetch_limit, offset=offset)
+        return _to_response(items, offset, limit)
 
     if key == "ranking_monthly":
-        items = await get_ranking(db, period="monthly", limit=fetch_size)
-        return await _slice_response(items, offset, limit)
+        items = await get_ranking(db, period="monthly", limit=fetch_limit, offset=offset)
+        return _to_response(items, offset, limit)
 
     if key == "new":
-        # "本日配信開始" は本日分のみ表示したいため fallback_days=0。
-        # 件数が少ないので fetch_size もそのまま　2ページ目以降は空になり、
-        # クライアント側は next_cursor=null を見て継足しを止める。
-        movies = await get_new_release_movies(db, limit=fetch_size, fallback_days=0)
+        # "本日配信開始" は本日分を優先、ゼロなら直近にフォールバック。
+        movies = await get_new_release_movies(
+            db, limit=fetch_limit, fallback_days=0, offset=offset
+        )
         items = [_to_card(m) for m in movies]
-        return await _slice_response(items, offset, limit)
+        return _to_response(items, offset, limit)
 
     if key == "recent":
-        movies = await get_recent_release_movies(db, days=30, limit=fetch_size)
+        movies = await get_recent_release_movies(
+            db, days=30, limit=fetch_limit, offset=offset
+        )
         items = [_to_card(m) for m in movies]
-        return await _slice_response(items, offset, limit)
+        return _to_response(items, offset, limit)
 
     if key == "genre":
         if not genre:
             raise HTTPException(status_code=400, detail="genre query is required when key='genre'")
-        movies = await get_movies_by_genre(db, genre_name=genre, limit=fetch_size)
+        movies = await get_movies_by_genre(
+            db, genre_name=genre, limit=fetch_limit, offset=offset
+        )
         items = [_to_card(m) for m in movies]
-        return await _slice_response(items, offset, limit)
+        return _to_response(items, offset, limit)
 
     raise HTTPException(status_code=400, detail=f"unknown section key: {key}")

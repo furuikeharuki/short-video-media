@@ -80,7 +80,8 @@ export default async function Page() {
                 key={m.id}
                 movie={m}
                 aspect="portrait"
-                rank={isRanking ? i + 1 : undefined}
+                // ランキングセクションでも順位バッジは 100 位まで。
+                rank={isRanking && i < 100 ? i + 1 : undefined}
                 playlist={{
                   key: playlistKey,
                   title: section.title,

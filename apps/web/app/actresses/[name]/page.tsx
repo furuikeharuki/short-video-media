@@ -2,7 +2,7 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import { notFound } from "next/navigation";
 
-import BackButton from "@/components/BackButton";
+import ActressBackButton from "@/components/ActressBackButton";
 import { getActressByName } from "@/lib/api/actresses";
 import SearchGrid from "@/app/search/SearchGrid";
 
@@ -107,7 +107,7 @@ export default async function ActressDetailPage({ params }: PageProps) {
   return (
     <main style={styles.main}>
       <div style={styles.topBar}>
-        <BackButton />
+        <ActressBackButton />
       </div>
 
       <div style={styles.body}>

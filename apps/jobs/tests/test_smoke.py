@@ -18,6 +18,7 @@ from src.sync_catalog import (  # noqa: E402
     _parse_date,
     _parse_float,
     _parse_int,
+    _upgrade_goods_image_to_pl,
     _slugify,
 )
 
@@ -157,3 +158,27 @@ def test_extract_price_list():
     pl, pmin = _extract_price_list({})
     assert pl is None
     assert pmin is None
+
+
+def test_upgrade_goods_image_to_pl_replaces_suffix():
+    # pt -> pl
+    assert _upgrade_goods_image_to_pl(
+        "https://pics.dmm.co.jp/mono/goods/ho4670/ho4670pt.jpg"
+    ) == "https://pics.dmm.co.jp/mono/goods/ho4670/ho4670pl.jpg"
+    # ps -> pl
+    assert _upgrade_goods_image_to_pl(
+        "https://pics.dmm.co.jp/mono/goods/lo3151/lo3151ps.jpg"
+    ) == "https://pics.dmm.co.jp/mono/goods/lo3151/lo3151pl.jpg"
+    # jm -> pl (人意必ずしも存在しないがパターンとして対応)
+    assert _upgrade_goods_image_to_pl(
+        "https://pics.dmm.co.jp/mono/goods/lo3493/lo3493pm.jpg"
+    ) == "https://pics.dmm.co.jp/mono/goods/lo3493/lo3493pl.jpg"
+    # すでに pl -> マッチしないので None
+    assert _upgrade_goods_image_to_pl(
+        "https://pics.dmm.co.jp/mono/goods/ho4670/ho4670pl.jpg"
+    ) is None
+    # None や空文字列
+    assert _upgrade_goods_image_to_pl(None) is None
+    assert _upgrade_goods_image_to_pl("") is None
+    # パターン外 URL
+    assert _upgrade_goods_image_to_pl("https://example.com/foo.png") is None

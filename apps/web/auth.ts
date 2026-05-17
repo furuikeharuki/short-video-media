@@ -140,6 +140,9 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
     },
   },
   pages: {
-    // 既存ページがないので NextAuth のデフォルト UI を使う
+    // キャンセル時や OAuth エラー時に NextAuth デフォルトの
+    // /api/auth/error?error=Configuration ページ (赤い警告風の UI) を見せず、
+    // 自前の優しいエラーページ (/auth/error) へ送る。
+    error: "/auth/error",
   },
 });

@@ -66,8 +66,28 @@ export default function MovieCardThumb({
     >
       <div className="mct-thumb">
         {imgSrc ? (
-          // eslint-disable-next-line @next/next/no-img-element
-          <img src={imgSrc} alt="" loading="lazy" decoding="async" />
+          <>
+            {/* 背景レイヤー: 同じ画像を blur+暗くして敷き、contain 時の余白を画像の延長で埋める
+                (詳細ページの mdc-hero と同じ手法) */}
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img
+              src={imgSrc}
+              alt=""
+              aria-hidden="true"
+              loading="lazy"
+              decoding="async"
+              className="mct-thumb-blur"
+            />
+            {/* 前景レイヤー: メイン画像。videoa(pl.jpg) は右端寄せでメインビジュアルを見せる */}
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img
+              src={imgSrc}
+              alt=""
+              loading="lazy"
+              decoding="async"
+              className="mct-thumb-img"
+            />
+          </>
         ) : (
           <div className="mct-thumb-fallback" aria-hidden="true" />
         )}
@@ -114,35 +134,51 @@ const styles = `
     width: 100%;
     border-radius: 10px;
     overflow: hidden;
-    /* contain 時の余白を埋める下地。グラデにして黒一色より馴染ませる */
-    background: linear-gradient(135deg, #1a1a1a, #2a2a2a);
+    background: #111;
     /* サブピクセルで 1px はみ出させないため明示的に min-width: 0 */
     min-width: 0;
   }
   .mct--portrait  .mct-thumb { aspect-ratio: 9 / 13; }
   .mct--landscape .mct-thumb { aspect-ratio: 16 / 10; }
 
-  .mct-thumb img {
-    /* サブピクセル丸めで 1px ずれて枠からはみ出さないよう absolute positioning で枠にフィットさせる */
+  /* 背景レイヤー: 詳細ページ (mdc-hero-blur) と同じ手法で同じ画像を
+     blur(24px) brightness(0.3) で敷き、contain 時の余白部分を画像の延長で埋める。 */
+  .mct-thumb-blur {
+    position: absolute; inset: 0;
+    width: 100%; height: 100%;
+    object-fit: cover;
+    filter: blur(24px) brightness(0.3);
+    transform: scale(1.1);
+    display: block;
+    z-index: 0;
+  }
+
+  /* 前景レイヤー: メイン画像。デフォは contain でカード枠内に全体を収める。
+     videoa(pl.jpg) のみ右端領域 (約 380x538 相当) のメインビジュアル側を見せたいので、
+     cover + right center に切替えてカード枠にフィットさせる。 */
+  .mct-thumb-img {
     position: absolute;
     top: 0; left: 0;
     width: 100%; height: 100%;
-    /* contain にして画像全体を枠内に収める。横長(pl.jpg=800x538) や正方形(jp.jpg=300x300) でも
-       被写体やタイトルが見切れないようにする。余白は .mct-thumb の背景グラデで埋まる。 */
-    object-fit: contain; display: block;
+    object-fit: contain;
+    display: block;
+    z-index: 1;
   }
-  /* videoa (プロ作品) は pl.jpg (800x538 見開きジャケット) を使っているため、
-     右半分（メインビジュアル側）に寄せて表示し、左半のジャケット表を中心から外す。 */
-  .mct-thumb img[src$="pl.jpg"] {
+  /* pl.jpg = 800x538 の見開きジャケット。右端から約半分の領域がメインビジュアルなので、
+     cover + object-position: right center でその領域を縦長カード枠に切り出す。 */
+  .mct-thumb-img[src$="pl.jpg"] {
+    object-fit: cover;
     object-position: right center;
   }
   .mct-thumb-fallback {
+    position: absolute; inset: 0;
     width: 100%; height: 100%;
     background: linear-gradient(135deg, #1a1a1a, #2a2a2a);
   }
 
   .mct-rank {
     position: absolute;
+    z-index: 2;
     top: 6px; left: 6px;
     min-width: 24px; height: 24px;
     padding: 0 6px;

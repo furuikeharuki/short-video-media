@@ -1,9 +1,10 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { useSession, signIn } from "next-auth/react";
 
 import MovieCardThumb from "@/components/home/MovieCardThumb";
+import PullToRefresh from "@/components/home/PullToRefresh";
 import {
   getBookmarks,
   getViews,
@@ -21,12 +22,24 @@ export default function MyPage() {
   const [views, setViews] = useState<ViewItem[] | null>(null);
   const [loading, setLoading] = useState(false);
 
+  const loadData = useCallback(async () => {
+    const [b, v] = await Promise.all([
+      getBookmarks({ limit: 100 }),
+      getViews({ limit: 100 }),
+    ]);
+    setBookmarks(b);
+    setViews(v);
+  }, []);
+
   useEffect(() => {
     if (status !== "authenticated") return;
     let cancelled = false;
     setLoading(true);
     (async () => {
-      const [b, v] = await Promise.all([getBookmarks({ limit: 100 }), getViews({ limit: 100 })]);
+      const [b, v] = await Promise.all([
+        getBookmarks({ limit: 100 }),
+        getViews({ limit: 100 }),
+      ]);
       if (!cancelled) {
         setBookmarks(b);
         setViews(v);
@@ -80,7 +93,7 @@ export default function MyPage() {
   }
 
   return (
-    <main className="mypage-main">
+    <PullToRefresh className="mypage-main" onRefresh={loadData}>
       <div className="mypage-tabs">
         <button
           type="button"
@@ -107,7 +120,7 @@ export default function MyPage() {
       )}
 
       <style>{styles}</style>
-    </main>
+    </PullToRefresh>
   );
 }
 

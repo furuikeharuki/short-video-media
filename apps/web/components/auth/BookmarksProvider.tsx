@@ -70,6 +70,10 @@ export function BookmarksProvider({ children }: { children: React.ReactNode }) {
         ? await removeBookmark(movieId)
         : await addBookmark(movieId);
       if (!ok) {
+        console.error(
+          `[bookmarks] failed to ${currentlyBookmarked ? "remove" : "add"} bookmark`,
+          movieId,
+        );
         // 失敗時にロールバック
         setIds((prev) => {
           const next = new Set(prev);

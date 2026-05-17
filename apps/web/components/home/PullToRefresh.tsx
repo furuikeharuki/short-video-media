@@ -9,18 +9,25 @@ type Props = {
   className?: string;
   /** リフレッシュ発火する閾値 (px) */
   threshold?: number;
+  /**
+   * 指定すると router.refresh() の代わりにこの関数を呼ぶ。
+   * Promise を返すと、解決するまでスピナーを表示し続ける。
+   */
+  onRefresh?: () => void | Promise<void>;
 };
 
 /**
  * 一番上 (scrollTop=0) のときに下方向へ引っ張ると、
- * インジケータが表示されて、しきい値を超えて指を離すと router.refresh() でリロードする。
+ * インジケータが表示されて、しきい値を超えて指を離すとリフレッシュを発火する。
  *
- * /home は Server Component なので、router.refresh() で最新の getHome() 結果が再取得される。
+ * デフォルトでは router.refresh() を呼ぶ (Server Component 用)。
+ * onRefresh を渡すと、Client Component で自前のデータ再取得を実行できる。
  */
 export default function PullToRefresh({
   children,
   className = "",
   threshold = 70,
+  onRefresh,
 }: Props) {
   const router = useRouter();
   const containerRef = useRef<HTMLDivElement>(null);
@@ -75,13 +82,19 @@ export default function PullToRefresh({
         setIsRefreshing(true);
         setPullPx(threshold * 0.7);
         try {
-          router.refresh();
+          if (onRefresh) {
+            await onRefresh();
+          } else {
+            router.refresh();
+          }
+        } catch {
+          /* エラーでも UX は止めない */
         } finally {
-          // refresh() は即時返るので、見た目用に少し残してから戻す
+          // 見た目用に少し残してから戻す
           setTimeout(() => {
             setIsRefreshing(false);
             setPullPx(0);
-          }, 700);
+          }, 400);
         }
       } else {
         setPullPx(0);
@@ -98,7 +111,7 @@ export default function PullToRefresh({
       el.removeEventListener("touchend", onTouchEnd);
       el.removeEventListener("touchcancel", onTouchEnd);
     };
-  }, [isRefreshing, pullPx, threshold, router]);
+  }, [isRefreshing, pullPx, threshold, router, onRefresh]);
 
   const reached = pullPx >= threshold;
 

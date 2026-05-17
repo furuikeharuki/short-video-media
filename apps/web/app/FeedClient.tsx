@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useSearchParams } from "next/navigation";
+import { useSession } from "next-auth/react";
 import FeedViewer from "@/components/FeedViewer";
 import { markSeen, getOrCreateSeed } from "@/lib/feedOrder";
 import { getFeed } from "@/lib/api/feed";
@@ -69,6 +70,7 @@ function movieDetailToCard(m: MovieDetail): MovieCard {
 
 export default function FeedClient() {
   const searchParams  = useSearchParams();
+  const { status: authStatus } = useSession();
   const seedRef       = useRef<number | null>(null);
   const isFetchingRef = useRef(false);
   const nextCursorRef = useRef<string | null>(null);
@@ -174,13 +176,15 @@ export default function FeedClient() {
     const cur = items[index];
     if (cur) {
       markSeen(cur.id);
-      // ランキング集計のために view イベントを記録
+      // ランキング集計のために view イベントを記録 (サーバ側で集計、認証不要)
       logEvent({ event_type: "view", slug: cur.slug, title: cur.title });
-      // ログイン中なら視聴履歴にも記録 (未ログインなら 401 だがエラー不需)
-      void recordView(cur.id);
+      // ログイン中のみ視聴履歴に記録 (未ログインだと 401 になるのでスキップ)
+      if (authStatus === "authenticated") {
+        void recordView(cur.id);
+      }
     }
     try { sessionStorage.setItem(FEED_INDEX_KEY, String(index)); } catch { /* ignore */ }
-  }, [items]);
+  }, [items, authStatus]);
 
   const firstViewLoggedRef = useRef(false);
   useEffect(() => {
@@ -191,8 +195,10 @@ export default function FeedClient() {
     firstViewLoggedRef.current = true;
     markSeen(cur.id);
     logEvent({ event_type: "view", slug: cur.slug, title: cur.title });
-    void recordView(cur.id);
-  }, [isLoading, items, initialIndex]);
+    if (authStatus === "authenticated") {
+      void recordView(cur.id);
+    }
+  }, [isLoading, items, initialIndex, authStatus]);
 
   if (isEmpty) {
     return (

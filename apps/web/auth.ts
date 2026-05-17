@@ -88,17 +88,22 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
      * apiToken / userId を JWT に格納。以降のリクエストは token をそのまま返す。
      */
     async jwt({ token, account, profile }) {
-      if (account && profile) {
+      if (account) {
         const provider = account.provider as "twitter" | "discord";
         // provider 側ユーザーID。account.providerAccountId が標準。
-        const sub = account.providerAccountId || (profile as { id?: string }).id;
+        // (profile は Twitter v2 だと空だったりするので、account だけで判定する)
+        const sub = account.providerAccountId || (profile as { id?: string } | undefined)?.id;
         if (sub) {
           const exchanged = await exchangeWithApi(provider, String(sub));
           if (exchanged) {
             token.apiToken = exchanged.apiToken;
             token.userId = exchanged.userId;
             token.provider = provider;
+          } else {
+            console.error("[auth] exchangeWithApi returned null");
           }
+        } else {
+          console.error("[auth] no provider sub available", { provider });
         }
         // provider 側の個人情報は一切 token に残さない
         delete (token as Record<string, unknown>).name;
@@ -113,11 +118,24 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
         userId?: string;
         provider?: string;
       };
-      // 拡張プロパティを any 経由で代入 (next-auth.d.ts で Session に拡張済み)
+      // apiToken がない = API との exchange に失敗している
+      // この場合は session を返さないことで「未ログイン」扱いにさせる。
+      // (Vercel と Railway の AUTH_SECRET/APP_USER_SALT 不整合などで起きる)
+      if (!t.apiToken || !t.userId) {
+        return null as unknown as typeof session;
+      }
+      // 拡張プロパティを next-auth.d.ts で拡張済み
       const s = session as unknown as Record<string, unknown>;
-      s.apiToken = t.apiToken ?? null;
-      s.userId = t.userId ?? null;
+      s.apiToken = t.apiToken;
+      s.userId = t.userId;
       s.provider = t.provider ?? null;
+      // provider 側の個人情報は session からも除去
+      const u = (session as unknown as { user?: Record<string, unknown> }).user;
+      if (u) {
+        delete u.name;
+        delete u.email;
+        delete u.image;
+      }
       return session;
     },
   },

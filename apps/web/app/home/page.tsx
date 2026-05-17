@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { getHome } from "@/lib/api/home";
 import HorizontalCardRow from "@/components/home/HorizontalCardRow";
 import MovieCardThumb from "@/components/home/MovieCardThumb";
+import PullToRefresh from "@/components/home/PullToRefresh";
 
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
@@ -43,7 +44,7 @@ export default async function HomePage() {
   }
 
   return (
-    <main className="home-main">
+    <PullToRefresh className="home-main">
       {sections.map((section) => {
         const isRanking = RANKING_KEYS.has(section.key);
         const action = section.genre
@@ -82,7 +83,7 @@ export default async function HomePage() {
       <div className="home-footer-spacer" />
 
       <style>{pageStyles}</style>
-    </main>
+    </PullToRefresh>
   );
 }
 

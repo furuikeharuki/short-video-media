@@ -113,7 +113,17 @@ export default function HamburgerMenu() {
             <Link
               key={item.href}
               href={item.href}
-              onClick={() => setOpen(false)}
+              onClick={() => {
+                // ショート (/) に遷移するときは前回のフィードセッションを破棄してランダム再生にする
+                if (item.href === "/" && typeof window !== "undefined") {
+                  try {
+                    sessionStorage.removeItem("feed_seed");
+                    sessionStorage.removeItem("feed_index");
+                    sessionStorage.removeItem("feed_items");
+                  } catch {}
+                }
+                setOpen(false);
+              }}
               style={{
                 display: "block",
                 padding: "14px 24px",

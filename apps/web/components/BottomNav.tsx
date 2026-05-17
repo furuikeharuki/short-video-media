@@ -4,6 +4,18 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useEffect, useRef, useCallback, useState } from "react";
 
+// ショートボタンを押して / に遷移するときに、保存されているフィードのスナップショットを破棄して
+// ランダム再生を保証する。FeedClient 側は sessionStorage が空なら getFeed を新しい seed で取り直す。
+function resetFeedSession() {
+  try {
+    sessionStorage.removeItem("feed_seed");
+    sessionStorage.removeItem("feed_index");
+    sessionStorage.removeItem("feed_items");
+  } catch {
+    /* ignore */
+  }
+}
+
 const NAV_ITEMS = [
   {
     label: "ホーム",
@@ -156,7 +168,16 @@ export default function BottomNav() {
           );
         }
         return (
-          <Link key={item.href} href={item.href} className="bottom-nav-item">
+          <Link
+            key={item.href}
+            href={item.href}
+            className="bottom-nav-item"
+            onClick={
+              item.href === "/"
+                ? () => resetFeedSession()
+                : undefined
+            }
+          >
             <span className="bottom-nav-icon">{icon}</span>
             <span className="bottom-nav-label">{item.label}</span>
           </Link>

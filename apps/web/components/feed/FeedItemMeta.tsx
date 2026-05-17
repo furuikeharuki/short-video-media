@@ -2,6 +2,7 @@
 
 import { useRouter } from "next/navigation";
 import type { MovieCard } from "@/lib/api/feed";
+import { logEvent } from "@/lib/api/events";
 
 interface Props {
   item: MovieCard;
@@ -9,6 +10,12 @@ interface Props {
 
 export default function FeedItemMeta({ item }: Props) {
   const router = useRouter();
+
+  const handleTagClick = (tag: string) => {
+    // タグタップも「検索」として集計 (検索数ランキングに反映させる)
+    logEvent({ event_type: "search", search_query: tag });
+    router.push(`/search?genre=${encodeURIComponent(tag)}`);
+  };
 
   return (
     <div className="info-overlay" onClick={(e) => e.stopPropagation()}>
@@ -18,7 +25,7 @@ export default function FeedItemMeta({ item }: Props) {
             <button
               key={tag}
               className="genre-chip"
-              onClick={() => router.push(`/search?genre=${encodeURIComponent(tag)}`)}
+              onClick={() => handleTagClick(tag)}
             >
               {tag}
             </button>

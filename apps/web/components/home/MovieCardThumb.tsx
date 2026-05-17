@@ -19,6 +19,11 @@ type Props = {
   playlist?: Playlist;
   /** playlist 未指定時の遷移先 (デフォは詳細モーダル)。 */
   href?: string;
+  /**
+   * 親のグリッド/フレックスセルに合わせて幅 100% で伸ばすか。
+   * デフォは false (140px フィックス = ホームの横スクロール用) 。
+   */
+  fluid?: boolean;
 };
 
 export default function MovieCardThumb({
@@ -27,6 +32,7 @@ export default function MovieCardThumb({
   rank,
   playlist,
   href,
+  fluid = false,
 }: Props) {
   const router = useRouter();
   const imgSrc = movie.image_url_list ?? movie.image_url_large ?? "";
@@ -55,7 +61,7 @@ export default function MovieCardThumb({
     <Link
       href={linkHref}
       onClick={handleClick}
-      className={`mct mct--${aspect}`}
+      className={`mct mct--${aspect}${fluid ? " mct--fluid" : ""}`}
       aria-label={movie.title}
     >
       <div className="mct-thumb">
@@ -94,6 +100,8 @@ const styles = `
   }
   .mct--portrait  { width: 140px; }
   .mct--landscape { width: 220px; }
+  /* 親グリッドのセルいっぱいに伸ばすモード (視聴履歴 / ブックマーク / 検索結果) */
+  .mct--fluid { width: 100%; }
 
   .mct-thumb {
     position: relative;

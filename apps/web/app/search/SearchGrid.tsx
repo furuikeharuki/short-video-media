@@ -28,6 +28,7 @@ export default function SearchGrid({
           key={item.id}
           movie={item}
           aspect="portrait"
+          fluid
           playlist={{
             key: `${playlistKey}-${item.id}`,
             title: playlistTitle,

@@ -298,31 +298,40 @@ def _build_sample_mp4_url(content_id: str) -> str | None:
     )
 
 
-def _build_large_image_url(content_id: str, floor: str) -> str | None:
-    """DMM の content_id からサムネイル (`ps.jpg` 147x200) の URL を組み立てる。
+def _floor_image_base(floor: str) -> str:
+    """DMM 画像 CDN のフロア別ベース URL。"""
+    if floor == "videoa":
+        return "https://pics.dmm.co.jp/digital/video"
+    if floor == "videoc":
+        return "https://pics.dmm.co.jp/digital/amateur"
+    # その他は digital/video を仮定 (見つからないときはフロント側 onError でさらに
+    # fallback させる設計)
+    return "https://pics.dmm.co.jp/digital/video"
 
-    DMM API が返す imageURL.large は videoc (素人系) で None になることが多く、
-    フィードのサムネイルが超低解像度の `pt.jpg` (90x122) や `jm.jpg` (100x100)
-    にフォールバックして画質が著しく悪く見える原因になっている。
-    content_id から `ps.jpg` (147x200) の URL を自前で生成して補う。
 
-    pattern:
-        videoa: https://pics.dmm.co.jp/digital/video/{cid}/{cid}ps.jpg
-        videoc: https://pics.dmm.co.jp/digital/amateur/{cid}/{cid}ps.jpg
+def _build_list_image_url(content_id: str, floor: str) -> str | None:
+    """一覧・フィード用サムネイル (`ps.jpg` 147x200) の URL を組み立てる。
+
+    DMM API が返す imageURL.list は `pt.jpg` (90x122) や `jm.jpg` (100x100) の
+    超低解像度になることが多いため、もう一回り大きい `ps.jpg` (147x200) を
+    使うように URL を自前で生成する。
     """
     cid = (content_id or "").strip().lower()
     if not cid:
         return None
-    # フロアによってパスが違う (video / amateur / mono / etc)
-    if floor == "videoa":
-        base = "https://pics.dmm.co.jp/digital/video"
-    elif floor == "videoc":
-        base = "https://pics.dmm.co.jp/digital/amateur"
-    else:
-        # その他は digital/video を仮定 (見つからないときはフロント側 onError でさらに
-        # fallback させる設計)
-        base = "https://pics.dmm.co.jp/digital/video"
-    return f"{base}/{cid}/{cid}ps.jpg"
+    return f"{_floor_image_base(floor)}/{cid}/{cid}ps.jpg"
+
+
+def _build_large_image_url(content_id: str, floor: str) -> str | None:
+    """詳細ページ用の高解像度画像 (`pl.jpg` 800x590) の URL を組み立てる。
+
+    DMM API が返す imageURL.large は videoc (素人系) で None になることが多いため、
+    content_id とフロアから `pl.jpg` URL を自前で生成して補う。
+    """
+    cid = (content_id or "").strip().lower()
+    if not cid:
+        return None
+    return f"{_floor_image_base(floor)}/{cid}/{cid}pl.jpg"
 
 
 @dataclass
@@ -430,10 +439,13 @@ async def upsert_movie(
         movie.title = title
         movie.description = item.get("comment") or movie.description or ""
         movie.volume = _parse_int(item.get("volume"))
-        # API が返す large が空のときは content_id から pl.jpg URL を生成して補う。
-        # (videoc で large が None になるケースをカバーしてサムネイル画質を保つ)
+        # サムネイル (一覧・フィード用) は ps.jpg (147x200) を使う。
+        # API の imageURL.list は pt.jpg/jm.jpg になり画質が悪いため自前生成を優先。
+        new_image_list = _build_list_image_url(content_id, floor) or image_urls.get("list")
+        # 詳細ページ用の高解像度画像は pl.jpg (800x590)。API が返さないケースも
+        # content_id から URL を生成して補う。
         new_image_large = image_urls.get("large") or _build_large_image_url(content_id, floor)
-        movie.image_url_list = image_urls.get("list") or movie.image_url_list
+        movie.image_url_list = new_image_list or movie.image_url_list
         movie.image_url_large = new_image_large or movie.image_url_large
         movie.sample_movie_url = sample_movie_url or movie.sample_movie_url
         movie.sample_embed_url = sample_embed_url or movie.sample_embed_url
@@ -465,7 +477,10 @@ async def upsert_movie(
             slug=slug,
             description=item.get("comment") or "",
             volume=_parse_int(item.get("volume")),
-            image_url_list=image_urls.get("list"),
+            image_url_list=(
+                _build_list_image_url(content_id, floor)
+                or image_urls.get("list")
+            ),
             image_url_large=(
                 image_urls.get("large")
                 or _build_large_image_url(content_id, floor)

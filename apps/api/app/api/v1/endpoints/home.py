@@ -1,7 +1,7 @@
 """ホーム画面用の集約エンドポイント。
 複数セクションを 1 リクエストで返す。
 """
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.session import get_db
@@ -11,6 +11,7 @@ from app.repositories.movie_repository import (
     get_recent_release_movies,
     get_top_genres_by_movie_count,
 )
+from app.schemas.feed import FeedResponse
 from app.schemas.home import HomeResponse, HomeSection
 from app.services.feed_service import _to_card
 from app.services.ranking_service import (
@@ -67,17 +68,17 @@ async def get_home(
         )
     )
 
-    # 4. 月間ランキング
-    monthly = await get_ranking(db, period="monthly", limit=section_limit)
-    sections.append(HomeSection(key="ranking_monthly", title="月間ランキング", items=monthly))
+    # 4. 日間ランキング
+    daily = await get_ranking(db, period="daily", limit=section_limit)
+    sections.append(HomeSection(key="ranking_daily", title="日間ランキング", items=daily))
 
     # 5. 週間ランキング
     weekly = await get_ranking(db, period="weekly", limit=section_limit)
     sections.append(HomeSection(key="ranking_weekly", title="週間ランキング", items=weekly))
 
-    # 6. デイリーランキング
-    daily = await get_ranking(db, period="daily", limit=section_limit)
-    sections.append(HomeSection(key="ranking_daily", title="デイリーランキング", items=daily))
+    # 6. 月間ランキング
+    monthly = await get_ranking(db, period="monthly", limit=section_limit)
+    sections.append(HomeSection(key="ranking_monthly", title="月間ランキング", items=monthly))
 
     # 7-9. 検索数の高いジャンル 1〜3
     # 検索イベントがあるなら検索数順。不足分は DB に存在する「作品数の多いジャンル」で補充する。
@@ -125,3 +126,77 @@ async def get_home(
     sections.extend(genre_sections)
 
     return HomeResponse(sections=sections)
+
+
+# section ごとの "もっと見る" ・ フィード継足し用エンドポイント。
+# offset/limit を受け取り、同じ並び順で指定区間を返す。
+# ランキング・人気は集計システム上 1 クエリで offset したりできず、
+# offset+limit 件取ってサーバ側でスライスして返す。それでもシンプルで不具合は出ない。
+async def _slice_response(
+    items: list, offset: int, limit: int
+) -> FeedResponse:
+    page = items[offset : offset + limit]
+    next_offset = offset + limit
+    next_cursor = str(next_offset) if next_offset < len(items) else None
+    return FeedResponse(items=page, next_cursor=next_cursor)
+
+
+@router.get("/home/section", response_model=FeedResponse)
+async def get_home_section(
+    key: str = Query(..., min_length=1),
+    offset: int = Query(default=0, ge=0),
+    limit: int = Query(default=20, ge=1, le=100),
+    genre: str | None = Query(default=None),
+    db: AsyncSession = Depends(get_db),
+) -> FeedResponse:
+    """ホームセクションと同じ順番で、offset+limit の区間を返す。
+
+    - key='popular'         : 総視聴回数順 (人気)
+    - key='ranking_daily'   : デイリーランキング
+    - key='ranking_weekly'  : 週間ランキング
+    - key='ranking_monthly' : 月間ランキング
+    - key='new'             : 本日配信開始 (最大1ページだけ、以降null)
+    - key='recent'          : 新着 (直近1ヶ月、今日を除く)
+    - key='genre'           : ジャンル絞り込み (必ず genre クエリを伴う)
+    """
+    # ロシアンドールでも広めに一括取得してサーバ側で slice するシンプル実装。
+    # ランキングは取れる位置に上限があるため fetch_size を 100 門上げる。
+    fetch_size = max(offset + limit, 100)
+
+    if key == "popular":
+        items = await get_popular_all_time(db, limit=fetch_size)
+        return await _slice_response(items, offset, limit)
+
+    if key == "ranking_daily":
+        items = await get_ranking(db, period="daily", limit=fetch_size)
+        return await _slice_response(items, offset, limit)
+
+    if key == "ranking_weekly":
+        items = await get_ranking(db, period="weekly", limit=fetch_size)
+        return await _slice_response(items, offset, limit)
+
+    if key == "ranking_monthly":
+        items = await get_ranking(db, period="monthly", limit=fetch_size)
+        return await _slice_response(items, offset, limit)
+
+    if key == "new":
+        # "本日配信開始" は本日分のみ表示したいため fallback_days=0。
+        # 件数が少ないので fetch_size もそのまま　2ページ目以降は空になり、
+        # クライアント側は next_cursor=null を見て継足しを止める。
+        movies = await get_new_release_movies(db, limit=fetch_size, fallback_days=0)
+        items = [_to_card(m) for m in movies]
+        return await _slice_response(items, offset, limit)
+
+    if key == "recent":
+        movies = await get_recent_release_movies(db, days=30, limit=fetch_size)
+        items = [_to_card(m) for m in movies]
+        return await _slice_response(items, offset, limit)
+
+    if key == "genre":
+        if not genre:
+            raise HTTPException(status_code=400, detail="genre query is required when key='genre'")
+        movies = await get_movies_by_genre(db, genre_name=genre, limit=fetch_size)
+        items = [_to_card(m) for m in movies]
+        return await _slice_response(items, offset, limit)
+
+    raise HTTPException(status_code=400, detail=f"unknown section key: {key}")

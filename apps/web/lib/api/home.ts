@@ -17,7 +17,7 @@ const API_BASE_URL =
   process.env.NEXT_PUBLIC_API_BASE_URL ||
   "http://127.0.0.1:8000";
 
-export async function getHome(sectionLimit = 12): Promise<HomeResponse> {
+export async function getHome(sectionLimit = 20): Promise<HomeResponse> {
   const params = new URLSearchParams({ section_limit: String(sectionLimit) });
   const res = await fetch(`${API_BASE_URL}/api/v1/home?${params}`, {
     cache: "no-store",

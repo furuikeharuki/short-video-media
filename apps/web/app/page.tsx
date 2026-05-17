@@ -9,7 +9,7 @@ export const revalidate = 0;
 
 export const metadata: Metadata = {
   title: "ホーム",
-  description: "本日配信開始の新作、月間/週間/デイリーランキング、人気ジャンル別のショート動画を一覧でチェック。",
+  description: "本日配信開始の新作、日間/週間/月間ランキング、人気ジャンル別のショート動画を一覧でチェック。",
 };
 
 const RANKING_KEYS = new Set([
@@ -19,11 +19,20 @@ const RANKING_KEYS = new Set([
   "ranking_monthly",
 ]);
 
+/** 「もっと見る」のリンク先を section key (とジャンル名) から組み立てる。
+ *  ジャンルは既存の /search?genre=... を再利用、それ以外は /list/<key> に飛ばす。 */
+function buildMoreHref(section: { key: string; genre: string | null }): string {
+  if (section.genre) {
+    return `/search?genre=${encodeURIComponent(section.genre)}`;
+  }
+  return `/list/${encodeURIComponent(section.key)}`;
+}
+
 export default async function Page() {
 
   let data: Awaited<ReturnType<typeof getHome>>;
   try {
-    data = await getHome(12);
+    data = await getHome(20);
   } catch {
     return (
       <main className="home-main">
@@ -48,13 +57,16 @@ export default async function Page() {
     <PullToRefresh className="home-main">
       {sections.map((section) => {
         const isRanking = RANKING_KEYS.has(section.key);
-        const action = section.genre
-          ? {
-              label: "もっと見る",
-              href: `/search?q=${encodeURIComponent(section.genre)}`,
-            }
-          : undefined;
+        const action = {
+          label: "もっと見る",
+          href: buildMoreHref(section),
+        };
         const playlistKey = `home_${section.key}`;
+        // /feed 側で 20 件以降を取り直すための出所情報。
+        // ジャンル系は key='genre' + genre名 で送り、それ以外はそのセクションkeyを送る。
+        const playlistSource = section.genre
+          ? { kind: "section" as const, key: "genre", genre: section.genre }
+          : { kind: "section" as const, key: section.key };
 
         return (
           <HorizontalCardRow
@@ -74,6 +86,7 @@ export default async function Page() {
                   title: section.title,
                   startIndex: i,
                   items: section.items,
+                  source: playlistSource,
                 }}
               />
             ))}

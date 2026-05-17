@@ -135,10 +135,12 @@ async def fetch_actress(
         )
     data = res.json()
     result = data.get("result") or {}
-    status = result.get("status")
-    if status and status != 200:
+    # DMM API は status を文字列 ("200") で返すことがあるので必ず str 化して比較する
+    status_raw = result.get("status")
+    status_str = str(status_raw) if status_raw is not None else ""
+    if status_str and status_str not in ("200", "0"):
         msg = result.get("message") or result.get("errors") or data
-        raise RuntimeError(f"DMM ActressSearch status={status}: {msg}")
+        raise RuntimeError(f"DMM ActressSearch status={status_str}: {msg}")
     actresses = result.get("actress") or []
     if not actresses:
         return None
@@ -285,6 +287,10 @@ async def main(
             print(f"[sync_actress_profiles] {total} actresses to process")
 
             for i, actress in enumerate(actresses, 1):
+                # commit で expire しないよう session 上でロード済み属性を控えておく
+                # (例外時に actress.name 等を参照しても再 IO が走らないようにする)
+                actress_id = actress.id
+                actress_name = actress.name
                 try:
                     await update_actress(
                         session,
@@ -297,7 +303,7 @@ async def main(
                         counters=counters,
                     )
                 except Exception as e:  # noqa: BLE001
-                    print(f"  [ERROR] {actress.name} (id={actress.id}): {e}")
+                    print(f"  [ERROR] {actress_name} (id={actress_id}): {e}")
                     counters.errors += 1
                     try:
                         await session.rollback()

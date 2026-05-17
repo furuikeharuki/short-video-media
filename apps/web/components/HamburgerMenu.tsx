@@ -4,8 +4,8 @@ import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 
 const MENU_ITEMS = [
-  { label: "ホーム", href: "/home" },
-  { label: "おすすめフィード", href: "/" },
+  { label: "ホーム", href: "/" },
+  { label: "おすすめフィード", href: "/feed" },
   { label: "お問い合わせ", href: "/contact" },
   { label: "プライバシーポリシー", href: "/privacy" },
   { label: "特定商取引法に基づく表記", href: "/law" },
@@ -115,7 +115,7 @@ export default function HamburgerMenu() {
               href={item.href}
               onClick={() => {
                 // ショート (/) に遷移するときは前回のフィードセッションを破棄してランダム再生にする
-                if (item.href === "/" && typeof window !== "undefined") {
+                if (item.href === "/feed" && typeof window !== "undefined") {
                   try {
                     sessionStorage.removeItem("feed_seed");
                     sessionStorage.removeItem("feed_index");

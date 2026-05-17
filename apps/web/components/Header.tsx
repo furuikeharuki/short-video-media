@@ -89,7 +89,7 @@ export default function Header() {
   );
 
   const handleLogoClick = useCallback(() => {
-    // sessionStorageを破棄してトップに戻ることで新しいシードでシャッフル
+    // フィードセッションを破棄しておく (次回ショートを開いたときにランダムになる)
     try {
       sessionStorage.removeItem(FEED_SEED_KEY);
       sessionStorage.removeItem(FEED_INDEX_KEY);

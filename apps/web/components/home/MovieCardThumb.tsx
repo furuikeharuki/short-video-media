@@ -41,7 +41,7 @@ export default function MovieCardThumb({
         title: movie.title,
       });
       savePlaylist(playlist);
-      router.push(`/?playlist=${encodeURIComponent(playlist.key)}`);
+      router.push(`/feed?playlist=${encodeURIComponent(playlist.key)}`);
       return;
     }
     logEvent({

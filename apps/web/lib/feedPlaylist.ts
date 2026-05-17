@@ -1,6 +1,6 @@
 /**
- * /home などのカード列から「このリスト順でフィード再生する」ための受け渡し用ヘルパー。
- * sessionStorage 経由でアイテム列を保存し、`/?playlist=<key>` で /(フィード)へ遷移する。
+ * / (ホーム) のカード列から「このリスト順でフィード再生する」ための受け渡し用ヘルパー。
+ * sessionStorage 経由でアイテム列を保存し、`/feed?playlist=<key>` で /feed (ショートフィード)へ遷移する。
  */
 import type { MovieCard } from "@/lib/api/feed";
 

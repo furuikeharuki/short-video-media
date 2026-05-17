@@ -19,7 +19,7 @@ function resetFeedSession() {
 const NAV_ITEMS = [
   {
     label: "ホーム",
-    href: "/home",
+    href: "/",
     extraActive: [] as string[],
     iconOutline: (
       <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -35,7 +35,7 @@ const NAV_ITEMS = [
   },
   {
     label: "ショート",
-    href: "/",
+    href: "/feed",
     extraActive: ["/search/feed"],
     iconOutline: (
       <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -78,7 +78,7 @@ declare global {
 
 export default function BottomNav() {
   const pathname    = usePathname();
-  const isShortPage = pathname === "/" || pathname.startsWith("/search/feed");
+  const isShortPage = pathname === "/feed" || pathname.startsWith("/search/feed");
 
   const trackRef   = useRef<HTMLDivElement>(null);
   const isDragging = useRef(false);
@@ -156,7 +156,8 @@ export default function BottomNav() {
       {NAV_ITEMS.map((item) => {
         const isActive =
           (item.href === "/" ? pathname === "/" : pathname.startsWith(item.href)) ||
-          item.extraActive.some((p) => pathname.startsWith(p));
+          item.extraActive.some((p) => pathname.startsWith(p)) ||
+          (item.href === "/feed" && pathname === "/feed");
         const icon = isActive ? item.iconFilled : item.iconOutline;
 
         if (isActive) {
@@ -173,7 +174,7 @@ export default function BottomNav() {
             href={item.href}
             className="bottom-nav-item"
             onClick={
-              item.href === "/"
+              item.href === "/feed"
                 ? () => resetFeedSession()
                 : undefined
             }

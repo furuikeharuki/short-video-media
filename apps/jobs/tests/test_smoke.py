@@ -8,6 +8,7 @@ _HERE = Path(__file__).resolve()
 sys.path.insert(0, str(_HERE.parents[1]))
 
 from src.sync_catalog import (  # noqa: E402
+    _build_affiliate_url,
     _build_content_id,
     _extract_price_list,
     _extract_review,
@@ -36,6 +37,23 @@ def test_parse_date():
     assert _parse_date("2026/05/17") == date(2026, 5, 17)
     assert _parse_date(None) is None
     assert _parse_date("invalid") is None
+
+
+def test_build_affiliate_url():
+    # videoa: デジタルビデオ (アダルト動画)
+    url = _build_affiliate_url("nask00405", "videoa", "avshorts0512-990")
+    assert url.startswith("https://www.dmm.co.jp/digital/videoa/")
+    assert "cid=nask00405" in url
+    assert "af_id=avshorts0512-990" in url
+    # videoc: アマチュア
+    url = _build_affiliate_url("smjx231", "videoc", "avshorts0512-990")
+    assert url.startswith("https://www.dmm.co.jp/digital/videoc/")
+    # goods: グッズ
+    url = _build_affiliate_url("ho11992", "goods", "avshorts0512-990")
+    assert url.startswith("https://www.dmm.co.jp/mono/goods/")
+    # 未知 floor は videoa にフォールバック
+    url = _build_affiliate_url("foo", "unknown", "af-990")
+    assert "digital/videoa" in url
 
 
 def test_slugify():

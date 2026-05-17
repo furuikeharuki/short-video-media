@@ -63,8 +63,32 @@ RATE_LIMIT_SLEEP_SEC = 1.0
 FLOORS: list[tuple[str, str, str, str]] = [
     ("FANZA", "digital", "videoa", "videoa"),  # 単体女優物 / ビデオ
     ("FANZA", "digital", "videoc", "videoc"),  # アマチュア
-    ("FANZA", "mono",    "goods",  "goods"),   # 女優グッズ
+    ("FANZA", "mono",    "goods",  "goods"),   # 女優グッズ (現状 cron では取得しない)
 ]
+
+# cron など floors 未指定時に取得するデフォルトフロア (動画のみ)
+DEFAULT_FLOOR_NAMES: tuple[str, ...] = ("videoa", "videoc")
+
+# floor → 購入ページ URL テンプレート
+# DMM API が返す al.fanza.co.jp 形式のアフィリエイトリンクは新規アカウントで
+# 「無効リンク」になるため、af_id を直接付けた本家 URL を組み立てる
+_AFFILIATE_URL_TEMPLATES: dict[str, str] = {
+    "videoa": "https://www.dmm.co.jp/digital/videoa/-/detail/=/cid={cid}/?af_id={af_id}&ch=link_tool",
+    "videoc": "https://www.dmm.co.jp/digital/videoc/-/detail/=/cid={cid}/?af_id={af_id}&ch=link_tool",
+    "goods":  "https://www.dmm.co.jp/mono/goods/-/detail/=/cid={cid}/?af_id={af_id}&ch=link_tool",
+}
+
+
+def _build_affiliate_url(content_id: str, floor: str, affiliate_id: str) -> str:
+    """floor に応じた DMM 購入ページ URL を組み立てる。
+    DMM API が返す `affiliateURL` (al.fanza.co.jp 経由) は新規アカウントで
+    拒否される ("無効リンク") ため、直接 cid を含むページ URL に af_id を付与する。
+    """
+    tpl = _AFFILIATE_URL_TEMPLATES.get(floor)
+    if tpl is None:
+        # 未知の floor は videoa パターンにフォールバック
+        tpl = _AFFILIATE_URL_TEMPLATES["videoa"]
+    return tpl.format(cid=content_id, af_id=affiliate_id)
 
 
 # ────────────────────────────────────────────────────────────
@@ -253,10 +277,29 @@ async def upsert_movie(
     floor_prefix: str,
     counters: UpsertCounters,
     *,
+    affiliate_id: str,
+    floor: str,
     dry_run: bool = False,
 ) -> None:
     content_id = _build_content_id(item, floor_prefix)
     iteminfo = item.get("iteminfo") or {}
+
+    image_urls = item.get("imageURL") or {}
+    sample_movie = (item.get("sampleMovieURL") or {})
+    sample_image = (item.get("sampleImageURL") or {})
+
+    # sample_movie_url を先に解決
+    sample_movie_url = (
+        sample_movie.get("size_720_480")
+        or sample_movie.get("size_644_414")
+        or sample_movie.get("size_560_360")
+    )
+
+    # 動画 floor (videoa/videoc) で sample_movie が無いものは取り扱わない
+    # goods など動画系以外は許容
+    if floor in ("videoa", "videoc") and not sample_movie_url:
+        counters.skipped += 1
+        return
 
     # 既存チェック
     existing = (
@@ -266,9 +309,8 @@ async def upsert_movie(
     title = item.get("title") or item.get("name") or "(無題)"
     slug = existing.slug if existing else _build_slug(item, content_id)
 
-    image_urls = item.get("imageURL") or {}
-    sample_movie = (item.get("sampleMovieURL") or {})
-    sample_image = (item.get("sampleImageURL") or {})
+    # アフィリエイト URL を自前で組み立てる (DMM API が返す al.fanza.co.jp は無効リンクになる)
+    affiliate_url = _build_affiliate_url(content_id, floor, affiliate_id)
 
     price_list, price_min = _extract_price_list(item)
     review_count, review_avg = _extract_review(item)
@@ -320,9 +362,10 @@ async def upsert_movie(
         movie.volume = _parse_int(item.get("volume"))
         movie.image_url_list = image_urls.get("list") or movie.image_url_list
         movie.image_url_large = image_urls.get("large") or movie.image_url_large
-        movie.sample_movie_url = (sample_movie.get("size_720_480") or sample_movie.get("size_644_414") or sample_movie.get("size_560_360") or movie.sample_movie_url)
+        movie.sample_movie_url = sample_movie_url or movie.sample_movie_url
         # sample_embed_url は DMM ItemList には基本含まれないので既存値を維持
-        movie.affiliate_url = item.get("affiliateURL") or movie.affiliate_url
+        # affiliate_url は常に自前生成のもので上書き (既存データの無効リンクを一括で修復する)
+        movie.affiliate_url = affiliate_url
         movie.affiliate_url_en = item.get("affiliateURLs_mobile") or movie.affiliate_url_en
         movie.price_list = price_list or movie.price_list
         movie.price_min = price_min if price_min is not None else movie.price_min
@@ -351,9 +394,9 @@ async def upsert_movie(
             volume=_parse_int(item.get("volume")),
             image_url_list=image_urls.get("list"),
             image_url_large=image_urls.get("large"),
-            sample_movie_url=(sample_movie.get("size_720_480") or sample_movie.get("size_644_414") or sample_movie.get("size_560_360")),
+            sample_movie_url=sample_movie_url,
             sample_embed_url=None,
-            affiliate_url=item.get("affiliateURL") or "",
+            affiliate_url=affiliate_url,
             affiliate_url_en=item.get("affiliateURLs_mobile"),
             price_list=price_list,
             price_min=price_min,
@@ -485,7 +528,11 @@ async def main(*, hits_per_floor: int, floors_filter: list[str] | None, dry_run:
     Session = async_sessionmaker(engine, expire_on_commit=False)
 
     counters = UpsertCounters()
-    targets = [f for f in FLOORS if (floors_filter is None or f[2] in floors_filter)]
+    # floors_filter 未指定 (cron 例) のときはデフォルトフロア (動画のみ) を使う
+    effective_filter = (
+        set(DEFAULT_FLOOR_NAMES) if floors_filter is None else set(floors_filter)
+    )
+    targets = [f for f in FLOORS if f[2] in effective_filter]
 
     print(f"[sync_catalog] start: hits_per_floor={hits_per_floor}, floors={[f[2] for f in targets]}, dry_run={dry_run}")
 
@@ -520,7 +567,15 @@ async def main(*, hits_per_floor: int, floors_filter: list[str] | None, dry_run:
                     print(f"  [{floor}] offset={offset} got {len(items)} items")
                     for item in items:
                         try:
-                            await upsert_movie(session, item, prefix, counters, dry_run=dry_run)
+                            await upsert_movie(
+                                session,
+                                item,
+                                prefix,
+                                counters,
+                                affiliate_id=affiliate_id,
+                                floor=floor,
+                                dry_run=dry_run,
+                            )
                             # 1件ずつコミット: そうしないと 1 件失敗で batch 全体が巻き込まれる
                             if not dry_run:
                                 await session.commit()

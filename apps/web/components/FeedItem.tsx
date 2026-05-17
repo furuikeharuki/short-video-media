@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useCallback, useRef } from "react";
+import { useState, useCallback, useRef, useEffect } from "react";
 import type { MovieCard } from "@/lib/api/feed";
 import { reportSampleUrl } from "@/lib/api/sample-url";
 import { probeSampleUrls } from "@/lib/sampleUrlProbe";
@@ -132,6 +132,12 @@ function switchSuffix(url: string, attemptIndex: number, contentId: string | nul
 // フォールバック試行回数の上限 (cid variants 最大 8 種× suffix 4 種 = 最大32 候補)
 const MAX_MP4_ATTEMPTS = 32;
 
+// ハードタイムアウト: これだけ待っても loadedmetadata も error も発火しなければ
+// 「ロードしっぱなしで試した URL が無効」とみなしてフォールバックを起動する。
+// DMM CDN が 403/404 を返す代わりに、コネクションを保持したまま応答を返さないケースでも
+// ユーザーが「いくら待っても再生されない」状態に陥らないようにするためのセーフティネット。
+const VIDEO_HARD_TIMEOUT_MS = 8000;
+
 export default function FeedItem({ item, isActive, isFirst, isSecond = false }: Props) {
   const [modalSlug, setModalSlug] = useState<string | null>(null);
   // サンプル動画 URL のフォールバック試行回数 (0 = オリジナル)
@@ -141,6 +147,10 @@ export default function FeedItem({ item, isActive, isFirst, isSecond = false }: 
   // プローブを二重起動しないためのガード
   const probeInFlightRef = useRef(false);
   const probeExhaustedRef = useRef(false);
+  // <video> がロード中のままスタックしたときに強制的にエラーハンドラを取り込むためのタイマー
+  const hardTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // 現在の <video> に対してもう loadedmetadata / error が発火したかどうか
+  const videoSettledRef = useRef(false);
   const { isAuthenticated, isBookmarked, toggle } = useBookmarks();
 
   const handleOpenModal = useCallback((slug: string) => {
@@ -195,7 +205,16 @@ export default function FeedItem({ item, isActive, isFirst, isSecond = false }: 
     return switchSuffix(item.sample_movie_url, mp4Attempt, item.content_id ?? "") ?? item.sample_movie_url;
   })();
 
+  const clearHardTimeout = useCallback(() => {
+    if (hardTimeoutRef.current) {
+      clearTimeout(hardTimeoutRef.current);
+      hardTimeoutRef.current = null;
+    }
+  }, []);
+
   const handleVideoError = useCallback(() => {
+    videoSettledRef.current = true;
+    clearHardTimeout();
     if (!item.sample_movie_url) return;
     // オリジナル URL で初回エラーが起きたとき:
     //   残りの候補を並列プローブして一気に当たり URL を見つける。
@@ -211,10 +230,12 @@ export default function FeedItem({ item, isActive, isFirst, isSecond = false }: 
           if (found) {
             setProbedUrl(found);
           } else {
-            // プローブが全部ダメだったケース: 以降は直列フォールバックに任せる
-            //   (プローブは preload=metadata で判定しているため、実際の再生と転ぶケースもありうる)
+            // プローブが全部ダメだったケース: この作品はどの URL も存在しないとみなして
+            // サムネ表示にフォールバックさせる (mp4Attempt を上限まで進める)。
+            // プローブは buildSampleUrlCandidates と同じ候補を使うので、
+            // 直列フォールバックも全部ダメなのは明らか。
             probeExhaustedRef.current = true;
-            setMp4Attempt((prev) => prev + 1);
+            setMp4Attempt(MAX_MP4_ATTEMPTS);
           }
         });
         return;
@@ -225,29 +246,44 @@ export default function FeedItem({ item, isActive, isFirst, isSecond = false }: 
     if (probeInFlightRef.current) {
       return;
     }
-    // probed URL もダメだった → サムネイルに落とす (何もしない)
-    if (probedUrl) {
+    // probed URL もダメだった or プローブが全滑した → サムネイルに落とす
+    if (probedUrl || probeExhaustedRef.current) {
+      setMp4Attempt(MAX_MP4_ATTEMPTS);
       return;
     }
-    // プローブ済みだがだめだった / プローブ不要のケース → 従来の直列フォールバック
-    const nextAttempt = mp4Attempt + 1;
-    const nextUrl = switchSuffix(item.sample_movie_url, nextAttempt, item.content_id ?? "");
-    if (nextUrl) {
-      setMp4Attempt(nextAttempt);
+  }, [item.sample_movie_url, item.content_id, probedUrl, clearHardTimeout]);
+
+  // videoSrc が変わるたびにハードタイムアウトをセットし直す。
+  // VIDEO_HARD_TIMEOUT_MS 以内に loadedmetadata / error が発火しないと
+  // 強制的に handleVideoError を呼んでフォールバックを進める。
+  useEffect(() => {
+    if (!isActive || !videoSrc) {
+      clearHardTimeout();
+      return;
     }
-    // これ以上フォールバックが無い場合はサムネイル表示に落ちる
-  }, [item.sample_movie_url, item.content_id, mp4Attempt, probedUrl]);
+    videoSettledRef.current = false;
+    clearHardTimeout();
+    hardTimeoutRef.current = setTimeout(() => {
+      if (!videoSettledRef.current) {
+        // タイムアウト発火: handleVideoError と同じフォールバック経路を取る
+        handleVideoError();
+      }
+    }, VIDEO_HARD_TIMEOUT_MS);
+    return clearHardTimeout;
+  }, [isActive, videoSrc, handleVideoError, clearHardTimeout]);
 
   // 動画が再生可能になったとき、オリジナル URL 以外 (プローブで見つけた or
   // 直列フォールバックで見つけた) で成功した場合は API に報告して DB にキャッシュさせる。
   // 次回以降はキャッシュ済み URL がフィードに乗るためプローブも不要になる。
   const handleLoadedData = useCallback(() => {
+    videoSettledRef.current = true;
+    clearHardTimeout();
     setVideoReady(true);
     const isFallback = probedUrl !== null || mp4Attempt > 0;
     if (isFallback && videoSrc && item.slug && videoSrc !== item.sample_movie_url) {
       void reportSampleUrl(item.slug, videoSrc);
     }
-  }, [setVideoReady, mp4Attempt, probedUrl, videoSrc, item.slug, item.sample_movie_url]);
+  }, [setVideoReady, mp4Attempt, probedUrl, videoSrc, item.slug, item.sample_movie_url, clearHardTimeout]);
 
   // フォールバックを使い果たしたかどうか
   const isMp4Exhausted = mp4Attempt >= MAX_MP4_ATTEMPTS;

@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { signIn, signOut, useSession } from "next-auth/react";
+import { markFeedStartUnmuted } from "@/lib/feedNav";
 
 const MENU_ITEMS = [
   { label: "ホーム", href: "/" },
@@ -134,13 +135,15 @@ export default function HamburgerMenu() {
                 key={item.href}
                 href={item.href}
                 onClick={() => {
-                  // ショート (/feed) に遷移するときは前回のフィードセッションを破棄してランダム再生にする
+                  // ショート (/feed) に遷移するときは前回のフィードセッションを破棄してランダム再生にし、
+                  // クリックをユーザージェスチャーとして採用して音声 ON で起動する
                   if (item.href === "/feed" && typeof window !== "undefined") {
                     try {
                       sessionStorage.removeItem("feed_seed");
                       sessionStorage.removeItem("feed_index");
                       sessionStorage.removeItem("feed_items");
                     } catch {}
+                    markFeedStartUnmuted();
                   }
                   setOpen(false);
                 }}

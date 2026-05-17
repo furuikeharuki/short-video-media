@@ -30,6 +30,12 @@ function consumeStartUnmutedFlag(): boolean {
   return false;
 }
 
+// FeedViewer のスワイプ操作など、表示するスライドが変わったときに呼ばれ、
+// 「この遷移はユーザー操作によるもの」と明示的にマークして unmuted 再生を許す。
+export function markFeedGesture(): void {
+  globalUserGestured = true;
+}
+
 interface UseFeedPlaybackOptions {
   slug: string;
   title: string;
@@ -152,6 +158,22 @@ export function useFeedPlayback({ slug, title, onOpenModal }: UseFeedPlaybackOpt
       startProgressLoop();
     } catch { /* ignore */ }
   }, [startProgressLoop]);
+
+  // 詳細モーダルを閉じたとき、現在アクティブなスライドなら再生を再開する。
+  // （handleDetail で video.pause() しているため、モーダルを閉じても video は paused のままになるため）
+  useEffect(() => {
+    const onModalClose = () => {
+      const video = videoRef.current;
+      if (!video) return;
+      if (!isActiveRef.current) return;
+      if (video.paused) {
+        // モーダルを開いて閉じる一連のユーザー操作をジェスチャーとみなして unmuted 再生を試みる
+        playVideo(video, true);
+      }
+    };
+    window.addEventListener("modal-close", onModalClose);
+    return () => window.removeEventListener("modal-close", onModalClose);
+  }, [playVideo]);
 
   useEffect(() => {
     const video = videoRef.current;

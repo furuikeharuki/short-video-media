@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import FeedItem from "@/components/FeedItem";
 import type { MovieCard } from "@/lib/api/feed";
+import { markFeedGesture } from "@/components/feed/useFeedPlayback";
 
 // 同時にレンダリングするスライド数 = 中央 + 前後1枚ずつの計3枚。
 // 4枚以上の `<video>` を同時に持つとモバイル Safari の同時接続上限に
@@ -65,6 +66,8 @@ export default function FeedViewer({
   const goNext = useCallback(() => {
     const nextIdx = currentIdxRef.current + 1;
     if (nextIdx >= items.length) return;
+    // スワイプやホイールによるスライド遷移をユーザー操作としてマークし、次動画の unmuted 自動再生を許す
+    markFeedGesture();
     currentIdxRef.current = nextIdx;
     setCurrentIndex(nextIdx);
     updateWindow(nextIdx);
@@ -75,6 +78,7 @@ export default function FeedViewer({
   const goPrev = useCallback(() => {
     const next = Math.max(0, currentIdxRef.current - 1);
     if (next === currentIdxRef.current) return;
+    markFeedGesture();
     currentIdxRef.current = next;
     setCurrentIndex(next);
     updateWindow(next);

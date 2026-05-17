@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useEffect, useRef, useCallback, useState } from "react";
+import { markFeedStartUnmuted } from "@/lib/feedNav";
 
 // ショートボタンを押して /feed に遷移するときに、保存されているフィードのスナップショットを破棄して
 // ランダム再生を保証する。FeedClient 側は sessionStorage が空なら getFeed を新しい seed で取り直す。
@@ -12,10 +13,10 @@ function resetFeedSession() {
     sessionStorage.removeItem("feed_seed");
     sessionStorage.removeItem("feed_index");
     sessionStorage.removeItem("feed_items");
-    sessionStorage.setItem("feed_start_unmuted", "1");
   } catch {
     /* ignore */
   }
+  markFeedStartUnmuted();
 }
 
 const NAV_ITEMS = [

@@ -6,6 +6,7 @@ from sqlalchemy import desc, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.models.event import Event
+from app.db.models.movie import Movie
 
 
 ALLOWED_EVENT_TYPES = {
@@ -64,14 +65,20 @@ async def aggregate_view_ranking(
     period: str,
     limit: int = 20,
 ) -> list[tuple[str, int]]:
-    """期間内の event_type='view' を slug 単位で集計し、(slug, count) を降順で返す。"""
+    """期間内の event_type='view' を slug 単位で集計し、(slug, count) を降順で返す。
+
+    現在 movies テーブルに存在している slug のみを集計対象とする。
+    (DB リセット前のレガシー slug や、sync で除外された slug を上位に出さない)
+    """
     since = _since(period)
     stmt = (
         select(Event.slug, func.count(Event.id).label("c"))
+        .join(Movie, Movie.slug == Event.slug)
         .where(
             Event.event_type == "view",
             Event.slug.is_not(None),
             Event.created_at >= since,
+            Movie.is_visible.is_(True),
         )
         .group_by(Event.slug)
         .order_by(desc("c"))
@@ -86,12 +93,17 @@ async def aggregate_view_ranking_all_time(
     *,
     limit: int = 20,
 ) -> list[tuple[str, int]]:
-    """全期間の event_type='view' を slug 単位で集計し、(slug, count) を降順で返す。「人気」セクション用。"""
+    """全期間の event_type='view' を slug 単位で集計し、(slug, count) を降順で返す。「人気」セクション用。
+
+    現在 movies テーブルに存在している slug のみを集計対象とする。
+    """
     stmt = (
         select(Event.slug, func.count(Event.id).label("c"))
+        .join(Movie, Movie.slug == Event.slug)
         .where(
             Event.event_type == "view",
             Event.slug.is_not(None),
+            Movie.is_visible.is_(True),
         )
         .group_by(Event.slug)
         .order_by(desc("c"))

@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import type { MovieCard } from "@/lib/api/feed";
 import { logEvent } from "@/lib/api/events";
 import { savePlaylist, type Playlist } from "@/lib/feedPlaylist";
+import { markFeedStartUnmuted } from "@/lib/feedNav";
 
 type Props = {
   movie: MovieCard;
@@ -47,6 +48,8 @@ export default function MovieCardThumb({
         title: movie.title,
       });
       savePlaylist(playlist);
+      // カードクリックをユーザージェスチャーとして検出し、/feed 起動時に音声 ON で始める
+      markFeedStartUnmuted();
       router.push(`/feed?playlist=${encodeURIComponent(playlist.key)}`);
       return;
     }

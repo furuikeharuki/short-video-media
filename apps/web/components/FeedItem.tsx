@@ -1,8 +1,9 @@
 "use client";
 
-import { useState, useCallback } from "react";
+import { useState, useCallback, useRef } from "react";
 import type { MovieCard } from "@/lib/api/feed";
 import { reportSampleUrl } from "@/lib/api/sample-url";
+import { probeSampleUrls } from "@/lib/sampleUrlProbe";
 import { useBookmarks } from "@/components/auth/BookmarksProvider";
 import { signIn } from "next-auth/react";
 import { useFeedPlayback } from "./feed/useFeedPlayback";
@@ -72,12 +73,12 @@ function zeroPadCid(cid: string, width: number): string {
   return `${prefixNum}${alpha}${num.padStart(width, "0")}${tail}`;
 }
 
-// フォールバック候補 URL を生成。cid の表記 (パディング有無/数字prefix有無) × suffix の全組み合わせを試す。
-function switchSuffix(url: string, attemptIndex: number, contentId: string | null): string | null {
-  if (attemptIndex <= 0) return null;
+// フォールバック候補 URL の全リストを生成。candidates[0] は常にオリジナル URL。
+// cid の表記 (パディング有無/数字prefix有無) × suffix の全組み合わせ。
+function buildSampleUrlCandidates(url: string, contentId: string | null): string[] {
   const parsed = parseSampleUrl(url);
-  if (!parsed) return null;
-  const { suffix: origSuffix } = parsed;
+  if (!parsed) return [url];
+  const { suffix: origSuffix, cid: origCid } = parsed;
 
   // DB 上の content_id を起点に cid バリエーションを組み立てる。
   // パターン:
@@ -108,8 +109,6 @@ function switchSuffix(url: string, attemptIndex: number, contentId: string | nul
   // まずはオリジナル URL を 0 番目に入れておく (重複チェックのため)
   addCandidate(url);
   // suffix を先に試してから cid variant を換える (同じ cid で suffix 違いのほうがヒットしやすい)
-  // オリジナル URL の cid を使う
-  const origCid = parsed.cid;
   for (const suf of MP4_SUFFIXES) {
     if (suf === origSuffix) continue;
     addCandidate(buildSampleUrl(origCid, suf));
@@ -120,6 +119,13 @@ function switchSuffix(url: string, attemptIndex: number, contentId: string | nul
       addCandidate(buildSampleUrl(variant, suf));
     }
   }
+  return candidates;
+}
+
+// フォールバック候補 URL を生成。cid の表記 (パディング有無/数字prefix有無) × suffix の全組み合わせを試す。
+function switchSuffix(url: string, attemptIndex: number, contentId: string | null): string | null {
+  if (attemptIndex <= 0) return null;
+  const candidates = buildSampleUrlCandidates(url, contentId);
   return candidates[attemptIndex] ?? null;
 }
 
@@ -130,6 +136,11 @@ export default function FeedItem({ item, isActive, isFirst, isSecond = false }: 
   const [modalSlug, setModalSlug] = useState<string | null>(null);
   // サンプル動画 URL のフォールバック試行回数 (0 = オリジナル)
   const [mp4Attempt, setMp4Attempt] = useState(0);
+  // プローブで見つけた有効 URL (見つかったらこちらを使う)
+  const [probedUrl, setProbedUrl] = useState<string | null>(null);
+  // プローブを二重起動しないためのガード
+  const probeInFlightRef = useRef(false);
+  const probeExhaustedRef = useRef(false);
   const { isAuthenticated, isBookmarked, toggle } = useBookmarks();
 
   const handleOpenModal = useCallback((slug: string) => {
@@ -173,33 +184,70 @@ export default function FeedItem({ item, isActive, isFirst, isSecond = false }: 
 
   const preloadAttr = isFirst || isSecond ? "auto" : "metadata";
 
-  // オリジナル URL にフォールバック suffix を適用した URL を計算
+  // 表示する動画 URL の優先順:
+  //   1. プローブで見つけた有効 URL (probedUrl)
+  //   2. 直列フォールバックの現在位置 (mp4Attempt > 0)
+  //   3. オリジナル URL (item.sample_movie_url)
   const videoSrc = (() => {
+    if (probedUrl) return probedUrl;
     if (!item.sample_movie_url) return null;
     if (mp4Attempt === 0) return item.sample_movie_url;
     return switchSuffix(item.sample_movie_url, mp4Attempt, item.content_id ?? "") ?? item.sample_movie_url;
   })();
 
   const handleVideoError = useCallback(() => {
-    // 次のフォールバック URL があればそれを試す
     if (!item.sample_movie_url) return;
+    // オリジナル URL で初回エラーが起きたとき:
+    //   残りの候補を並列プローブして一気に当たり URL を見つける。
+    //   これで初回ユーザーもフォールバック 32 回分を待たずに済む。
+    if (!probeExhaustedRef.current && !probeInFlightRef.current && !probedUrl) {
+      probeInFlightRef.current = true;
+      const all = buildSampleUrlCandidates(item.sample_movie_url, item.content_id ?? "");
+      // すでに試してダメだったオリジナル URL を除外
+      const remaining = all.slice(1);
+      if (remaining.length > 0) {
+        void probeSampleUrls(remaining, { concurrency: 4, timeoutMs: 4000 }).then((found) => {
+          probeInFlightRef.current = false;
+          if (found) {
+            setProbedUrl(found);
+          } else {
+            // プローブが全部ダメだったケース: 以降は直列フォールバックに任せる
+            //   (プローブは preload=metadata で判定しているため、実際の再生と転ぶケースもありうる)
+            probeExhaustedRef.current = true;
+            setMp4Attempt((prev) => prev + 1);
+          }
+        });
+        return;
+      }
+    }
+
+    // プローブ中: 何もせずにプローブの結果を待つ (同時に直列フォールバックを走らせない)
+    if (probeInFlightRef.current) {
+      return;
+    }
+    // probed URL もダメだった → サムネイルに落とす (何もしない)
+    if (probedUrl) {
+      return;
+    }
+    // プローブ済みだがだめだった / プローブ不要のケース → 従来の直列フォールバック
     const nextAttempt = mp4Attempt + 1;
     const nextUrl = switchSuffix(item.sample_movie_url, nextAttempt, item.content_id ?? "");
     if (nextUrl) {
       setMp4Attempt(nextAttempt);
     }
     // これ以上フォールバックが無い場合はサムネイル表示に落ちる
-  }, [item.sample_movie_url, item.content_id, mp4Attempt]);
+  }, [item.sample_movie_url, item.content_id, mp4Attempt, probedUrl]);
 
-  // 動画が再生可能になったとき、フォールバックで成功した URL を API に報告して
-  // DB にキャッシュさせる (次回以降はそのキャッシュ URL がフィードに乗る)。
-  // mp4Attempt === 0 はオリジナル URL が動いたケースなので報告不要。
+  // 動画が再生可能になったとき、オリジナル URL 以外 (プローブで見つけた or
+  // 直列フォールバックで見つけた) で成功した場合は API に報告して DB にキャッシュさせる。
+  // 次回以降はキャッシュ済み URL がフィードに乗るためプローブも不要になる。
   const handleLoadedData = useCallback(() => {
     setVideoReady(true);
-    if (mp4Attempt > 0 && videoSrc && item.slug) {
+    const isFallback = probedUrl !== null || mp4Attempt > 0;
+    if (isFallback && videoSrc && item.slug && videoSrc !== item.sample_movie_url) {
       void reportSampleUrl(item.slug, videoSrc);
     }
-  }, [setVideoReady, mp4Attempt, videoSrc, item.slug]);
+  }, [setVideoReady, mp4Attempt, probedUrl, videoSrc, item.slug, item.sample_movie_url]);
 
   // フォールバックを使い果たしたかどうか
   const isMp4Exhausted = mp4Attempt >= MAX_MP4_ATTEMPTS;

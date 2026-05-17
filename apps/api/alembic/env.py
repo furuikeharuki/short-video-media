@@ -43,47 +43,14 @@ def do_run_migrations(connection):
         context.run_migrations()
 
 
-async def run_migrations_online_async() -> None:
+async def run_migrations_online() -> None:
     connectable = create_async_engine(_get_async_url())
     async with connectable.connect() as connection:
         await connection.run_sync(do_run_migrations)
     await connectable.dispose()
 
 
-def run_migrations_online() -> None:
-    """非同期マイグレーションを実行する。
-
-    FastAPI lifespan のように 既にイベントループが動いている環境からも
-    呼べるよう、実行中ループの有無を見て動作を切り替える。
-    """
-    try:
-        running_loop = asyncio.get_running_loop()
-    except RuntimeError:
-        running_loop = None
-
-    if running_loop is None:
-        # CLI 等、ループが無い通常ケース
-        asyncio.run(run_migrations_online_async())
-    else:
-        # 既存ループが動作中の場合は、別スレッドで新しいループを起動して実行
-        import threading
-
-        error: list[BaseException] = []
-
-        def _worker() -> None:
-            try:
-                asyncio.run(run_migrations_online_async())
-            except BaseException as exc:  # noqa: BLE001
-                error.append(exc)
-
-        thread = threading.Thread(target=_worker, daemon=False)
-        thread.start()
-        thread.join()
-        if error:
-            raise error[0]
-
-
 if context.is_offline_mode():
     run_migrations_offline()
 else:
-    run_migrations_online()
+    asyncio.run(run_migrations_online())

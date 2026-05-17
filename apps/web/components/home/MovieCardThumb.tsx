@@ -114,7 +114,8 @@ const styles = `
     width: 100%;
     border-radius: 10px;
     overflow: hidden;
-    background: #1a1a1a;
+    /* contain 時の余白を埋める下地。グラデにして黒一色より馴染ませる */
+    background: linear-gradient(135deg, #1a1a1a, #2a2a2a);
     /* サブピクセルで 1px はみ出させないため明示的に min-width: 0 */
     min-width: 0;
   }
@@ -126,11 +127,12 @@ const styles = `
     position: absolute;
     top: 0; left: 0;
     width: 100%; height: 100%;
-    object-fit: cover; display: block;
+    /* contain にして画像全体を枠内に収める。横長(pl.jpg=800x538) や正方形(jp.jpg=300x300) でも
+       被写体やタイトルが見切れないようにする。余白は .mct-thumb の背景グラデで埋まる。 */
+    object-fit: contain; display: block;
   }
   /* videoa (プロ作品) は pl.jpg (800x538 見開きジャケット) を使っているため、
-     右半分（メインビジュアル側）をクロップ表示し、左半のジャケット表を除去する。
-     videoc の jp.jpg は正方形なので影響しない。 */
+     右半分（メインビジュアル側）に寄せて表示し、左半のジャケット表を中心から外す。 */
   .mct-thumb img[src$="pl.jpg"] {
     object-position: right center;
   }

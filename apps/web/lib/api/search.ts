@@ -19,3 +19,19 @@ export async function searchMovies(query: string): Promise<SearchResponse> {
   if (!res.ok) throw new Error("Failed to search");
   return res.json();
 }
+
+export type ExactField = "director" | "maker" | "label";
+
+/** 監督 / メーカー / レーベルの完全一致検索 */
+export async function searchMoviesByExactField(
+  field: ExactField,
+  value: string,
+): Promise<SearchResponse> {
+  const params = new URLSearchParams({ [field]: value });
+  const res = await fetch(
+    `${API_BASE_URL}/api/v1/search?${params}`,
+    { cache: "no-store" }
+  );
+  if (!res.ok) throw new Error("Failed to search");
+  return res.json();
+}

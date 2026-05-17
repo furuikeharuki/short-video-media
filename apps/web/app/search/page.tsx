@@ -1,14 +1,61 @@
-import { searchMovies } from "@/lib/api/search";
+import { searchMovies, searchMoviesByExactField } from "@/lib/api/search";
 import { getFeed } from "@/lib/api/feed";
 import type { MovieCard } from "@/lib/api/feed";
 import SearchGrid from "./SearchGrid";
 
-type Props = { searchParams: Promise<{ q?: string; genre?: string }> };
+type Props = {
+  searchParams: Promise<{
+    q?: string;
+    genre?: string;
+    director?: string;
+    maker?: string;
+    label?: string;
+  }>;
+};
 
 export default async function SearchPage({ searchParams }: Props) {
-  const { q, genre } = await searchParams;
-  const query  = q?.trim() ?? "";
+  const { q, genre, director, maker, label } = await searchParams;
+  const query    = q?.trim() ?? "";
   const genreTag = genre?.trim() ?? "";
+  const directorName = director?.trim() ?? "";
+  const makerName    = maker?.trim() ?? "";
+  const labelName    = label?.trim() ?? "";
+
+  // 監督 / メーカー / レーベル の完全一致検索
+  if (directorName || makerName || labelName) {
+    let field: "director" | "maker" | "label";
+    let value: string;
+    let prefix: string;
+    if (directorName) { field = "director"; value = directorName; prefix = "監督"; }
+    else if (makerName) { field = "maker"; value = makerName; prefix = "メーカー"; }
+    else { field = "label"; value = labelName; prefix = "レーベル"; }
+
+    let items: MovieCard[] = [];
+    try {
+      const result = await searchMoviesByExactField(field, value);
+      items = result.items;
+    } catch {
+      // エラー時は空配列
+    }
+
+    return (
+      <main style={styles.main}>
+        <p style={styles.meta}>
+          {prefix}「{value}」の作品：{items.length}件
+        </p>
+        {items.length === 0 ? (
+          <p style={styles.empty}>該当する作品が見つかりませんでした</p>
+        ) : (
+          <SearchGrid
+            items={items}
+            playlistKey={`search-${field}-${value}`}
+            playlistTitle={`${prefix}「${value}」`}
+          />
+        )}
+        <style>{pageCSS}</style>
+      </main>
+    );
+  }
 
   if (genreTag) {
     let items: MovieCard[] = [];

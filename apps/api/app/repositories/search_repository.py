@@ -40,3 +40,29 @@ async def search_movies(db: AsyncSession, query: str) -> list[Movie]:
 
     result = await db.execute(stmt)
     return list(result.scalars().unique().all())
+
+
+async def search_movies_by_exact_field(
+    db: AsyncSession,
+    *,
+    director: str | None = None,
+    maker: str | None = None,
+    label: str | None = None,
+) -> list[Movie]:
+    """監督 / メーカー / レーベルの完全一致検索。
+    複数指定時は AND。いずれも None なら空リストを返す。
+    """
+    conditions = []
+    if director:
+        conditions.append(Movie.director_name == director)
+    if maker:
+        conditions.append(Movie.maker_name == maker)
+    if label:
+        conditions.append(Movie.label_name == label)
+
+    if not conditions:
+        return []
+
+    stmt = select(Movie).where(*conditions).order_by(Movie.delivery_date.desc().nullslast())
+    result = await db.execute(stmt)
+    return list(result.scalars().unique().all())

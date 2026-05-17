@@ -100,8 +100,11 @@ const styles = `
   }
   .mct--portrait  { width: 140px; }
   .mct--landscape { width: 220px; }
-  /* 親グリッドのセルいっぱいに伸ばすモード (視聴履歴 / ブックマーク / 検索結果) */
-  .mct--fluid { width: 100%; }
+  /* 親グリッドのセルいっぱいに伸ばすモード (視聴履歴 / ブックマーク / 検索結果)
+     * 複数カードをグリッドに並べると React が同じ <style> をカード毎に崩し順で挿入するため、
+     * カードによって .mct--portrait が後勝ちして 140px のままに見えることがある。
+     * 必ず勝てるよう複合セレクタと !important を使う。 */
+  .mct.mct--fluid { width: 100% !important; }
 
   .mct-thumb {
     position: relative;

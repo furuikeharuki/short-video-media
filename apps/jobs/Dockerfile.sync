@@ -1,0 +1,28 @@
+# ============================================================================
+# apps/jobs/Dockerfile.sync
+# ----------------------------------------------------------------------------
+# Playwright を使わない軽量ジョブ用 (sync_catalog.py 等)。
+# DMM ItemList API を叩いて DB upsert するだけなので Chromium は不要。
+# イメージサイズは ~150MB 程度に収まる。
+#
+# ビルド例:
+#   docker build -f apps/jobs/Dockerfile.sync -t shortvideo/jobs-sync .
+# 実行例:
+#   docker run --rm --env-file .env shortvideo/jobs-sync python -m src.sync_catalog
+# ============================================================================
+FROM python:3.12-slim
+
+WORKDIR /app
+
+# モデル共有のため api と jobs の両方を入れる
+COPY apps/api /app/apps/api
+COPY apps/jobs /app/apps/jobs
+
+RUN pip install --upgrade pip \
+ && pip install -e /app/apps/api \
+ && pip install -e /app/apps/jobs
+
+WORKDIR /app/apps/jobs
+ENV PYTHONPATH=/app/apps/jobs
+
+CMD ["python", "-m", "src.sync_catalog"]

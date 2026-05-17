@@ -1,56 +1,87 @@
+"""/api/v1/feed の契約テスト。
+
+実 DB が無くても通るように、`get_feed_paginated` をモックで差し替える。
+スキーマ (MovieCard) と feed エンドポイントが提供するキーが一致することを保証する。
+"""
+from __future__ import annotations
+
+from typing import Iterator
+
+import pytest
 from fastapi.testclient import TestClient
 
 from app.main import app
+from app.schemas.feed import FeedResponse
+from app.schemas.movie import MovieCard, PriceList
+from app.services import feed_service
 
-client = TestClient(app)
+
+@pytest.fixture
+def client(monkeypatch: pytest.MonkeyPatch) -> Iterator[TestClient]:
+    sample_card = MovieCard(
+        id="00000000-0000-0000-0000-000000000001",
+        content_id="abc00001",
+        title="テスト作品 001",
+        slug="test-movie-001",
+        image_url_list="https://example.com/list.jpg",
+        image_url_large="https://example.com/large.jpg",
+        sample_movie_url=None,
+        affiliate_url="https://www.dmm.co.jp/digital/videoa/-/detail/=/cid=abc00001/?af_id=test-990",
+        price_list=PriceList(list_price=1980, sale_price=980),
+        price_min=980,
+        review_count=10,
+        review_average=4.5,
+        actresses=["テスト女優"],
+        genres=["テストジャンル"],
+        series_name=None,
+    )
+
+    async def fake_get_feed_paginated(*args, **kwargs):  # type: ignore[no-untyped-def]
+        return FeedResponse(items=[sample_card], next_cursor=None)
+
+    monkeypatch.setattr(feed_service, "get_feed_paginated", fake_get_feed_paginated)
+    # endpoint がモジュール直下で import している参照も差し替え
+    from app.api.v1.endpoints import feed as feed_endpoint
+
+    monkeypatch.setattr(feed_endpoint, "get_feed_paginated", fake_get_feed_paginated)
+    yield TestClient(app)
 
 
-def test_read_feed_returns_items():
+def test_feed_returns_items(client: TestClient) -> None:
     response = client.get("/api/v1/feed")
-
     assert response.status_code == 200
-
     data = response.json()
-    assert "items" in data
+    assert "items" in data and isinstance(data["items"], list)
     assert "next_cursor" in data
-    assert isinstance(data["items"], list)
-    assert len(data["items"]) > 0
-    assert data["next_cursor"] is None
+    assert len(data["items"]) >= 1
 
 
-def test_read_feed_item_has_required_fields():
+def test_feed_item_uses_actual_movie_card_schema(client: TestClient) -> None:
+    """MovieCard で定義した実フィールドだけが返ることを確認する。
+
+    旧テストは `thumbnail_url` / `sample_embed_url` を期待していたが、
+    現状のスキーマには存在しないので失敗する。
+    """
     response = client.get("/api/v1/feed")
-
-    assert response.status_code == 200
-
     data = response.json()
-    first_item = data["items"][0]
+    item = data["items"][0]
 
-    assert "id" in first_item
-    assert "title" in first_item
-    assert "slug" in first_item
-    assert "thumbnail_url" in first_item
-    assert "sample_embed_url" in first_item
-    assert "actresses" in first_item
-    assert "genres" in first_item
+    # MovieCard で定義されているフィールド
+    for required_key in (
+        "id",
+        "title",
+        "slug",
+        "image_url_list",
+        "image_url_large",
+        "affiliate_url",
+        "actresses",
+        "genres",
+    ):
+        assert required_key in item, f"missing required key in feed item: {required_key}"
 
-    assert isinstance(first_item["id"], str)
-    assert isinstance(first_item["title"], str)
-    assert isinstance(first_item["slug"], str)
-    assert isinstance(first_item["thumbnail_url"], str)
-    assert isinstance(first_item["sample_embed_url"], str)
-    assert isinstance(first_item["actresses"], list)
-    assert isinstance(first_item["genres"], list)
-
-
-def test_read_feed_first_item_expected_values():
-    response = client.get("/api/v1/feed")
-
-    assert response.status_code == 200
-
-    data = response.json()
-    first_item = data["items"][0]
-
-    assert first_item["id"] == "movie-001"
-    assert first_item["title"] == "サンプル作品 001"
-    assert first_item["slug"] == "sample-movie-001"
+    assert isinstance(item["id"], str)
+    assert isinstance(item["title"], str)
+    assert isinstance(item["slug"], str)
+    assert isinstance(item["affiliate_url"], str)
+    assert isinstance(item["actresses"], list)
+    assert isinstance(item["genres"], list)

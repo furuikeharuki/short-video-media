@@ -5,15 +5,15 @@ services:
     image: postgres:16-alpine
     restart: unless-stopped
     environment:
-      POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: postgres
-      POSTGRES_DB: short_video_media
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+      POSTGRES_DB: ${POSTGRES_DB:-short_video_media}
     ports:
       - "5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres}"]
       interval: 5s
       timeout: 5s
       retries: 5
@@ -33,6 +33,26 @@ services:
     volumes:
       - ../../apps/api:/app
     command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+
+  # ----------------------------------------------------------------------------
+  # jobs: DMM カタログ同期 / MP4 抽出 (Playwright)
+  # 通常は GitHub Actions cron で稼働するため、ローカル検証時のみ起動:
+  #   docker compose --profile jobs run --rm jobs python -m src.sync_catalog
+  # ----------------------------------------------------------------------------
+  jobs:
+    profiles: ["jobs"]
+    build:
+      context: ../../apps/jobs
+      dockerfile: Dockerfile
+    env_file:
+      - .env
+    depends_on:
+      db:
+        condition: service_healthy
+    volumes:
+      - ../../apps/jobs:/app
+    # デフォルトは "何もせず終了"。docker compose run で個別ジョブを実行する
+    command: ["python", "-c", "print('jobs container ready - run a specific module with `docker compose run jobs python -m src.<job>`')"]
 
 volumes:
   postgres_data:

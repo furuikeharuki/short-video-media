@@ -1,0 +1,64 @@
+# ============================================================================
+# apps/jobs/Dockerfile.playwright
+# ----------------------------------------------------------------------------
+# Playwright + Chromium が必要なジョブ用 (extract_mp4_urls.py / debug_extract.py)。
+# Chromium 同梱のためイメージサイズは ~1.5GB と大きい。MP4 直リンク抽出は
+# 静的 fetch では取れないため Playwright が必須。
+#
+# ビルド例:
+#   docker build -f apps/jobs/Dockerfile.playwright -t shortvideo/jobs-pw .
+# 実行例:
+#   docker run --rm --env-file .env shortvideo/jobs-pw \
+#     python -m src.extract_mp4_urls --limit 100
+# ============================================================================
+FROM python:3.12-slim
+
+WORKDIR /app
+
+# Chromium 実行に必要な共有ライブラリ (slim だと不足するため明示)
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        ca-certificates \
+        fonts-liberation \
+        fonts-noto-cjk \
+        libasound2 \
+        libatk-bridge2.0-0 \
+        libatk1.0-0 \
+        libatspi2.0-0 \
+        libcairo2 \
+        libcups2 \
+        libdbus-1-3 \
+        libdrm2 \
+        libgbm1 \
+        libglib2.0-0 \
+        libgtk-3-0 \
+        libnspr4 \
+        libnss3 \
+        libpango-1.0-0 \
+        libx11-6 \
+        libxcb1 \
+        libxcomposite1 \
+        libxdamage1 \
+        libxext6 \
+        libxfixes3 \
+        libxkbcommon0 \
+        libxrandr2 \
+        wget \
+        xdg-utils \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY apps/api /app/apps/api
+COPY apps/jobs /app/apps/jobs
+
+RUN pip install --upgrade pip \
+ && pip install -e /app/apps/api \
+ && pip install -e /app/apps/jobs \
+ && pip install "playwright>=1.45"
+
+# Chromium バイナリ
+RUN python -m playwright install chromium
+
+WORKDIR /app/apps/jobs
+ENV PYTHONPATH=/app/apps/jobs
+
+# デフォルトは MP4 URL 抽出ジョブ
+CMD ["python", "-m", "src.extract_mp4_urls"]

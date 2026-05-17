@@ -9,9 +9,15 @@ dependencies = [
   "asyncpg>=0.29.0",
   "alembic>=1.13.0",
   "pydantic-settings>=2.0.0",
-  "redis[asyncio]>=5.0.0",
   "pyjwt>=2.9.0",
 ]
+
+[project.optional-dependencies]
+# Redis キャッシュを使う場合のみインストール:
+#   pip install -e "apps/api[cache]"
+cache = ["redis[asyncio]>=5.0.0"]
+# テスト用
+dev = ["pytest>=8.0", "pytest-asyncio>=0.23", "httpx>=0.27"]
 
 [tool.setuptools.packages.find]
 where = ["."]

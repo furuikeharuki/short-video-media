@@ -30,8 +30,16 @@ class SampleUrlReport(BaseModel):
 
 
 # 不正 URL を DB に保存されないよう、厳密に cc3001.dmm.co.jp の動画パスだけを許可する。
+# 許容するパス:
+#   - /litevideo/freepv/<a>/<b>/<cid>/<cid>(_mhb_w|mhb|_dmb_w|dmb).mp4  (旧形式・既存作品)
+#   - /pv/<token>/<cid>(_mhb_w|mhb|_dmb_w|dmb)?.mp4                    (新形式・動的署名)
+# pv パスは Playwright 抽出ジョブとクライアント側 sampleUrlProbe の両方で扱う。
 _SAMPLE_URL_RE = re.compile(
-    r"^https://cc3001\.dmm\.co\.jp/litevideo/freepv/[a-z0-9_]/[a-z0-9_]+/[a-z0-9_]+/[a-z0-9_]+(?:_mhb_w|mhb|_dmb_w|dmb)\.mp4$"
+    r"^https://cc3001\.dmm\.co\.jp/(?:"
+    r"litevideo/freepv/[a-z0-9_]/[a-z0-9_]+/[a-z0-9_]+/[a-z0-9_]+(?:_mhb_w|mhb|_dmb_w|dmb)\.mp4"
+    r"|"
+    r"pv/[A-Za-z0-9_\-]+/[a-z0-9_]+(?:_mhb_w|mhb|_dmb_w|dmb)?\.mp4"
+    r")$"
 )
 
 

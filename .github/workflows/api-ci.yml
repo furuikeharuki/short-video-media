@@ -1,0 +1,52 @@
+name: API CI
+
+# apps/api への push / PR で pytest を回す軽量 CI。
+# - DB に接続しないテスト (test_health / test_feed / test_movie_detail / test_data_consistency / test_sample_url_regex) のみ実行
+# - 将来 DB を立てるテストを追加する場合は services.postgres を追加する
+
+on:
+  push:
+    branches: [main, develop]
+    paths:
+      - "apps/api/**"
+      - ".github/workflows/api-ci.yml"
+  pull_request:
+    paths:
+      - "apps/api/**"
+      - ".github/workflows/api-ci.yml"
+
+concurrency:
+  group: api-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  pytest:
+    name: pytest (apps/api)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    defaults:
+      run:
+        working-directory: apps/api
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e .
+          pip install pytest
+
+      - name: Run pytest
+        env:
+          # テスト用ダミー値。production と判定されないよう APP_ENV は development のまま。
+          APP_ENV: development
+          DATABASE_URL: postgresql+asyncpg://test:test@localhost:5432/test
+        run: |
+          python -m pytest -v

@@ -13,19 +13,22 @@ import { recordView } from "@/lib/api/me";
 import type { MovieCard } from "@/lib/api/feed";
 import type { MovieDetail } from "@/lib/api/movies";
 
-const FEED_SEED_KEY  = "feed_seed";
-const FEED_INDEX_KEY = "feed_index";
-const FEED_ITEMS_KEY = "feed_items";
+const FEED_SEED_KEY   = "feed_seed";
+const FEED_INDEX_KEY  = "feed_index";
+const FEED_ITEMS_KEY  = "feed_items";
+const FEED_CURSOR_KEY = "feed_next_cursor";
 
-function saveSession(seed: number, index: number, items: object[]) {
+function saveSession(seed: number, index: number, items: object[], nextCursor: string | null) {
   try {
     sessionStorage.setItem(FEED_SEED_KEY,  String(seed));
     sessionStorage.setItem(FEED_INDEX_KEY, String(index));
     sessionStorage.setItem(FEED_ITEMS_KEY, JSON.stringify(items));
+    if (nextCursor !== null) sessionStorage.setItem(FEED_CURSOR_KEY, nextCursor);
+    else                     sessionStorage.removeItem(FEED_CURSOR_KEY);
   } catch { /* ignore */ }
 }
 
-function loadSession(): { seed: number; index: number; items: object[] } | null {
+function loadSession(): { seed: number; index: number; items: object[]; nextCursor: string | null } | null {
   try {
     const seed  = sessionStorage.getItem(FEED_SEED_KEY);
     const index = sessionStorage.getItem(FEED_INDEX_KEY);
@@ -35,6 +38,7 @@ function loadSession(): { seed: number; index: number; items: object[] } | null 
       seed:  parseInt(seed, 10),
       index: parseInt(index, 10),
       items: JSON.parse(items),
+      nextCursor: sessionStorage.getItem(FEED_CURSOR_KEY),
     };
   } catch { return null; }
 }
@@ -73,6 +77,7 @@ export default function FeedClient() {
   const { status: authStatus } = useSession();
   const seedRef       = useRef<number | null>(null);
   const isFetchingRef = useRef(false);
+  const isFetchingMoreRef = useRef(false);
   const nextCursorRef = useRef<string | null>(null);
 
   const [items,        setItems]        = useState<MovieCard[]>([]);
@@ -102,7 +107,7 @@ export default function FeedClient() {
       setInitialIndex(idx);
       setIsEmpty(feedItems.length === 0);
       nextCursorRef.current = res.next_cursor;
-      saveSession(seed, idx, feedItems);
+      saveSession(seed, idx, feedItems, res.next_cursor);
     } catch (e) {
       console.error("fetchInitial failed", e);
     } finally {
@@ -128,7 +133,7 @@ export default function FeedClient() {
         setIsEmpty(false);
         setIsLoading(false);
         nextCursorRef.current = null;
-        saveSession(seed, idx, pl.items);
+        saveSession(seed, idx, pl.items, null);
         // 遷移後は一度だけ使えればよいのでクリア
         clearPlaylist(playlistKey);
         return;
@@ -149,6 +154,7 @@ export default function FeedClient() {
         sessionStorage.removeItem(FEED_SEED_KEY);
         sessionStorage.removeItem(FEED_INDEX_KEY);
         sessionStorage.removeItem(FEED_ITEMS_KEY);
+        sessionStorage.removeItem(FEED_CURSOR_KEY);
       } catch { /* ignore */ }
       const seed = getOrCreateSeed();
       seedRef.current = seed;
@@ -164,6 +170,7 @@ export default function FeedClient() {
       setInitialIndex(idx);
       setIsEmpty(false);
       setIsLoading(false);
+      nextCursorRef.current = session.nextCursor;
     } else {
       const seed = getOrCreateSeed();
       seedRef.current = seed;
@@ -171,6 +178,50 @@ export default function FeedClient() {
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // 追加ページを取得して items に append する。
+  // FeedViewer は残り 5 件以下になったとき onNearEnd を引いてくるので、
+  // ここで next_cursor を offset に訳して逆引して、重複除去のうえで末尾に足す。
+  // playlist 経由や、API が next_cursor=null を返した (末尾到達) ときは何もしない。
+  const fetchMore = useCallback(async () => {
+    if (isFetchingMoreRef.current) return;
+    const cursor = nextCursorRef.current;
+    const seed   = seedRef.current;
+    if (!cursor || seed === null) return;
+    const offset = parseInt(cursor, 10);
+    if (Number.isNaN(offset)) return;
+
+    isFetchingMoreRef.current = true;
+    try {
+      const res = await getFeed(offset, 20, seed);
+      nextCursorRef.current = res.next_cursor;
+      if (res.items.length === 0) return;
+      setItems((prev) => {
+        const existing = new Set(prev.map((i) => i.id));
+        const fresh    = res.items.filter((i) => !existing.has(i.id));
+        if (fresh.length === 0) return prev;
+        const merged = [...prev, ...fresh];
+        // セッションの items も更新して、モーダル」戻り時にも返せるようにする。
+        // index は handleIndexChange で随時保存されているのでここでは触らず、
+        // 現在保存されている値をそのまま使う。
+        try {
+          const savedIdx = sessionStorage.getItem(FEED_INDEX_KEY);
+          saveSession(seed, savedIdx ? parseInt(savedIdx, 10) : 0, merged, nextCursorRef.current);
+        } catch { /* ignore */ }
+        return merged;
+      });
+    } catch (e) {
+      console.error("fetchMore failed", e);
+    } finally {
+      isFetchingMoreRef.current = false;
+    }
+  }, []);
+
+  // FeedViewer から "残りわずか" になったときに呼ばれる。ただし同一位置で連発しないように
+  // useCallback でラップして、中で fetchMore を一回だけ走らせる。
+  const handleNearEnd = useCallback(() => {
+    void fetchMore();
+  }, [fetchMore]);
 
   const handleIndexChange = useCallback((index: number) => {
     const cur = items[index];
@@ -222,6 +273,7 @@ export default function FeedClient() {
         items={items}
         initialIndex={initialIndex}
         onIndexChange={handleIndexChange}
+        onNearEnd={handleNearEnd}
       />
       <style>{uiStyle}</style>
     </>

@@ -514,14 +514,34 @@ async def upsert_movie(
         counters.inserted += 1
 
     # ジャンル
+    # DMM API の iteminfo.genre に加えて、フロア別の擬似ジャンルを付与する。
+    # videoa (プロ作品) -> 「プロ女優」
+    # videoc (素人作品) -> 「アマチュア」 (DMM 既存ジャンル「素人」と衢突しないよう)
+    # これによりフロント側で floor を意識せずにジャンルチップだけで絞り込める。
     genres_arr = iteminfo.get("genre") or []
-    if isinstance(genres_arr, list) and genres_arr and not dry_run:
-        await _sync_genres(session, movie.id, [g.get("name") for g in genres_arr if g.get("name")])
+    genre_names = [g.get("name") for g in genres_arr if isinstance(g, dict) and g.get("name")]
+    floor_genre = _floor_genre_label(floor)
+    if floor_genre and floor_genre not in genre_names:
+        genre_names.append(floor_genre)
+    if genre_names and not dry_run:
+        await _sync_genres(session, movie.id, genre_names)
 
     # 女優
     actresses_arr = iteminfo.get("actress") or []
     if isinstance(actresses_arr, list) and actresses_arr and not dry_run:
         await _sync_actresses(session, movie.id, actresses_arr)
+
+
+def _floor_genre_label(floor: str) -> str | None:
+    """フロア名から UI 表示用の擬似ジャンル名を返す。
+
+    「アマチュア」としているのは、DMM が本来付けるジャンル「素人」と被らせないため。
+    """
+    if floor == "videoa":
+        return "プロ女優"
+    if floor == "videoc":
+        return "アマチュア"
+    return None
 
 
 async def _sync_genres(session: AsyncSession, movie_id: str, names: list[str]) -> None:

@@ -10,6 +10,25 @@ const PLAY_THRESHOLD = 0.85;
 
 let globalUserGestured = false;
 let globalIsMuted = true;
+let didCheckStartUnmutedFlag = false;
+
+// ショートボタンを押して遷移してきたケース (sessionStorage.feed_start_unmuted=1) だけは
+// そのクリックをユーザージェスチャーとみなして音声 ON で起動する。一回使ったらフラグは消す。
+function consumeStartUnmutedFlag(): boolean {
+  if (didCheckStartUnmutedFlag) return false;
+  didCheckStartUnmutedFlag = true;
+  if (typeof window === "undefined") return false;
+  try {
+    const flag = sessionStorage.getItem("feed_start_unmuted");
+    if (flag === "1") {
+      sessionStorage.removeItem("feed_start_unmuted");
+      globalUserGestured = true;
+      globalIsMuted = false;
+      return true;
+    }
+  } catch { /* ignore */ }
+  return false;
+}
 
 interface UseFeedPlaybackOptions {
   slug: string;
@@ -18,6 +37,9 @@ interface UseFeedPlaybackOptions {
 }
 
 export function useFeedPlayback({ slug, title, onOpenModal }: UseFeedPlaybackOptions) {
+  // 初回マウント時に一回だけショートボタンフラグを消費
+  consumeStartUnmutedFlag();
+
   const videoRef     = useRef<HTMLVideoElement>(null);
   const sectionRef   = useRef<HTMLElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -224,7 +246,7 @@ export function useFeedPlayback({ slug, title, onOpenModal }: UseFeedPlaybackOpt
     e.stopPropagation();
     // navigator.share はユーザージェスチャーの同期コンテキストが必要なため
     // e.preventDefault() を呼ばない
-    const url = `${window.location.origin}/?v=${slug}`;
+    const url = `${window.location.origin}/feed?v=${slug}`;
     if (navigator.share) {
       navigator.share({ title, url }).catch(() => {});
     } else {

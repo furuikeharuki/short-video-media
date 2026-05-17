@@ -2,6 +2,7 @@
 
 import { useState, useCallback } from "react";
 import type { MovieCard } from "@/lib/api/feed";
+import { reportSampleUrl } from "@/lib/api/sample-url";
 import { useBookmarks } from "@/components/auth/BookmarksProvider";
 import { signIn } from "next-auth/react";
 import { useFeedPlayback } from "./feed/useFeedPlayback";
@@ -190,6 +191,16 @@ export default function FeedItem({ item, isActive, isFirst, isSecond = false }: 
     // これ以上フォールバックが無い場合はサムネイル表示に落ちる
   }, [item.sample_movie_url, item.content_id, mp4Attempt]);
 
+  // 動画が再生可能になったとき、フォールバックで成功した URL を API に報告して
+  // DB にキャッシュさせる (次回以降はそのキャッシュ URL がフィードに乗る)。
+  // mp4Attempt === 0 はオリジナル URL が動いたケースなので報告不要。
+  const handleLoadedData = useCallback(() => {
+    setVideoReady(true);
+    if (mp4Attempt > 0 && videoSrc && item.slug) {
+      void reportSampleUrl(item.slug, videoSrc);
+    }
+  }, [setVideoReady, mp4Attempt, videoSrc, item.slug]);
+
   // フォールバックを使い果たしたかどうか
   const isMp4Exhausted = mp4Attempt >= MAX_MP4_ATTEMPTS;
   // 中央のスライド (isActive=true) だけ <video> を描画する。
@@ -210,7 +221,7 @@ export default function FeedItem({ item, isActive, isFirst, isSecond = false }: 
             fastBadgeRef={fastBadgeRef}
             overlayRef={overlayRef}
             videoRef={videoRef}
-            onLoadedData={() => setVideoReady(true)}
+            onLoadedData={handleLoadedData}
             onCanPlay={() => setVideoReady(true)}
             onError={handleVideoError}
             onTouchStart={handleTouchStart}

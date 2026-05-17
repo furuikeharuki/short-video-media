@@ -87,22 +87,29 @@ export const itemStyle = `
     -webkit-user-drag: none;
     pointer-events: none;
   }
-  /* サムネイル上で中央をクルクル回るスピナー */
-  .shimmer-spinner {
+  /*
+    ローディングスピナー。overlay-wrap (inset:0、モバイルでは bottom:60px) の
+    中央に表示されるため、一時停止アイコン (.action-overlay) と同じ位置になる。
+    初回ロード中・再生中のバッファ不足 (waiting/stalled) の両方で使われる。
+  */
+  .loading-spinner {
     position: absolute;
-    top: 50%;
-    left: 50%;
+    inset: 0;
+    align-items: center;
+    justify-content: center;
+    pointer-events: none;
+  }
+  .loading-spinner::before {
+    content: "";
     width: 48px;
     height: 48px;
-    margin: -24px 0 0 -24px;
     border: 4px solid rgba(255, 255, 255, 0.25);
     border-top-color: #fff;
     border-radius: 50%;
-    animation: shimmer-spin 0.9s linear infinite;
-    pointer-events: none;
-    z-index: 2;
+    animation: loading-spin 0.9s linear infinite;
+    filter: drop-shadow(0 2px 8px rgba(0,0,0,0.7));
   }
-  @keyframes shimmer-spin {
+  @keyframes loading-spin {
     0%   { transform: rotate(0deg); }
     100% { transform: rotate(360deg); }
   }
@@ -287,9 +294,9 @@ export const itemStyle = `
     100% { opacity: 0; transform: translate(-50%, -50%) scale(1.35); }
   }
   @media (prefers-reduced-motion: reduce) {
-    .shimmer-spinner { animation: none; }
-    .skip-ripple     { animation: none; opacity: 0; }
-    .action-overlay  { animation: none; opacity: 0; }
+    .loading-spinner::before { animation: none; }
+    .skip-ripple             { animation: none; opacity: 0; }
+    .action-overlay          { animation: none; opacity: 0; }
   }
   @media (max-width: 767px) {
     .feed-video,

@@ -151,9 +151,22 @@ async def fetch_items(client: httpx.AsyncClient, fp: FetchParams) -> list[dict]:
         "output": "json",
     }
     res = await client.get(DMM_ENDPOINT, params=params, timeout=20)
-    res.raise_for_status()
+    if res.status_code >= 400:
+        # DMM は 4xx でも JSON でエラー詳細を返すので、それを見えるようにする
+        body_snippet = res.text[:400]
+        raise httpx.HTTPStatusError(
+            f"HTTP {res.status_code} from DMM ItemList: {body_snippet}",
+            request=res.request,
+            response=res,
+        )
     data = res.json()
-    items = (data.get("result") or {}).get("items") or []
+    # 説明、ステータス、エラーも見えるようにデバッグログ
+    result = data.get("result") or {}
+    status = result.get("status")
+    if status and status != 200:
+        msg = result.get("message") or result.get("errors") or data
+        raise RuntimeError(f"DMM API status={status}: {msg}")
+    items = result.get("items") or []
     return items
 
 
@@ -486,7 +499,7 @@ async def main(*, hits_per_floor: int, floors_filter: list[str] | None, dry_run:
                     )
                     try:
                         items = await fetch_items(client, fp)
-                    except httpx.HTTPError as e:
+                    except (httpx.HTTPError, RuntimeError) as e:
                         print(f"  [ERROR] {floor} offset={offset}: {e}")
                         counters.errors += 1
                         break

@@ -51,3 +51,19 @@ export async function resolveMp4Url(
     return null;
   }
 }
+
+/**
+ * キャッシュされた sample_movie_url をサーバー側で NULL に戻すよう依頼する。
+ *
+ * <video> が ORB / 404 / その他の理由で再生に失敗したときに叩く。
+ * 成功・失敗ともにエラーを抔ぐさない fire-and-forget 専用ヘルパー。
+ */
+export async function invalidateSampleUrl(slug: string): Promise<void> {
+  if (!slug) return;
+  const url = `${API_BASE_URL}/api/v1/movies/${encodeURIComponent(slug)}/sample-url`;
+  try {
+    await fetch(url, { method: "DELETE", cache: "no-store" });
+  } catch {
+    // ネットワークエラーは無視 (次回アクセスでもう一度哼ぁるチャンスがある)
+  }
+}

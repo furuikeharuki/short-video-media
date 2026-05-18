@@ -114,17 +114,17 @@ async def get_feed_paginated(
         page_ids = shuffled_ids[offset: offset + limit]
 
         if not page_ids:
-            return FeedResponse(items=[], next_cursor=None)
+            return FeedResponse(items=[], next_cursor=None, total=total)
 
         card_map = await _get_movies_with_cache(db, page_ids)
         items = [card_map[i] for i in page_ids if i in card_map]
 
         next_offset = offset + limit
         next_cursor = str(next_offset) if next_offset < total else None
-        return FeedResponse(items=items, next_cursor=next_cursor)
+        return FeedResponse(items=items, next_cursor=next_cursor, total=total)
 
     movies, total = await get_movies_paginated(db, offset=offset, limit=limit, genres=genres)
     items = [_to_card(m) for m in movies]
     next_offset = offset + limit
     next_cursor = str(next_offset) if next_offset < total else None
-    return FeedResponse(items=items, next_cursor=next_cursor)
+    return FeedResponse(items=items, next_cursor=next_cursor, total=total)

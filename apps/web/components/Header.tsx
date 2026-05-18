@@ -2,7 +2,7 @@
 
 import { usePathname, useRouter } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { FALLBACK_TAGS } from "@/lib/api/tags";
+import { FALLBACK_TAGS, fetchPopularTags } from "@/lib/api/tags";
 import HamburgerMenu from "@/components/HamburgerMenu";
 import { logEvent } from "@/lib/api/events";
 
@@ -25,6 +25,21 @@ export default function Header() {
 
   const [open, setOpen]   = useState(false);
   const [query, setQuery] = useState("");
+  // 人気ジャンル TOP10 (登録数の多い順)。API 失敗時は FALLBACK_TAGS を使う。
+  const [popularGenres, setPopularGenres] = useState<string[]>(FALLBACK_TAGS);
+
+  // ドロップダウンを最初に開いたタイミングで人気ジャンルを取得。
+  // ヘッダーがマウントされた直後ではなく開いたときに遅延ロードして初期表示を軽くする。
+  const fetchedGenresRef = useRef(false);
+  useEffect(() => {
+    if (!open || fetchedGenresRef.current) return;
+    fetchedGenresRef.current = true;
+    fetchPopularTags(10)
+      .then((list) => {
+        if (list.length > 0) setPopularGenres(list);
+      })
+      .catch(() => { /* フォールバックのまま */ });
+  }, [open]);
 
   // ヘッダーの実高さを --header-h に同期する。
   // safe-area-inset-top やフォントサイズの差異で 52px から微妙にズレるケースを吸収し、
@@ -90,6 +105,20 @@ export default function Header() {
       // 人気ジャンル集計用に search イベントを送る (失敗は無視)
       logEvent({ event_type: "search", search_query: trimmed });
       router.push(`/search?q=${encodeURIComponent(trimmed)}`);
+    },
+    [router]
+  );
+
+  // 人気ジャンルのタグをクリックしたとき: キーワード検索ではなくジャンル絞り込みに飛ばす。
+  // SearchInfiniteGrid の kind:"genre" ルートに乗るので 20件前後ずつ全件読める。
+  const submitGenre = useCallback(
+    (genre: string) => {
+      const trimmed = genre.trim();
+      if (!trimmed) return;
+      setOpen(false);
+      setQuery("");
+      logEvent({ event_type: "search", search_query: trimmed });
+      router.push(`/search?genre=${encodeURIComponent(trimmed)}`);
     },
     [router]
   );
@@ -202,16 +231,16 @@ export default function Header() {
         </form>
 
         <div className="search-tags-section">
-          <p className="search-tags-label">人気タグ</p>
+          <p className="search-tags-label">人気ジャンル</p>
           <div className="search-tags">
-            {FALLBACK_TAGS.map((tag) => (
+            {popularGenres.map((genre) => (
               <button
-                key={tag}
+                key={genre}
                 type="button"
                 className="search-tag-btn"
-                onClick={() => submit(tag)}
+                onClick={() => submitGenre(genre)}
               >
-                #{tag}
+                #{genre}
               </button>
             ))}
           </div>

@@ -26,6 +26,7 @@ export type MovieCard = {
 export type FeedResponse = {
   items: MovieCard[];
   next_cursor: string | null;
+  total?: number | null;
 };
 
 const API_BASE_URL =

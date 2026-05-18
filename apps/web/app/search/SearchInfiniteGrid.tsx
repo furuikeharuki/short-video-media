@@ -82,15 +82,14 @@ async function fetchPage(
     };
   }
   // genre
-  const res = await getFeed(offset, limit, 0, [source.genre]);
-  // /api/v1/feed は total を返さないので未確定にする。
-  // next_cursor が null かどうかで末尾判定する。
+  // seed を渡さず通常ページングで取り出す。これにより total を確実に取得できる。
+  const res = await getFeed(offset, limit, undefined, [source.genre]);
   const nextOffset =
     res.next_cursor !== null ? parseInt(res.next_cursor, 10) : null;
   return {
     items: res.items,
     nextOffset: Number.isNaN(nextOffset as number) ? null : nextOffset,
-    total: null,
+    total: res.total ?? null,
   };
 }
 
@@ -185,9 +184,14 @@ export default function SearchInfiniteGrid({
   }, [fetchMore]);
 
   // 件数表示文字列
-  // total が確定していればそれを使う。未確定 (ジャンル) なら現読み込み件数を表示。
+  // total が確定していればそれを使う。万が一 total が取れなくても、
+  // 全件読み終わっていれば実数で表示する (next_cursor が null のとき)。
   const countLabel =
-    total !== null ? `${total}件` : `${items.length}件${nextOffset !== null ? "+" : ""}`;
+    total !== null
+      ? `${total}件`
+      : nextOffset === null
+        ? `${items.length}件`
+        : `${items.length}件+`;
 
   if (isInitialLoading) {
     return (

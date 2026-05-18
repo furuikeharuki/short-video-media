@@ -37,7 +37,7 @@ export default function FeedItem({ item, isActive, isFirst, isSecond = false }: 
   // 表示する動画 URL の解決ロジック。
   // - cachedSrc を optimistic に使い、無ければ API を叩く
   // - <video> がエラーを返したら 1 回だけ force=true で再 resolve する
-  const { videoSrc, exhausted, handleError } = useResolvedVideoSrc({
+  const { videoSrc, exhausted, resolving, handleError } = useResolvedVideoSrc({
     slug: item.slug,
     cachedSrc: item.sample_movie_url,
     enabled: isActive,
@@ -175,6 +175,21 @@ export default function FeedItem({ item, isActive, isFirst, isSecond = false }: 
               draggable={false}
               onContextMenu={(e) => e.preventDefault()}
             />
+            {/*
+              resolver へ MP4 URL を問い合わせている間はサムネの上に既存のローディングスピナーを表示しておく。
+              videoSrc が返ってくると showVideo=true に切り替わり、<video> がマウントされて useFeedPlayback が
+              isActive=true のタイミングで自動的に play() を呼ぶ (useFeedPlayback.ts L218-228)。
+              exhausted (resolve 試行を使い切った) 状態ではスピナーを出さずサムネのみ表示する。
+            */}
+            {isActive && resolving && !exhausted ? (
+              <div className="overlay-wrap">
+                <div
+                  className="loading-spinner"
+                  aria-label="動画を読み込み中"
+                  style={{ display: "flex" }}
+                />
+              </div>
+            ) : null}
           </div>
         )}
 

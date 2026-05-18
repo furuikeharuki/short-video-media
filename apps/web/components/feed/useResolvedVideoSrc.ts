@@ -39,6 +39,11 @@ interface Args {
 interface Result {
   videoSrc: string | null;
   exhausted: boolean;
+  /**
+   * resolver への問い合わせ中 / force リトライ中で videoSrc がまだない状態。
+   * この値が true の間はサムネの上にローディングを導出するために使う。
+   */
+  resolving: boolean;
   handleError: () => void;
 }
 
@@ -153,6 +158,7 @@ export function useResolvedVideoSrc({
   return {
     videoSrc: state.src,
     exhausted: state.phase === "exhausted",
+    resolving: state.phase === "resolving" || state.phase === "retrying",
     handleError,
   };
 }

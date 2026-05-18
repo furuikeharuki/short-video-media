@@ -83,8 +83,10 @@ declare global {
 
 // ナビゲーションを非表示にするパス。
 // - /age-gate: 年齢確認を通さずにショート/ホーム等へ遷移されないように
-// - /actresses: 女優詳細ページは没入型レイアウトのためボトムナビを隠す
-const NAV_HIDDEN_PATHS = ["/age-gate", "/actresses"];
+// - /actresses, /movies: 詳細ページは没入型レイアウトのためボトムナビを隠す
+//   (フィード上のモーダル MovieDetailModal は /feed のまま pushState するだけなので
+//    ここではヒットせず、フルページの /movies/[slug] だけ這移したときに隠れる)
+const NAV_HIDDEN_PATHS = ["/age-gate", "/actresses", "/movies"];
 
 export default function BottomNav() {
   const pathname    = usePathname();

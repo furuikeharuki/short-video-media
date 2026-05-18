@@ -10,6 +10,9 @@ dependencies = [
   "alembic>=1.13.0",
   "pydantic-settings>=2.0.0",
   "pyjwt>=2.9.0",
+  # resolver サービス (Xserver VPS) を呼ぶための HTTP クライアント。
+  # テストでも使うため dev だけでなく本番依存にも含める。
+  "httpx>=0.27",
 ]
 
 [project.optional-dependencies]

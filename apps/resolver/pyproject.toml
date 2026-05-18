@@ -1,0 +1,28 @@
+[project]
+name = "short-video-media-resolver"
+version = "0.1.0"
+description = "DMM litevideo iframe から MP4 直リンクを抽出する FastAPI サービス (Stage A: Xserver VPS, Stage B: AWS)"
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi>=0.115.0",
+    "uvicorn[standard]>=0.30.0",
+    "pydantic>=2.7",
+    "pydantic-settings>=2.2",
+    "playwright>=1.45",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.23",
+    "httpx>=0.27",
+]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["src*"]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]
+asyncio_mode = "auto"

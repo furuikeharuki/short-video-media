@@ -14,3 +14,19 @@ os.environ.setdefault(
     "DATABASE_URL",
     "postgresql+asyncpg://test:test@localhost:5432/test_db",
 )
+
+import pytest
+
+
+@pytest.fixture(autouse=True)
+def _reset_resolver_client_state() -> None:
+    """テスト間で resolver_client の in-flight / 短期キャッシュをクリアする。
+
+    同じ content_id を複数テストで使うと、前のテストのキャッシュが残っていて
+    MockTransport の handler が呼ばれない事故を防ぐ。
+    """
+    from app.services import resolver_client
+
+    resolver_client._reset_state_for_tests()
+    yield
+    resolver_client._reset_state_for_tests()

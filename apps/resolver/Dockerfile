@@ -21,7 +21,9 @@
 # 実行例 (Xserver VPS):
 #   docker compose up -d  (Caddy + resolver のリバプロ構成)
 # ============================================================================
-FROM mcr.microsoft.com/playwright/python:v1.45.0-jammy
+# ベースイメージのバージョンは pyproject.toml の playwright と必ず一致させること。
+# 不一致だと "BrowserType.launch: Executable doesn't exist" でクラッシュする。
+FROM mcr.microsoft.com/playwright/python:v1.60.0-jammy
 
 WORKDIR /app
 

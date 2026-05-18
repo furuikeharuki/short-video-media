@@ -1,0 +1,111 @@
+name: Post Bootstrap (Resolve + Actress Profiles)
+
+# sync-catalog-by-year.yml で全期間 movies を取得した後に走らせる仕上げジョブ。
+#
+#   1. resolve_sample_urls: NULL の sample_movie_url を resolver (Xserver VPS) で全件埋める
+#   2. sync_actress_profiles: 取得した女優のプロフィール (13 列) を ActressSearch API で埋める
+#
+# トリガー:
+#   - workflow_dispatch のみ (定期実行は別 workflow が担当)
+#
+# 必要な Secrets:
+#   - DATABASE_URL, RESOLVER_BASE_URL, RESOLVER_API_KEY
+#   - DMM_API_ID, DMM_AFFILIATE_ID, DMM_LINK_AFFILIATE_ID
+
+on:
+  workflow_dispatch:
+    inputs:
+      resolve_concurrency:
+        description: "resolver 並列度 (VPS RESOLVER_CONCURRENCY=8 に合わせる)"
+        required: false
+        default: "4"
+      resolve_limit:
+        description: "resolve 対象件数の上限 (空 = 全件)"
+        required: false
+        default: ""
+      actress_profile_args:
+        description: "sync_actress_profiles への追加引数 (例: --only-missing / 空文字で全女優)"
+        required: false
+        default: "--only-missing"
+      skip_resolve:
+        description: "resolve をスキップ"
+        required: false
+        default: "false"
+        type: choice
+        options:
+          - "false"
+          - "true"
+      skip_actress:
+        description: "actress profiles をスキップ"
+        required: false
+        default: "false"
+        type: choice
+        options:
+          - "false"
+          - "true"
+
+concurrency:
+  group: post-bootstrap-prod
+  cancel-in-progress: false
+
+jobs:
+  post-bootstrap:
+    name: Resolve sample URLs + sync actress profiles
+    runs-on: ubuntu-latest
+    # resolver 経由でも数万件あれば 1〜数時間、女優プロフィールは数千名で 1 時間以内
+    timeout-minutes: 350
+
+    defaults:
+      run:
+        working-directory: apps/jobs
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ../api
+          pip install -e .
+
+      # ────────────────────────────────────────────────────────
+      # 1. resolve_sample_urls: NULL を全件 resolver で埋める
+      # ────────────────────────────────────────────────────────
+      - name: Resolve sample_movie_url
+        if: ${{ github.event.inputs.skip_resolve != 'true' }}
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          RESOLVER_BASE_URL: ${{ secrets.RESOLVER_BASE_URL }}
+          RESOLVER_API_KEY: ${{ secrets.RESOLVER_API_KEY }}
+          CONCURRENCY: ${{ github.event.inputs.resolve_concurrency || '4' }}
+          LIMIT_INPUT: ${{ github.event.inputs.resolve_limit || '' }}
+        run: |
+          ARGS="--concurrency ${CONCURRENCY}"
+          if [ -n "${LIMIT_INPUT}" ]; then
+            ARGS="${ARGS} --limit ${LIMIT_INPUT}"
+          fi
+          echo "Running: python -m src.resolve_sample_urls ${ARGS}"
+          python -m src.resolve_sample_urls ${ARGS}
+
+      # ────────────────────────────────────────────────────────
+      # 2. sync_actress_profiles: DB の女優プロフィールを ActressSearch API で更新
+      # ────────────────────────────────────────────────────────
+      - name: Sync actress profiles
+        if: ${{ github.event.inputs.skip_actress != 'true' }}
+        env:
+          DMM_API_ID: ${{ secrets.DMM_API_ID }}
+          DMM_AFFILIATE_ID: ${{ secrets.DMM_AFFILIATE_ID }}
+          DMM_LINK_AFFILIATE_ID: ${{ secrets.DMM_LINK_AFFILIATE_ID }}
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          PROFILE_ARGS_INPUT: ${{ github.event.inputs.actress_profile_args || '--only-missing' }}
+        run: |
+          ARGS="${PROFILE_ARGS_INPUT}"
+          echo "Running: python -m src.sync_actress_profiles ${ARGS}"
+          python -m src.sync_actress_profiles ${ARGS}

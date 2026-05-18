@@ -17,7 +17,8 @@
 | GET | `/api/v1/health` | - | ヘルスチェック (`{"status":"ok"}`) |
 | GET | `/api/v1/feed` | - | 縦スクロール用カーソル付きフィード |
 | GET | `/api/v1/movies/{slug}` | - | 作品詳細 |
-| GET | `/api/v1/movies/{slug}/sample-url` | - | MP4 サンプル URL の解決 |
+| GET | `/api/v1/movies/{slug}/resolve-mp4` | - | MP4 サンプル URL の動的解決（resolver 経由、`?force=true` でキャッシュバイパス） |
+| DELETE | `/api/v1/movies/{slug}/sample-url` | - | DB 上の `sample_movie_url` を NULL に戻す。クライアントの self-heal 用（204 No Content） |
 | GET | `/api/v1/search` | - | 検索 (キーワード / フィルタ) |
 | GET | `/api/v1/tags` | - | ジャンル一覧 |
 | GET | `/api/v1/rankings` | - | `?period=daily\|weekly\|monthly` |

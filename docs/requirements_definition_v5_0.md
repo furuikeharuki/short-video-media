@@ -4,7 +4,15 @@
 **リポジトリ**: https://github.com/furuikeharuki/short-video-media
 **作成日**: 2026-05-17
 **最終更新**: 2026-05-18
-**バージョン**: 5.3
+**バージョン**: 5.4
+
+**v5.3 → v5.4 の主な変更点**:
+- **resolver 待ち中のローディング表示（PR #42）** — `useResolvedVideoSrc` に `resolving: boolean` を追加し、`phase === "resolving" | "retrying"` の間は `FeedItem` がサムネの上に既存のローディングスピナーを表示するようにした。
+- **resolver 遅延後の自動再生バグ修正（PR #43）** — `useFeedPlayback` の自動再生 effect / IntersectionObserver fallback effect の依存配列に `videoSrc` が含まれていなかったため、`videoSrc=null` で mount したあとに `<video>` が后から src を受け取っても再生が起動しないケースがあった。`videoSrc: string | null` を hook の prop に追加し、両 effect の deps に含めて修正。
+- **resolver MP4 URL の prefetch（PR #44）** — 新 hook `usePrefetchResolveMp4(items, currentIndex)` を追加。現在再生中のスライドより先 3 枚分の slug について、`sample_movie_url` を持たないものだけ fire-and-forget で `resolveMp4Url` を叩き、`apps/api` 側の in-flight デデュープ + 60s 成功キャッシュ（PR #40）を事前に温める。`<video>` 要素は増やさず `WINDOW_SIZE=1` を維持。
+- **動画バイトの prefetch（PR #45）** — 新 hook `usePrefetchVideoBytes(items, currentIndex)` + 新コンポーネント `PrefetchVideoBuffer` を追加。`currentIndex+1 … +2` のスライドについて、画面外 (1px / opacity:0 / pointer-events:none) に `<video preload="auto" muted playsInline>` をマウントし、`useEffect` で明示的に `load()` を呼んで iOS Safari でも確実に preload を起動させる。DMM CDN は `Cache-Control: no-store` だが CloudFront エッジに `age` 最大 14 日のキャッシュがあり、事前にメディアバイトを取ると HTTP/2 接続が温まり再生開始の TTFB が縮む。業界事例（TikTok / Reels / Shorts）と同じ next 1–2 件先を採用。
+- **`<video>` 同時マウント数 `WINDOW_SIZE` を 2 → 1 に変更** — モバイル Safari の同時接続上限を避けるため、`FeedViewer` はアクティブスライド 1 枚だけをレンダリングし、前後は hidden な prefetch buffer で補う構造に統一。
+- **サンプル URL 推測ロジック関連ファイルの厳密な整理** — PR #39 で削除済みの `apps/web/lib/sampleUrlProbe.ts` / `apps/web/lib/api/sample-url.ts` を §3.1.3 / §3.1.4 から除去し、現状の `apps/web/components/feed/` 下に正しく反映。
 
 **v5.2 → v5.3 の主な変更点**:
 - **Phase 4 Stage A を完了** — `apps/resolver/` を Xserver VPS 2GB Tokyo（`162.43.24.128`）に本番デプロイ済み。`apps/api` の `GET /api/v1/movies/{slug}/resolve-mp4` 経由で稼働中。
@@ -175,10 +183,15 @@ FANZA アフィリエイトを収益源とした、TikTok 風縦スクロール 
 #### 3.1.2 主要コンポーネント
 
 - **フィード**:
-  - `app/FeedClient.tsx`: 仮想スクロール（`translateY` 方式、`WINDOW_SIZE = 2`, `PREFETCH_AHEAD = 8`）。`scroll-snap` は使用しない。
-  - `components/FeedViewer.tsx`: 検索フィードや汎用利用向けのビューワ
-  - `components/FeedItem.tsx`: フィード 1 件分（現在 PR #2 で分割中）
-  - `components/feed/FeedItemMeta.tsx`・`FeedItemSideActions.tsx`・`FeedItemVideo.tsx`・`feedItemStyle.ts`・`useFeedPlayback.ts`: 分割後の責務別ファイル
+  - `app/FeedClient.tsx`: 仮想スクロール（`translateY` 方式、`scroll-snap` は使わない）。
+  - `components/FeedViewer.tsx`: フィードのコアビューワ。`WINDOW_SIZE = 1` （モバイル Safari の同時接続上限回避のためアクティブ 1 枚のみレンダリング）。裏で `usePrefetchResolveMp4`（先 3 枚分の MP4 URL 解決）と `usePrefetchVideoBytes`（先 2 枚分の動画バイト）を呼び、prefetch 用の隠し `<video>` を `PrefetchVideoBuffer` としてマウント。
+  - `components/FeedItem.tsx`: フィード 1 件分のコンテナ。`useResolvedVideoSrc` + `useFeedPlayback` を使用し、resolver 待ちのローディングオーバーレイを表示する。
+  - `components/feed/FeedItemMeta.tsx`・`FeedItemSideActions.tsx`・`FeedItemVideo.tsx`・`feedItemStyle.ts`: 責務別のフィードパーツ
+  - `components/feed/useResolvedVideoSrc.ts`: MP4 URL 解決 hook。`initial / resolving / ready / retrying / exhausted` のフェーズを持ち、`resolving` フラグを返す。
+  - `components/feed/useFeedPlayback.ts`: 自動再生 / mute / ジェスチャー判定を担う hook。`videoSrc` prop を deps に含めて、resolver 遅延後の mount でも確実に自動再生させる。
+  - `components/feed/usePrefetchResolveMp4.ts`: 先 3 枚分の MP4 URL を事前解決して API キャッシュを温める hook。
+  - `components/feed/usePrefetchVideoBytes.ts`: 先 2 枚分の動画バイトを裏で取るための slot 管理 hook。
+  - `components/feed/PrefetchVideoBuffer.tsx`: 画面外に `<video preload="auto">` を配置し、メディアバイトをバックグラウンドで先読みさせる。
 - **ナビゲーション**: `Header.tsx`（固定ヘッダー、`--header-h: 52px`）、`HamburgerMenu.tsx`、`BottomNav.tsx`、`BackButton.tsx`
 - **作品詳細**: `components/movie-detail/MovieDetailContent.tsx`・`MovieDetailModal.tsx`
 - **ホーム**: `components/home/HorizontalCardRow.tsx`・`MovieCardThumb.tsx`・`PullToRefresh.tsx`
@@ -200,15 +213,16 @@ FANZA アフィリエイトを収益源とした、TikTok 風縦スクロール 
 | `actresses.ts` | 女優詳細 |
 | `events.ts` | イベント送信（POST `/api/v1/events`） |
 | `me.ts` | マイページ（ブックマーク / 視聴履歴の取得・更新） |
-| `sample-url.ts` | クライアントが発見した有効 MP4 URL を API に報告 |
+| `resolve-mp4.ts` | `GET /api/v1/movies/{slug}/resolve-mp4` を叩いて再生可能な MP4 URL を取得。`force` / `signal` オプション対応。失敗時は null を返しサムネにフォールバック。 |
 
 #### 3.1.4 補助ロジック（`apps/web/lib/`）
 
 - `feedOrder.ts`: seed 生成・既読管理
 - `feedNav.ts` / `feedPlaylist.ts`: フィード内ナビゲーション
-- `sampleUrlProbe.ts`: クライアント側で MP4 URL を並列プローブして最初に成功したものを採用＋学習キャッシュ
 - `config/env.ts`: 環境変数アクセス
 - `analytics/analytics.ts`: イベント送信ヘルパ
+
+※ PR #39 で `apps/web/lib/sampleUrlProbe.ts` / `apps/web/lib/api/sample-url.ts` は削除済み。クライアント側での MP4 URL 推測ロジックは全廃し、サーバー側の resolver 経由に一本化した。
 
 #### 3.1.5 API ルートハンドラ（`apps/web/app/api/`）
 

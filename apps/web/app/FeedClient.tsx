@@ -458,7 +458,7 @@ export default function FeedClient() {
   if (isEmpty) {
     return (
       <div className="feed-empty">
-        <p className="feed-empty-text">該当する作品が見つかりませんでした</p>
+        <p className="feed-empty-text">条件に合う動画が見つかりません</p>
       </div>
     );
   }

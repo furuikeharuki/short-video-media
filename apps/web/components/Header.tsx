@@ -2,7 +2,7 @@
 
 import { usePathname, useRouter } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { FALLBACK_TAGS, fetchPopularTags } from "@/lib/api/tags";
+import { fetchPopularTags } from "@/lib/api/tags";
 import HamburgerMenu from "@/components/HamburgerMenu";
 import { logEvent } from "@/lib/api/events";
 
@@ -25,21 +25,23 @@ export default function Header() {
 
   const [open, setOpen]   = useState(false);
   const [query, setQuery] = useState("");
-  // 人気ジャンル TOP10 (登録数の多い順)。API 失敗時は FALLBACK_TAGS を使う。
-  const [popularGenres, setPopularGenres] = useState<string[]>(FALLBACK_TAGS);
+  // 人気ジャンル TOP10 (登録数の多い順)。
+  // デフォルトは空配列 (= タグ非表示) にして、画面ロード時に DB から取得し保持しておく。
+  // API 失敗時もハードコードのフォールバックは出さず空のままにする。
+  const [popularGenres, setPopularGenres] = useState<string[]>([]);
 
-  // ドロップダウンを最初に開いたタイミングで人気ジャンルを取得。
-  // ヘッダーがマウントされた直後ではなく開いたときに遅延ロードして初期表示を軽くする。
-  const fetchedGenresRef = useRef(false);
+  // ヘッダーがマウントされた直後 (= 画面ロード時) に人気ジャンルを取得。
+  // ドロップダウンを開く前から手元に持っておくので、開いたときに即座に表示できる。
   useEffect(() => {
-    if (!open || fetchedGenresRef.current) return;
-    fetchedGenresRef.current = true;
+    let cancelled = false;
     fetchPopularTags(10)
       .then((list) => {
+        if (cancelled) return;
         if (list.length > 0) setPopularGenres(list);
       })
-      .catch(() => { /* フォールバックのまま */ });
-  }, [open]);
+      .catch(() => { /* 取得失敗時は空のまま (タグセクションは非表示) */ });
+    return () => { cancelled = true; };
+  }, []);
 
   // ヘッダーの実高さを --header-h に同期する。
   // safe-area-inset-top やフォントサイズの差異で 52px から微妙にズレるケースを吸収し、
@@ -230,21 +232,23 @@ export default function Header() {
           </button>
         </form>
 
-        <div className="search-tags-section">
-          <p className="search-tags-label">人気ジャンル</p>
-          <div className="search-tags">
-            {popularGenres.map((genre) => (
-              <button
-                key={genre}
-                type="button"
-                className="search-tag-btn"
-                onClick={() => submitGenre(genre)}
-              >
-                #{genre}
-              </button>
-            ))}
+        {popularGenres.length > 0 && (
+          <div className="search-tags-section">
+            <p className="search-tags-label">人気ジャンル</p>
+            <div className="search-tags">
+              {popularGenres.map((genre) => (
+                <button
+                  key={genre}
+                  type="button"
+                  className="search-tag-btn"
+                  onClick={() => submitGenre(genre)}
+                >
+                  #{genre}
+                </button>
+              ))}
+            </div>
           </div>
-        </div>
+        )}
       </div>
 
       <style>{logoStyle}</style>

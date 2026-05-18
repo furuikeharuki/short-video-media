@@ -8,7 +8,8 @@
  * - 「並び替え」「配信日」を最上部に固定
  * - 6 種フィールド (ジャンル / 女優 / シリーズ / 監督 / メーカー / レーベル) は
  *   選択済みチップを並べ、末尾の「＋」を押すと入力欄 + サジェストが展開する
- * - NG ワード: ログイン中はサーバ保存 (PUT /me/ng-words)、未ログインはローカル限定
+ * - NG ワードも他のフィールドと同じく「適用」ボタン一発で onSubmit に含めて返す
+ *   (保存は親側 = SearchResultsHeader が /me/search-prefs または sessionStorage で一括採り)
  * - 「適用」を押すと URL クエリを組み立てて検索結果ページへ
  */
 
@@ -20,7 +21,6 @@ import {
   type SortKey,
   type SuggestField,
 } from "@/lib/api/search";
-import { getNgWords, putNgWords } from "@/lib/api/me";
 
 /** 親が渡す初期値 (自動保存からの復元用)。空配列/空文字なら未指定扱い。 */
 export type AdvancedFormInitial = {
@@ -30,17 +30,19 @@ export type AdvancedFormInitial = {
   directors?: string[];
   makers?: string[];
   labels?: string[];
+  ng_words?: string[];
   date_from?: string;
   date_to?: string;
   sort?: SortKey | "";
 };
 
 type Props = {
-  /** ログイン中かどうか。サーバ NG ワード保存 UI の出し分けに使う。 */
+  /** ログイン中かどうか。現在は保存先 (サーバ / sessionStorage) の振り分けを親側でやるため、
+   *  このパネル内では使わないが、今後拡張用に残しておく (= 互換性維持)。 */
   isAuthed: boolean;
   /** 検索結果ページから渡される現在の検索キーワード (URL クエリ q=)。表示しないが復元/構築用に保持。 */
   keyword?: string;
-  /** 自動保存からの初期値 (チップ・日付・ソート)。 */
+  /** 自動保存からの初期値 (チップ・NG・日付・ソート)。 */
   initial?: AdvancedFormInitial;
   /** 検索実行時に呼ばれる (パネルを閉じる用)。url は新しい /search?... の絶対パス。 */
   onSubmit: (url: string, payload: AdvancedSubmitPayload) => void;
@@ -56,6 +58,7 @@ export type AdvancedSubmitPayload = {
   directors: string[];
   makers: string[];
   labels: string[];
+  ng_words: string[];
   date_from: string;
   date_to: string;
   sort: SortKey | "";
@@ -99,12 +102,13 @@ const FIELD_KEYS: FieldKey[] = [
 ];
 
 export default function AdvancedSearchPanel({
-  isAuthed,
+  isAuthed: _isAuthed,
   keyword,
   initial,
   onSubmit,
   onCancel,
 }: Props) {
+  void _isAuthed; // 現状、NG も他フィールドと同じ保存パスに乗せているので、Panel 内ではログイン状態を見ない。
   const [chips, setChips] = useState<Record<FieldKey, string[]>>(() => ({
     genres: initial?.genres ?? [],
     actresses: initial?.actresses ?? [],
@@ -117,28 +121,11 @@ export default function AdvancedSearchPanel({
   const [dateTo, setDateTo] = useState(initial?.date_to ?? "");
   const [sort, setSort] = useState<SortKey | "">(initial?.sort ?? "");
 
-  // NG ワード: サーバ保存 (ログイン時) は別 state、ローカルのみは ngLocal
-  const [ngServer, setNgServer] = useState<string[]>([]);
-  const [ngLocal, setNgLocal] = useState<string[]>([]);
+  // NG ワードも他のフィールドと同じく「適用」で onSubmit へ。
+  // サーバ保存 (PUT) は親側 (SearchResultsHeader) で search-prefs にマージして保存される。
+  const [ng, setNg] = useState<string[]>(initial?.ng_words ?? []);
   const [ngEditing, setNgEditing] = useState(false);
   const [ngInput, setNgInput] = useState("");
-  const [ngSaving, setNgSaving] = useState(false);
-  const [ngSavedHint, setNgSavedHint] = useState(false);
-
-  // ログイン中なら初回マウントでサーバ NG ワードをロード
-  useEffect(() => {
-    if (!isAuthed) {
-      setNgServer([]);
-      return;
-    }
-    let cancelled = false;
-    getNgWords()
-      .then((words) => {
-        if (!cancelled) setNgServer(words);
-      })
-      .catch(() => { /* ignore */ });
-    return () => { cancelled = true; };
-  }, [isAuthed]);
 
   const addChip = useCallback((key: FieldKey, value: string) => {
     const v = value.trim();
@@ -160,43 +147,15 @@ export default function AdvancedSearchPanel({
   const addNg = useCallback(() => {
     const v = ngInput.trim();
     if (!v) return;
-    if (isAuthed) {
-      setNgServer((prev) => (prev.includes(v) ? prev : [...prev, v]));
-    } else {
-      setNgLocal((prev) => (prev.includes(v) ? prev : [...prev, v]));
-    }
+    setNg((prev) => (prev.includes(v) ? prev : [...prev, v]));
     setNgInput("");
-  }, [ngInput, isAuthed]);
+  }, [ngInput]);
 
   const removeNg = useCallback((value: string) => {
-    if (isAuthed) {
-      setNgServer((prev) => prev.filter((s) => s !== value));
-    } else {
-      setNgLocal((prev) => prev.filter((s) => s !== value));
-    }
-  }, [isAuthed]);
-
-  const saveNgServer = useCallback(async () => {
-    if (!isAuthed) return;
-    setNgSaving(true);
-    setNgSavedHint(false);
-    try {
-      const ok = await putNgWords(ngServer);
-      if (ok) {
-        setNgSavedHint(true);
-        setTimeout(() => setNgSavedHint(false), 2000);
-      }
-    } finally {
-      setNgSaving(false);
-    }
-  }, [isAuthed, ngServer]);
+    setNg((prev) => prev.filter((s) => s !== value));
+  }, []);
 
   const handleSubmit = useCallback(() => {
-    // 実検索に使う NG ワード:
-    //   ログイン時: ngServer (画面上の最新状態) をクエリにも乗せる
-    //              ※ サーバの永続値より「いま画面に映っている」方を優先したいため明示送信
-    //   未ログイン時: ngLocal を必ずクエリに乗せる
-    const ngWords = isAuthed ? ngServer : ngLocal;
     const input: AdvancedSearchInput = {
       q: keyword?.trim() || undefined,
       genres: chips.genres.length > 0 ? chips.genres : undefined,
@@ -205,7 +164,7 @@ export default function AdvancedSearchPanel({
       directors: chips.directors.length > 0 ? chips.directors : undefined,
       makers: chips.makers.length > 0 ? chips.makers : undefined,
       labels: chips.labels.length > 0 ? chips.labels : undefined,
-      ng_words: ngWords.length > 0 ? ngWords : undefined,
+      ng_words: ng.length > 0 ? ng : undefined,
       date_from: dateFrom || undefined,
       date_to: dateTo || undefined,
       sort: sort || undefined,
@@ -219,12 +178,13 @@ export default function AdvancedSearchPanel({
       directors: chips.directors,
       makers: chips.makers,
       labels: chips.labels,
+      ng_words: ng,
       date_from: dateFrom,
       date_to: dateTo,
       sort,
     };
     onSubmit(url, payload);
-  }, [keyword, chips, dateFrom, dateTo, sort, ngServer, ngLocal, isAuthed, onSubmit]);
+  }, [keyword, chips, dateFrom, dateTo, sort, ng, onSubmit]);
 
   const resetAll = useCallback(() => {
     setChips({
@@ -234,9 +194,10 @@ export default function AdvancedSearchPanel({
     setDateFrom("");
     setDateTo("");
     setSort("");
+    setNg([]);
   }, []);
 
-  const ngList = isAuthed ? ngServer : ngLocal;
+  const ngList = ng;
 
   return (
     <div className="adv-panel" aria-label="詳細検索">
@@ -291,12 +252,7 @@ export default function AdvancedSearchPanel({
 
       {/* NG ワード */}
       <div className="adv-row adv-row-ng">
-        <label className="adv-label">
-          NG ワード
-          <span className="adv-label-sub">
-            {isAuthed ? "(アカウントに保存)" : "(この検索だけ・未ログイン)"}
-          </span>
-        </label>
+        <label className="adv-label">NG ワード</label>
         <div className="adv-chips">
           {ngList.map((w) => (
             <span key={w} className="adv-chip adv-chip-ng">
@@ -345,19 +301,6 @@ export default function AdvancedSearchPanel({
             </span>
           )}
         </div>
-        {isAuthed && (
-          <div className="adv-ng-save-row">
-            <button
-              type="button"
-              className="adv-ng-save-btn"
-              onClick={saveNgServer}
-              disabled={ngSaving}
-            >
-              {ngSaving ? "保存中…" : "NG ワードを保存"}
-            </button>
-            {ngSavedHint && <span className="adv-ng-saved-hint">保存しました</span>}
-          </div>
-        )}
       </div>
 
       <div className="adv-actions">
@@ -528,10 +471,6 @@ const css = `
     align-items: baseline;
     gap: 6px;
   }
-  .adv-label-sub {
-    font-size: 10px;
-    color: rgba(255,255,255,0.45);
-  }
   .adv-input {
     width: 100%;
     background: rgba(255,255,255,0.06);
@@ -676,29 +615,6 @@ const css = `
     background-size: 5px 5px, 5px 5px;
     background-repeat: no-repeat;
     padding-right: 28px;
-  }
-  .adv-ng-save-row {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    margin-top: 4px;
-  }
-  .adv-ng-save-btn {
-    background: rgba(255,255,255,0.1);
-    color: #fff;
-    border: 1px solid rgba(255,255,255,0.18);
-    border-radius: 8px;
-    padding: 6px 12px;
-    font-size: 12px;
-    cursor: pointer;
-  }
-  .adv-ng-save-btn:disabled {
-    opacity: 0.5;
-    cursor: not-allowed;
-  }
-  .adv-ng-saved-hint {
-    font-size: 11px;
-    color: rgba(120, 255, 160, 0.9);
   }
   .adv-actions {
     display: flex;

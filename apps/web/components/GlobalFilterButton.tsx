@@ -148,10 +148,19 @@ function countActive(init: AdvancedFormInitial): number {
   );
 }
 
-/** 適用先のパス判定。`/search` 以下 / `/feed` 以下 のときだけアイコンを出す。 */
-function isFilterablePath(pathname: string): boolean {
-  return pathname === "/search" || pathname.startsWith("/search/") ||
-         pathname === "/feed" || pathname.startsWith("/feed/");
+/** 適用先のパス判定。`/search` 以下 / `/feed` 以下 のときだけアイコンを出す。
+ *  ただし `/feed?playlist=<key>` (ブックマーク / 視聴履歴 / ホーム各セクション /
+ *  女優詳細 / 検索結果カードからの再生) はプレイリスト順をそのまま再生する経路なので
+ *  フィルターアイコンは出さず、フィルター自体も効かせない。 */
+function isFilterablePath(pathname: string, sp: URLSearchParams | null): boolean {
+  const isFeed = pathname === "/feed" || pathname.startsWith("/feed/");
+  const isSearch = pathname === "/search" || pathname.startsWith("/search/");
+  if (!isFeed && !isSearch) return false;
+  if (isFeed) {
+    const playlist = (sp?.get("playlist") ?? "").trim();
+    if (playlist) return false;
+  }
+  return true;
 }
 
 /**
@@ -173,8 +182,8 @@ function GlobalFilterButtonInner() {
   const { status } = useSession();
   const isAuthed = status === "authenticated";
 
-  const visible = isFilterablePath(pathname);
   const urlKey = searchParams?.toString() ?? "";
+  const visible = isFilterablePath(pathname, searchParams);
 
   const [open, setOpen] = useState(false);
   const [initial, setInitial] = useState<AdvancedFormInitial>(() =>

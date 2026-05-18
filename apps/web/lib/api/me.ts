@@ -116,3 +116,48 @@ export async function putNgWords(words: string[]): Promise<boolean> {
     return false;
   }
 }
+
+/**
+ * 「最後に適用した検索条件」の永続化用ペイロード。
+ * API 側 SearchPrefPayload と一致。NG ワードは別エンドポイント (/me/ng-words) で管理する。
+ */
+export type SearchPrefPayload = {
+  q?: string | null;
+  genres?: string[] | null;
+  actresses?: string[] | null;
+  series_list?: string[] | null;
+  directors?: string[] | null;
+  makers?: string[] | null;
+  labels?: string[] | null;
+  date_from?: string | null;
+  date_to?: string | null;
+  sort?: string | null;
+};
+
+/**
+ * ログイン中ユーザーの「最後に適用した検索条件」を取得。
+ * 401/未保存ならすべて null/空のオブジェクトを返す。
+ */
+export async function getSearchPref(): Promise<SearchPrefPayload> {
+  try {
+    const res = await fetch("/api/proxy/me/search-prefs", { cache: "no-store" });
+    if (!res.ok) return {};
+    return (await res.json()) as SearchPrefPayload;
+  } catch {
+    return {};
+  }
+}
+
+/** 検索条件を全置換で保存。失敗時 false。 */
+export async function putSearchPref(payload: SearchPrefPayload): Promise<boolean> {
+  try {
+    const res = await fetch("/api/proxy/me/search-prefs", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    return res.ok;
+  } catch {
+    return false;
+  }
+}

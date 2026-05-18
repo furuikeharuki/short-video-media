@@ -2,10 +2,8 @@
 
 import { usePathname, useRouter } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { useSession } from "next-auth/react";
 import { fetchPopularTags } from "@/lib/api/tags";
 import HamburgerMenu from "@/components/HamburgerMenu";
-import AdvancedSearchPanel from "@/components/AdvancedSearchPanel";
 import { logEvent } from "@/lib/api/events";
 
 const FEED_SEED_KEY  = "feed_seed";
@@ -27,10 +25,6 @@ export default function Header() {
 
   const [open, setOpen]   = useState(false);
   const [query, setQuery] = useState("");
-  // 詳細検索パネルの開閉。検索ドロップダウンが閉じれば自動的に閉じる扱い (ドロップダウンの内側に置く)。
-  const [advOpen, setAdvOpen] = useState(false);
-  const { status } = useSession();
-  const isAuthed = status === "authenticated";
   // 人気ジャンル TOP10 (登録数の多い順)。
   // デフォルトは空配列 (= タグ非表示) にして、画面ロード時に DB から取得し保持しておく。
   // API 失敗時もハードコードのフォールバックは出さず空のままにする。
@@ -109,24 +103,10 @@ export default function Header() {
       const trimmed = q.trim();
       if (!trimmed) return;
       setOpen(false);
-      setAdvOpen(false);
       setQuery("");
       // 人気ジャンル集計用に search イベントを送る (失敗は無視)
       logEvent({ event_type: "search", search_query: trimmed });
       router.push(`/search?q=${encodeURIComponent(trimmed)}`);
-    },
-    [router]
-  );
-
-  // 詳細検索パネルから送られてきた URL に遷移する。
-  // (パネル内で URLSearchParams を組み立て済みなので、ここでは router.push するだけ)
-  const submitAdvanced = useCallback(
-    (url: string) => {
-      setOpen(false);
-      setAdvOpen(false);
-      setQuery("");
-      logEvent({ event_type: "search", search_query: "__advanced__" });
-      router.push(url);
     },
     [router]
   );
@@ -138,7 +118,6 @@ export default function Header() {
       const trimmed = genre.trim();
       if (!trimmed) return;
       setOpen(false);
-      setAdvOpen(false);
       setQuery("");
       logEvent({ event_type: "search", search_query: trimmed });
       router.push(`/search?genre=${encodeURIComponent(trimmed)}`);
@@ -248,38 +227,10 @@ export default function Header() {
               </button>
             )}
           </div>
-          <button
-            type="button"
-            className={`search-filter-btn${advOpen ? " is-active" : ""}`}
-            aria-label="詳細検索"
-            aria-expanded={advOpen}
-            aria-controls="search-advanced-panel"
-            onClick={() => setAdvOpen((v) => !v)}
-          >
-            {/* フィルター/スライダー風アイコン */}
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none"
-              stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden="true">
-              <line x1="4" y1="6" x2="20" y2="6" />
-              <line x1="4" y1="12" x2="20" y2="12" />
-              <line x1="4" y1="18" x2="20" y2="18" />
-              <circle cx="9" cy="6" r="2.2" fill="#0a0a0a" />
-              <circle cx="15" cy="12" r="2.2" fill="#0a0a0a" />
-              <circle cx="8" cy="18" r="2.2" fill="#0a0a0a" />
-            </svg>
-          </button>
           <button type="submit" className="search-submit-btn" disabled={!query.trim()}>
             検索
           </button>
         </form>
-
-        {advOpen && (
-          <div id="search-advanced-panel" className="search-advanced-wrap">
-            <AdvancedSearchPanel
-              isAuthed={isAuthed}
-              onSubmit={submitAdvanced}
-            />
-          </div>
-        )}
 
         {popularGenres.length > 0 && (
           <div className="search-tags-section">

@@ -1,33 +1,21 @@
 "use client";
 import { useRouter } from "next/navigation";
-import { ACTRESS_BACK_TO_KEY } from "./ActressLink";
 
 /**
  * 女優詳細ページ専用の戻るボタン。
- * ActressLink がクリック時に sessionStorage に保存した「戻り先URL」(動画詳細など) があれば
- * そこへ router.push() し、無ければ router.back() にフォールバックする。
- * これにより、動画詳細 → 女優詳細 → 戻る で確実に元の動画詳細ページに戻れる。
+ *
+ * 動作:
+ *   ActressBackHandler がマウント時に history.pushState でセンチネル履歴を 1 つ追加
+ *   しているため、ボタンクリックでは router.back() を呼ぶだけでブラウザバックと
+ *   同じ経路を走る (popstate ハンドラがセッションストレージの戻り先 URL を見て router.replace)。
  */
 export default function ActressBackButton() {
   const router = useRouter();
 
   const handleClick = () => {
-    let target: string | null = null;
-    try {
-      if (typeof window !== "undefined") {
-        target = sessionStorage.getItem(ACTRESS_BACK_TO_KEY);
-        if (target) {
-          sessionStorage.removeItem(ACTRESS_BACK_TO_KEY);
-        }
-      }
-    } catch {
-      target = null;
-    }
-    if (target) {
-      router.push(target);
-    } else {
-      router.back();
-    }
+    // ActressBackHandler が popstate を拾って sessionStorage から戻り先 URL に遷移させる。
+    // センチネルが無いケース (pushState がブロックされた等) はそのまま通常の戻ると同じになる。
+    router.back();
   };
 
   return (

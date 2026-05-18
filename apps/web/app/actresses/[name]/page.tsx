@@ -3,6 +3,7 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 
 import ActressBackButton from "@/components/ActressBackButton";
+import ActressBackHandler from "@/components/ActressBackHandler";
 import { getActressByName } from "@/lib/api/actresses";
 import SearchGrid from "@/app/search/SearchGrid";
 
@@ -106,6 +107,7 @@ export default async function ActressDetailPage({ params }: PageProps) {
 
   return (
     <main style={styles.main}>
+      <ActressBackHandler />
       <div style={styles.topBar}>
         <ActressBackButton />
       </div>

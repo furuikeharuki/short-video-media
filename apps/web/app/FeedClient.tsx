@@ -176,6 +176,11 @@ export default function FeedClient() {
   // playlist 経由で起動したときは /api/v1/home/section で継足しするため、
   // その出所情報 (セクション key / ジャンル名) を保持する。
   const playlistSourceRef = useRef<PlaylistSource | null>(null);
+  // 「この /feed セッションは playlist 経由で起動された」フラグ。
+  // ブックマーク / 視聴履歴 / ホーム各セクション / 女優詳細 / 検索結果カードからの
+  // 起動は「そのリストの順をそのまま見せる」のが意図なので、フィルターを効かせず
+  // playlist の中身をそのまま表示、継足しも (source があれば) 同じセクション から取る。
+  const cameFromPlaylistRef = useRef<boolean>(false);
   // 現在のフィルター内容を ref で保持して、fetchMore からも参照できるようにする。
   const filtersRef = useRef<{ genres: string[]; advanced: FeedAdvancedParams }>({
     genres: [],
@@ -280,6 +285,8 @@ export default function FeedClient() {
         setInitialIndex(idx);
         setIsEmpty(false);
         setIsLoading(false);
+        // playlist 経由フラグを立てる。これにより fetchMore でも「フィルターを適用しない」を貫く。
+        cameFromPlaylistRef.current = true;
         // source があれば 20 件以降も /api/v1/home/section で同じ順で取りにいく。
         // そのとき next_cursor は items.length を offset として使う。
         if (pl.source && SECTION_KEYS.has(pl.source.key as HomeSectionKey)) {
@@ -295,6 +302,10 @@ export default function FeedClient() {
         return;
       }
       // playlist が見つからないときは通常のフィードにフォールバック
+      cameFromPlaylistRef.current = false;
+    } else {
+      // playlist 経由でないとき (通常 /feed) はフラグを起こさない。
+      cameFromPlaylistRef.current = false;
     }
 
     // ?v= がある場合は常に新鮮なフィードを取得（先頭に該当動画を差し込む）
@@ -396,14 +407,22 @@ export default function FeedClient() {
       (advanced.ng_words?.length ?? 0) > 0 ||
       !!advanced.date_from ||
       !!advanced.date_to;
-    const hasAnyActiveFilter = genres.length > 0 || hasAdvanced;
-
     isFetchingMoreRef.current = true;
     try {
       let resItems: MovieCard[];
       let resCursor: string | null;
 
-      if (source && !hasAnyActiveFilter) {
+      // playlist 経由 (ブックマーク / 視聴履歴 / ホームセクション / 女優 / 検索結果 他) は
+      // 「そのリストをそのまま見せる」のが意図なので、ここではフィルターを一切適用しない。
+      //  - source あり (セクション起源) → /api/v1/home/section で同じ順に継足し
+      //  - source 無し (search-* など セクション離れた playlist) → 継足ししない (末尾で打ち止め)
+      // playlist 経由でない (通常の /feed) ときだけフィルターを AND 適用する。
+      if (cameFromPlaylistRef.current) {
+        if (!source) {
+          // 継足し不可 → ここで打ち止め
+          nextCursorRef.current = null;
+          return;
+        }
         const res = await getHomeSection(
           source.key as HomeSectionKey,
           offset,
@@ -414,10 +433,6 @@ export default function FeedClient() {
         resCursor = res.next_cursor;
       } else {
         if (seed === null) return;
-        // playlist source があってもフィルターがある場合はこちらに落ちてくるので、
-        // 以降の追加ロードは playlist 順ではなくフィルター付き feed で取る。
-        // source を null にクリアして "スクロール以降も該当フィルターだけで柜る" ようにする。
-        if (source) playlistSourceRef.current = null;
         const res = await getFeed(
           offset,
           20,

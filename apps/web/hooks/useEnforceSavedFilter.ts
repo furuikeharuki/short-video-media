@@ -158,11 +158,18 @@ export function useEnforceSavedFilter(): SavedFilterStatus {
   const [enforceStatus, setEnforceStatus] = useState<SavedFilterStatus>("pending");
 
   const urlKey = searchParams?.toString() ?? "";
+  // `/feed?playlist=<key>` (ブックマーク / 視聴履歴 / ホーム各セクション /
+  // 女優詳細 / 検索結果カードからの再生) は "プレイリスト順をそのまま見せる経路"。
+  // フィルターを強制適用するとプレイリストが上書きされてしまうので、ready 固定で no-op にする。
+  const isFeedPlaylist =
+    (pathname === "/feed" || pathname.startsWith("/feed/")) &&
+    (new URLSearchParams(urlKey).get("playlist") ?? "").trim() !== "";
   const isTarget =
-    pathname === "/feed" ||
-    pathname.startsWith("/feed/") ||
-    pathname === "/search" ||
-    pathname.startsWith("/search/");
+    !isFeedPlaylist &&
+    (pathname === "/feed" ||
+      pathname.startsWith("/feed/") ||
+      pathname === "/search" ||
+      pathname.startsWith("/search/"));
 
   useEffect(() => {
     // enforce 対象外のパスにいるときは「何もしない」と同義なので ready にしておく。

@@ -5,6 +5,8 @@ import FeedItem from "@/components/FeedItem";
 import type { MovieCard } from "@/lib/api/feed";
 import { markFeedGesture } from "@/components/feed/useFeedPlayback";
 import { usePrefetchResolveMp4 } from "@/components/feed/usePrefetchResolveMp4";
+import { usePrefetchVideoBytes } from "@/components/feed/usePrefetchVideoBytes";
+import PrefetchVideoBuffer from "@/components/feed/PrefetchVideoBuffer";
 
 // 同時にレンダリングするスライド数 = 中央 + 前後1枚ずつの計3枚。
 // 4枚以上の `<video>` を同時に持つとモバイル Safari の同時接続上限に
@@ -36,6 +38,11 @@ export default function FeedViewer({
   // 先 3 枚分の MP4 URL を resolver で事前解決しておき、スワイプ到達時の
   // 再生開始を早める (resolver 側の 60s キャッシュを温めるだけで <video> は増やさない)。
   usePrefetchResolveMp4(items, currentIndex);
+
+  // 更に先 2 枚分の動画バイトも先読み (隠し <video preload="auto"> を画面外にマウント)。
+  // DMM CDN は Cache-Control: no-store だが CloudFront 側にキャッシュがあるため、
+  // <video> のメディアバイトを事前に採ると HTTP/2 接続が温まり、再生開始が早くなる。
+  const prefetchSlots = usePrefetchVideoBytes(items, currentIndex);
 
   const [dragPx,         setDragPx]       = useState(0);
   const dragStartY       = useRef(0);
@@ -162,6 +169,9 @@ export default function FeedViewer({
 
   return (
     <div ref={containerRef} className="feed-container">
+      {prefetchSlots.map((slot) => (
+        <PrefetchVideoBuffer key={slot.id} src={slot.src} />
+      ))}
       {windowItems.map((item, i) => {
         const absIndex = windowStartRef.current + i;
         const offset   = absIndex - currentIndex;

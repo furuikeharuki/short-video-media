@@ -42,7 +42,11 @@ export default function FeedViewer({
   // 更に先 2 枚分の動画バイトも先読み (隠し <video preload="auto"> を画面外にマウント)。
   // DMM CDN は Cache-Control: no-store だが CloudFront 側にキャッシュがあるため、
   // <video> のメディアバイトを事前に採ると HTTP/2 接続が温まり、再生開始が早くなる。
-  const prefetchSlots = usePrefetchVideoBytes(items, currentIndex);
+  // prefetch 中の <video> が失敗したら handleSlotError で self-heal (DB キャッシュ無効化 + force resolve)。
+  const { slots: prefetchSlots, handleSlotError } = usePrefetchVideoBytes(
+    items,
+    currentIndex,
+  );
 
   const [dragPx,         setDragPx]       = useState(0);
   const dragStartY       = useRef(0);
@@ -170,7 +174,12 @@ export default function FeedViewer({
   return (
     <div ref={containerRef} className="feed-container">
       {prefetchSlots.map((slot) => (
-        <PrefetchVideoBuffer key={slot.id} src={slot.src} />
+        <PrefetchVideoBuffer
+          key={slot.id}
+          slug={slot.slug}
+          src={slot.src}
+          onError={handleSlotError}
+        />
       ))}
       {windowItems.map((item, i) => {
         const absIndex = windowStartRef.current + i;

@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 
-import { resolveMp4Url } from "@/lib/api/resolve-mp4";
+import { invalidateSampleUrl, resolveMp4Url } from "@/lib/api/resolve-mp4";
 
 /**
  * フィード上の 1 作品について「実際に再生可能な MP4 URL」を解決して保持する hook。
@@ -115,7 +115,18 @@ export function useResolvedVideoSrc({
 
   // <video> がエラーになったときのリトライ。
   // 1 回だけ force=true で resolve を呼び直し、それでもダメならサムネに落とす。
+  //
+  // 加えて、キャッシュされた sample_movie_url を DB から NULL に戻すよう API に
+  // 依頼する (fire-and-forget)。古い _mhb_w.mp4 パターンの URL が DB に残っている
+  // ために ORB / 404 で毎回 force resolve が走る状態を「自然治癒」させるため。
   const handleError = useCallback(() => {
+    // 失敗した URL が DB キャッシュ由来のもの (optimistic 表示中) なら、
+    // その URL を DB から掃除しておく。resolver 経由で取った URL が失敗した
+    // ケース (state.phase === "ready" で src が FRESH) も「その URL は使えない」
+    // というシグナルとして同じく叩いておく。サーバー側では rate limiter 未設定だが
+    // 重複呼び出しは安全 (次回アクセスで resolver が再取得するだけ)。
+    void invalidateSampleUrl(slug);
+
     if (forceRetriedRef.current) {
       setState({ phase: "exhausted", src: null });
       return;

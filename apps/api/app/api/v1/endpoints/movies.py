@@ -130,3 +130,48 @@ async def resolve_mp4(
     return ResolveMp4Response(
         content_id=content_id, mp4_url=mp4_url, cached=False
     )
+
+
+# ─────────────────────────────────────────
+# DELETE /movies/{slug}/sample-url: キャッシュされた sample URL を無効化する
+# ─────────────────────────────────────────
+# 背景:
+#   - DB に保存された sample_movie_url が古いパターン (_mhb_w.mp4 等) だと
+#     ORB や 404 で <video> が再生できず、毎回 force=true の resolver 呼び出し
+#     (9 秒程) が走ってしまう。
+#   - web 側が失敗を検知したときにこのエンドポイントを叩いて DB を NULL に
+#     戻しておくと、次回アクセス時は最初から resolver 経由になり、長期的にデータが
+#     「自然治癒」していく。
+# 仕様:
+#   - 対象作品が存在しなければ 404。
+#   - sample_movie_url がもともと NULL だったしても 204 を返して OK とする
+#     (クライアントが重複して叩いても安全)。
+#   - 認証不要 (未ログインユーザーからの報告も受け付ける)。悪意のあるクライアントが
+#     連打して NULL に戻しても、次回アクセスで resolver が再取得するだけなので
+#     重大な被害はない。レートリミットは今後考慮 (現状 sample-url は rate
+#     limiter を付けていない)。
+@router.delete("/movies/{slug}/sample-url", status_code=204)
+async def invalidate_sample_url(
+    slug: str,
+    db: AsyncSession = Depends(get_db),
+) -> None:
+    """DB に保存された sample_movie_url を NULL に戻す。
+
+    <video> レンダリングが失敗したときに web から fire-and-forget で叩かれる。
+    """
+    row = (
+        await db.execute(select(Movie.id).where(Movie.slug == slug))
+    ).first()
+    if row is None:
+        raise HTTPException(status_code=404, detail="Movie not found")
+    movie_id = row[0]
+
+    await db.execute(
+        update(Movie)
+        .where(Movie.id == movie_id)
+        .where(Movie.sample_movie_url.is_not(None))
+        .values(sample_movie_url=None)
+    )
+    await db.commit()
+    # 204 No Content
+    return None

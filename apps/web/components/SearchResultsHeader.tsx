@@ -196,10 +196,12 @@ export default function SearchResultsHeader({ label, context }: Props) {
     readFromUrl(new URLSearchParams(searchParams?.toString() ?? ""))
   );
 
-  // 初回マウント時のみ、URL に advanced 系の値が無ければサーバ or sessionStorage から復元。
-  // パネルを開く前に initial を確定させておきたいので非同期で更新する。
+  // URL に advanced 系の値があれば URL を尊重。無ければサーバ or sessionStorage から復元。
+  // フィルター適用後に URL が変わるたびに再読み込んで記憶を足していく (シートを開いたら URL
+  // 状態がそのまま見えるように)。 URL に advanced 値が一つも無い状態 → 復元ソースを見る。
+  const urlKey = searchParams?.toString() ?? "";
   useEffect(() => {
-    const urlInit = readFromUrl(new URLSearchParams(searchParams?.toString() ?? ""));
+    const urlInit = readFromUrl(new URLSearchParams(urlKey));
     if (!isUrlAdvEmpty(urlInit)) {
       // URL に値があるならそれを尊重 (パネルを開いたとき URL の状態を見せる)
       setInitial(urlInit);
@@ -217,9 +219,7 @@ export default function SearchResultsHeader({ label, context }: Props) {
       }
     })();
     return () => { cancelled = true; };
-    // searchParams の再評価で繰り返し走らせない: 初回マウントの値で固定
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isAuthed]);
+  }, [isAuthed, urlKey]);
 
   const handleSubmit = useCallback(
     (payload: AdvancedSubmitPayload) => {
@@ -271,9 +271,19 @@ export default function SearchResultsHeader({ label, context }: Props) {
       if (payload.sort) params.set("sort", payload.sort);
 
       setOpen(false);
-      router.push(`/search?${params.toString()}`);
+      // URL が現在と同じ (= クリア後に適用したが何も追加していないケースや、重複適用) でも
+      // navigation をトリガーして状態をクリーンにする。 router.replace は同一 URL でも
+      // ラウターストアを更新し useSearchParams を再発火させるため、サーバコンポーネントの
+      // 再レンダーも規則的に起きる。
+      const nextUrl = `/search?${params.toString()}`;
+      const currentUrl = `/search?${urlKey}`;
+      if (nextUrl === currentUrl) {
+        router.replace(nextUrl);
+      } else {
+        router.push(nextUrl);
+      }
     },
-    [router, isAuthed, context]
+    [router, isAuthed, context, urlKey]
   );
 
   const handleClose = useCallback(() => setOpen(false), []);

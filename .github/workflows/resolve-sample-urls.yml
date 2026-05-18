@@ -1,12 +1,13 @@
-name: Resolve Sample URLs (backfill)
+name: Resolve Sample URLs (manual backfill)
 
 # DB の sample_movie_url を Xserver VPS resolver で並列にバックフィルするワークフロー。
-# sync_catalog は sample_movie_url=NULL で保存するため、これを定期的に動かして
-# ユーザー初回再生時の resolver 待ち (~9 秒) を先回りで解消する。
+#
+# 定期実行は sync-catalog.yml に統合済み (sync 直後に同ジョブで resolve も実行)。
+# このワークフローは手動バックフィル専用 — 取りこぼしの再計算や、
+# resolver / DB を直接修復したいときの緊急避難用に残してある。
 #
 # トリガー:
-#   - schedule: 1 日 1 回 (UTC 18:00 = JST 03:00)
-#   - workflow_dispatch: 手動実行
+#   - workflow_dispatch: 手動実行のみ
 #
 # 必要な Secrets:
 #   - DATABASE_URL         : 本番 Postgres への接続文字列
@@ -14,9 +15,6 @@ name: Resolve Sample URLs (backfill)
 #   - RESOLVER_API_KEY     : resolver Bearer 認証用 API キー
 
 on:
-  schedule:
-    # UTC 18:00 = JST 03:00。深夜に実行してユーザーへの影響を最小化する。
-    - cron: "0 18 * * *"
   workflow_dispatch:
     inputs:
       concurrency:

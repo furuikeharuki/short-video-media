@@ -86,3 +86,22 @@ class ViewHistory(Base):
         default=_utcnow_naive, server_default=func.now(), index=True
     )
     view_count: Mapped[int] = mapped_column(Integer, default=1, server_default="1")
+
+
+class UserNgWord(Base):
+    """ユーザー固有の NG ワード。
+
+    検索 API は未指定時にこのテーブルを自動的に適用するため、ログインユーザーは
+    各クライアントに同じ NG リストを設定し直さなくてもよい。
+    user_id + word の複合 PK で重複を防ぐ。
+    """
+
+    __tablename__ = "user_ng_words"
+
+    user_id: Mapped[str] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), primary_key=True
+    )
+    word: Mapped[str] = mapped_column(String(64), primary_key=True)
+    created_at: Mapped[datetime] = mapped_column(
+        default=_utcnow_naive, server_default=func.now()
+    )

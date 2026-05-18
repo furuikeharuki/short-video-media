@@ -108,3 +108,37 @@ async def require_user(
             status_code=status.HTTP_401_UNAUTHORIZED, detail="User not found"
         )
     return user
+
+
+async def get_optional_user(
+    request: Request,
+    db: Annotated[AsyncSession, Depends(get_db)],
+) -> User | None:
+    """Authorization があれば User、なければ/無効なら None を返す。
+
+    検索のように「ログインしていなくても使える」エンドポイントで、ログイン中なら
+    サーバ側 NG ワードを自動適用する用途で使う。token が壊れているからといって
+    401 を投げてしまうと「未ログイン扱いで使い続ける」が許されなくなるため、
+    ここでは全ての失敗ケースを None に倒す。
+    """
+    auth = request.headers.get("authorization") or request.headers.get("Authorization")
+    if not auth:
+        return None
+    parts = auth.split(" ", 1)
+    if len(parts) != 2 or parts[0].lower() != "bearer" or not parts[1].strip():
+        return None
+    token = parts[1].strip()
+    try:
+        decoded = jwt.decode(
+            token,
+            settings.AUTH_SECRET,
+            algorithms=[JWT_ALGORITHM],
+            audience=settings.JWT_AUDIENCE,
+        )
+    except jwt.PyJWTError:
+        return None
+    user_id = decoded.get("sub")
+    if not isinstance(user_id, str):
+        return None
+    result = await db.execute(select(User).where(User.id == user_id))
+    return result.scalar_one_or_none()

@@ -1,10 +1,20 @@
-from sqlalchemy import func, or_, select
+from __future__ import annotations
+
+from datetime import date
+from typing import Literal
+
+from sqlalchemy import and_, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.db.models.movie import Movie
 from app.db.models.actress import Actress
+from app.db.models.event import Event
 from app.db.models.genre import Genre
+from app.db.models.movie import Movie, MovieActress, MovieGenre
 from app.db.models.series import Series
+from app.db.models.user import Bookmark
+
+
+SortKey = Literal["new", "popular", "rating", "views", "bookmarks"]
 
 
 def _build_keyword_where(query: str):
@@ -118,6 +128,224 @@ async def search_movies_by_exact_field(
     stmt = stmt.where(*conditions).order_by(
         Movie.delivery_date.desc().nullslast(), Movie.id
     )
+    if offset:
+        stmt = stmt.offset(offset)
+    if limit is not None:
+        stmt = stmt.limit(limit)
+
+    result = await db.execute(stmt)
+    return list(result.scalars().unique().all()), int(total)
+
+
+# ----------------------------------------------------------------------
+# Advanced search
+# ----------------------------------------------------------------------
+
+
+def _ng_word_condition(word: str):
+    """単一 NG ワードについて「どこにも含まれてはいけない」条件を返す。
+
+    タイトル / 説明 / 監督 / メーカー / レーベル / 女優名 / ジャンル名 / シリーズ名の
+    いずれにも部分一致しないこと (case-insensitive)。NULL を含むカラムは
+    coalesce で空文字に倒して安全に ilike できるようにする。
+    """
+    pat = f"%{word}%"
+    ng_actress_sub = (
+        select(MovieActress.movie_id)
+        .join(Actress, Actress.id == MovieActress.actress_id)
+        .where(Actress.name.ilike(pat))
+    )
+    ng_genre_sub = (
+        select(MovieGenre.movie_id)
+        .join(Genre, Genre.id == MovieGenre.genre_id)
+        .where(Genre.name.ilike(pat))
+    )
+    ng_series_sub = select(Series.id).where(Series.name.ilike(pat))
+
+    return and_(
+        ~func.coalesce(Movie.title, "").ilike(pat),
+        ~func.coalesce(Movie.description, "").ilike(pat),
+        ~func.coalesce(Movie.director_name, "").ilike(pat),
+        ~func.coalesce(Movie.maker_name, "").ilike(pat),
+        ~func.coalesce(Movie.label_name, "").ilike(pat),
+        ~Movie.id.in_(ng_actress_sub),
+        ~Movie.id.in_(ng_genre_sub),
+        # series_id が NULL の作品は OK (シリーズ無しなので除外対象になり得ない)
+        or_(Movie.series_id.is_(None), ~Movie.series_id.in_(ng_series_sub)),
+    )
+
+
+def _build_advanced_conditions(
+    *,
+    q: str | None,
+    genres: list[str],
+    actresses: list[str],
+    series_list: list[str],
+    directors: list[str],
+    makers: list[str],
+    labels: list[str],
+    date_from: date | None,
+    date_to: date | None,
+    ng_words: list[str],
+) -> list:
+    """advanced_search の WHERE 条件を組み立てる。"""
+    conditions: list = [Movie.is_visible.is_(True)]
+
+    # キーワード (既存の全文部分一致と同じロジックを AND で合流)
+    if q:
+        conditions.append(_build_keyword_where(q))
+
+    # ジャンル AND: 指定された全ジャンルを含む作品のみ。
+    # HAVING COUNT(DISTINCT genre_name) = N で「N 個全部マッチした movie_id」を出す。
+    if genres:
+        sub = (
+            select(MovieGenre.movie_id)
+            .join(Genre, Genre.id == MovieGenre.genre_id)
+            .where(Genre.name.in_(genres))
+            .group_by(MovieGenre.movie_id)
+            .having(func.count(func.distinct(Genre.name)) == len(genres))
+        )
+        conditions.append(Movie.id.in_(sub))
+
+    # 女優 AND: 同じ手で。
+    if actresses:
+        sub = (
+            select(MovieActress.movie_id)
+            .join(Actress, Actress.id == MovieActress.actress_id)
+            .where(Actress.name.in_(actresses))
+            .group_by(MovieActress.movie_id)
+            .having(func.count(func.distinct(Actress.name)) == len(actresses))
+        )
+        conditions.append(Movie.id.in_(sub))
+
+    # シリーズ OR: 作品は最大 1 シリーズしか持たないので AND の意味がなく OR。
+    if series_list:
+        conditions.append(
+            Movie.series_id.in_(select(Series.id).where(Series.name.in_(series_list)))
+        )
+
+    # 監督 / メーカー / レーベル OR: フィールド直値の IN で十分。
+    if directors:
+        conditions.append(Movie.director_name.in_(directors))
+    if makers:
+        conditions.append(Movie.maker_name.in_(makers))
+    if labels:
+        conditions.append(Movie.label_name.in_(labels))
+
+    # 配信日 (primary_date) 範囲
+    if date_from is not None:
+        conditions.append(Movie.primary_date >= date_from)
+    if date_to is not None:
+        conditions.append(Movie.primary_date <= date_to)
+
+    # NG ワード: 1 ワード = 1 AND 条件 (すべて条件をクリアしないと残らない)
+    for w in ng_words:
+        if not w:
+            continue
+        conditions.append(_ng_word_condition(w))
+
+    return conditions
+
+
+async def advanced_search_movies(
+    db: AsyncSession,
+    *,
+    q: str | None = None,
+    genres: list[str] | None = None,
+    actresses: list[str] | None = None,
+    series_list: list[str] | None = None,
+    directors: list[str] | None = None,
+    makers: list[str] | None = None,
+    labels: list[str] | None = None,
+    date_from: date | None = None,
+    date_to: date | None = None,
+    ng_words: list[str] | None = None,
+    sort: SortKey = "new",
+    limit: int | None = None,
+    offset: int = 0,
+) -> tuple[list[Movie], int]:
+    """詳細絞り込み検索。
+
+    引数は全て optional。指定があれば AND で重ねていく。
+    sort は "new" / "popular" / "rating" / "views" / "bookmarks" のいずれか。
+    views と bookmarks はそれぞれ events / bookmarks テーブルから集計サブクエリを
+    LEFT JOIN して、COALESCE(count, 0) でソートする (作品ごとの実績が 0 でも結果には残す)。
+    """
+    conditions = _build_advanced_conditions(
+        q=q,
+        genres=genres or [],
+        actresses=actresses or [],
+        series_list=series_list or [],
+        directors=directors or [],
+        makers=makers or [],
+        labels=labels or [],
+        date_from=date_from,
+        date_to=date_to,
+        ng_words=ng_words or [],
+    )
+
+    # total は items 取得とは別クエリで先に取る (next_cursor 判定に使う)
+    count_stmt = select(func.count(func.distinct(Movie.id))).where(*conditions)
+    total = (await db.execute(count_stmt)).scalar_one()
+
+    # items: ソート種別に応じてサブクエリを組み立てる
+    stmt = select(Movie).where(*conditions)
+
+    if sort == "new":
+        stmt = stmt.order_by(
+            Movie.primary_date.desc().nullslast(), Movie.id.asc()
+        )
+    elif sort == "popular":
+        stmt = stmt.order_by(
+            Movie.review_count.desc().nullslast(),
+            Movie.primary_date.desc().nullslast(),
+            Movie.id.asc(),
+        )
+    elif sort == "rating":
+        stmt = stmt.order_by(
+            Movie.review_average.desc().nullslast(),
+            Movie.review_count.desc().nullslast(),
+            Movie.id.asc(),
+        )
+    elif sort == "views":
+        # events テーブルから event_type="view" を slug で集計してくっつける。
+        # slug は Movie.slug と一致。COALESCE で集計のない作品も 0 として残す。
+        views_sub = (
+            select(
+                Event.slug.label("slug"),
+                func.count(Event.id).label("view_count"),
+            )
+            .where(Event.event_type == "view")
+            .group_by(Event.slug)
+            .subquery()
+        )
+        stmt = stmt.outerjoin(views_sub, views_sub.c.slug == Movie.slug).order_by(
+            func.coalesce(views_sub.c.view_count, 0).desc(),
+            Movie.primary_date.desc().nullslast(),
+            Movie.id.asc(),
+        )
+    elif sort == "bookmarks":
+        bookmarks_sub = (
+            select(
+                Bookmark.movie_id.label("movie_id"),
+                func.count().label("bm_count"),
+            )
+            .group_by(Bookmark.movie_id)
+            .subquery()
+        )
+        stmt = stmt.outerjoin(
+            bookmarks_sub, bookmarks_sub.c.movie_id == Movie.id
+        ).order_by(
+            func.coalesce(bookmarks_sub.c.bm_count, 0).desc(),
+            Movie.primary_date.desc().nullslast(),
+            Movie.id.asc(),
+        )
+    else:
+        # 想定外: new 扱いにフォールバック (型レベルでは Literal で塞いでいるが念のため)
+        stmt = stmt.order_by(
+            Movie.primary_date.desc().nullslast(), Movie.id.asc()
+        )
+
     if offset:
         stmt = stmt.offset(offset)
     if limit is not None:

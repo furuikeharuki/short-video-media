@@ -16,7 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.security import require_user
 from app.db.models.movie import Movie
-from app.db.models.user import Bookmark, User, ViewHistory
+from app.db.models.user import Bookmark, User, UserNgWord, ViewHistory
 from app.db.session import get_db
 from app.repositories.movie_repository import get_movies_by_ids
 from app.schemas.movie import MovieCard
@@ -212,3 +212,71 @@ async def list_views(
             )
         )
     return ViewListResponse(items=items)
+
+
+# ---------- NG ワード ----------
+
+
+class NgWordsResponse(BaseModel):
+    words: list[str]
+
+
+class NgWordsUpdateBody(BaseModel):
+    words: list[str]
+
+
+def _normalize_ng_words(raw: list[str]) -> list[str]:
+    """空白除去・空文字弾き・重複排除 (順序維持)・長さ上限 (64文字) を適用する。
+
+    DB の word カラムが String(64) なので明示的に切り詰める。クライアントが
+    巨大な配列を投げてきても暴走しないよう件数も制限する。
+    """
+    seen: set[str] = set()
+    out: list[str] = []
+    for w in raw:
+        if not isinstance(w, str):
+            continue
+        w2 = w.strip()
+        if not w2:
+            continue
+        if len(w2) > 64:
+            w2 = w2[:64]
+        if w2 in seen:
+            continue
+        seen.add(w2)
+        out.append(w2)
+        if len(out) >= 200:
+            break
+    return out
+
+
+@router.get("/ng-words", response_model=NgWordsResponse)
+async def list_ng_words(
+    user: Annotated[User, Depends(require_user)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+) -> NgWordsResponse:
+    """ログイン中ユーザーの NG ワード一覧。新しく追加した順 (created_at DESC)。"""
+    result = await db.execute(
+        select(UserNgWord.word)
+        .where(UserNgWord.user_id == user.id)
+        .order_by(UserNgWord.created_at.desc(), UserNgWord.word)
+    )
+    return NgWordsResponse(words=[row[0] for row in result.all()])
+
+
+@router.put("/ng-words", response_model=NgWordsResponse)
+async def replace_ng_words(
+    body: NgWordsUpdateBody,
+    user: Annotated[User, Depends(require_user)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+) -> NgWordsResponse:
+    """NG ワード全置換。差分更新は煩雑なので「削除 → INSERT」する。"""
+    words = _normalize_ng_words(body.words)
+    await db.execute(delete(UserNgWord).where(UserNgWord.user_id == user.id))
+    if words:
+        await db.execute(
+            UserNgWord.__table__.insert(),
+            [{"user_id": user.id, "word": w} for w in words],
+        )
+    await db.commit()
+    return NgWordsResponse(words=words)

@@ -6,15 +6,23 @@ import type { ReactNode, CSSProperties, MouseEvent } from "react";
 /**
  * 女優詳細ページへのリンク。
  *
- * 動画詳細モーダル (インターセプトルート @modal/(.)movies/[slug]) 内から
- * Next.js の <Link> でクライアントナビゲートすると、モーダルが残ったまま
- * URL バーが更新されない問題があるため、明示的に履歴を操作する:
- *   1. window.history.back() でモーダルを閉じる (= モーダル裏のフィード等に戻る)
- *   2. その直後に router.push で女優ページへ遷移
+ * フィード上の動画詳細モーダル (MovieDetailModal) は window.history.pushState で
+ * URL バーだけを /movies/X に書き換えており、Next.js ルータ (usePathname) は
+ * 元の /feed... を返したまま。さらに、モーダル unmount 時に
+ * history.replaceState(null, "", prev) で URL を元に戻す副作用がある。
  *
- * モーダル外 (動画詳細フルページ、検索結果等) からのクリックでも同じ動きにできるが、
- * 履歴の back が意図しない遷移を起こすため、URL が /movies/ で始まるとき (= モーダル中) だけ
- * back を挟む。それ以外は router.push のみ。
+ * そのため、モーダル中にこのリンクから router.push しても:
+ *   1) router.push で Next.js が /actresses/X へ遷移開始
+ *   2) その途中で MovieDetailModal が unmount → replaceState で URL を /feed... に戻す
+ *   3) 結果として URL は /feed... のまま、ページ内容も /actresses/X ではなく
+ *      モーダル裏のフィードが見えてしまう
+ *
+ * 対策: 実 URL バー (window.location.pathname) が /movies/ で始まっているとき
+ * (= モーダル中) は、フルページ遷移 window.location.assign を使う。
+ * これなら React の unmount 処理が走らず、ブラウザがそのまま /actresses/X へ移動する。
+ *
+ * モーダル外 (フィード本体・検索結果・女優ページ間遷移など) からは
+ * 通常通り router.push で SPA 遷移。
  *
  * <a href> を残すことで、middle-click / Cmd+click による新規タブ起動など
  * ネイティブのリンク機能も維持する。
@@ -45,16 +53,10 @@ export default function ActressLink({ name, className, style, children }: Props)
     e.preventDefault();
 
     if (typeof window !== "undefined") {
-      const isInMovieModal = window.location.pathname.startsWith("/movies/");
-      if (isInMovieModal) {
-        // モーダルを閉じてから女優ページへ。
-        // back() の戻り先 (= フィード等) が history に存在する前提。
-        window.history.back();
-        // popstate が完了するのを 1 frame 待ってから push する。
-        // requestAnimationFrame 1 回だと早すぎることがあるため setTimeout で確実に待つ。
-        setTimeout(() => {
-          router.push(href);
-        }, 50);
+      // pushState で URL だけ書き換えられたモーダルの中にいるかを「実 URL バー」で判定
+      const realPath = window.location.pathname;
+      if (realPath.startsWith("/movies/")) {
+        window.location.assign(href);
         return;
       }
     }

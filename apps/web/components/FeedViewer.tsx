@@ -94,6 +94,14 @@ export default function FeedViewer({
     currentIdxRef.current = initialIndex;
     setCurrentIndex(initialIndex);
     updateWindow(initialIndex);
+    // 初期インデックスが既に末尾近く (残り 5 件以下) のケース、
+    // 例えば 20 件セクションの 20 件目 (index=19) から開始した場合は
+    // スワイプしないと onNearEnd が一度も引かれず fetchMore() が走らず、
+    // 「末尾」のまま固定されてしまう。初回マウント時に即座追加を促す。
+    if (items.length > 0 && items.length - initialIndex <= 5) {
+      onNearEnd?.(initialIndex);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [items, initialIndex, updateWindow]);
 
   const goNext = useCallback(() => {

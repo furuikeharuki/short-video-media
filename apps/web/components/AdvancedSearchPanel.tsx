@@ -15,9 +15,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
-  buildAdvancedSearchParams,
   suggestFieldValues,
-  type AdvancedSearchInput,
   type SortKey,
   type SuggestField,
 } from "@/lib/api/search";
@@ -37,17 +35,12 @@ export type AdvancedFormInitial = {
 };
 
 type Props = {
-  /** ログイン中かどうか。現在は保存先 (サーバ / sessionStorage) の振り分けを親側でやるため、
-   *  このパネル内では使わないが、今後拡張用に残しておく (= 互換性維持)。 */
-  isAuthed: boolean;
-  /** 検索結果ページから渡される現在の検索キーワード (URL クエリ q=)。表示しないが復元/構築用に保持。 */
-  keyword?: string;
   /** 自動保存からの初期値 (チップ・NG・日付・ソート)。 */
   initial?: AdvancedFormInitial;
-  /** 検索実行時に呼ばれる (パネルを閉じる用)。url は新しい /search?... の絶対パス。 */
-  onSubmit: (url: string, payload: AdvancedSubmitPayload) => void;
-  /** 「キャンセル」ボタン押下時 (シート閉じる用)。 */
-  onCancel: () => void;
+  /** 「適用」押下時に呼ばれる。URL 構築は親側 (文脈を知っている) で行う。 */
+  onSubmit: (payload: AdvancedSubmitPayload) => void;
+  /** 左上の ✕ ボタン押下時 (シート閉じる用)。 */
+  onClose: () => void;
 };
 
 /** onSubmit に渡すペイロード (親側で sessionStorage / サーバ保存に使う)。 */
@@ -102,13 +95,10 @@ const FIELD_KEYS: FieldKey[] = [
 ];
 
 export default function AdvancedSearchPanel({
-  isAuthed: _isAuthed,
-  keyword,
   initial,
   onSubmit,
-  onCancel,
+  onClose,
 }: Props) {
-  void _isAuthed; // 現状、NG も他フィールドと同じ保存パスに乗せているので、Panel 内ではログイン状態を見ない。
   const [chips, setChips] = useState<Record<FieldKey, string[]>>(() => ({
     genres: initial?.genres ?? [],
     actresses: initial?.actresses ?? [],
@@ -156,21 +146,6 @@ export default function AdvancedSearchPanel({
   }, []);
 
   const handleSubmit = useCallback(() => {
-    const input: AdvancedSearchInput = {
-      q: keyword?.trim() || undefined,
-      genres: chips.genres.length > 0 ? chips.genres : undefined,
-      actresses: chips.actresses.length > 0 ? chips.actresses : undefined,
-      series_list: chips.series_list.length > 0 ? chips.series_list : undefined,
-      directors: chips.directors.length > 0 ? chips.directors : undefined,
-      makers: chips.makers.length > 0 ? chips.makers : undefined,
-      labels: chips.labels.length > 0 ? chips.labels : undefined,
-      ng_words: ng.length > 0 ? ng : undefined,
-      date_from: dateFrom || undefined,
-      date_to: dateTo || undefined,
-      sort: sort || undefined,
-    };
-    const params = buildAdvancedSearchParams(input);
-    const url = `/search?${params.toString()}`;
     const payload: AdvancedSubmitPayload = {
       genres: chips.genres,
       actresses: chips.actresses,
@@ -183,8 +158,8 @@ export default function AdvancedSearchPanel({
       date_to: dateTo,
       sort,
     };
-    onSubmit(url, payload);
-  }, [keyword, chips, dateFrom, dateTo, sort, ng, onSubmit]);
+    onSubmit(payload);
+  }, [chips, dateFrom, dateTo, sort, ng, onSubmit]);
 
   const resetAll = useCallback(() => {
     setChips({
@@ -201,6 +176,23 @@ export default function AdvancedSearchPanel({
 
   return (
     <div className="adv-panel" aria-label="詳細検索">
+      {/* 左上: ✕ ボタン + タイトル */}
+      <div className="adv-panel-header">
+        <button
+          type="button"
+          className="adv-close-btn"
+          aria-label="閉じる"
+          onClick={onClose}
+        >
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none"
+            stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+            <line x1="6" y1="6" x2="18" y2="18" />
+            <line x1="6" y1="18" x2="18" y2="6" />
+          </svg>
+        </button>
+        <span className="adv-panel-title">詳細検索</span>
+      </div>
+
       {/* 並び替え (最上部) */}
       <div className="adv-row adv-row-sort">
         <label className="adv-label">並び替え</label>
@@ -306,9 +298,6 @@ export default function AdvancedSearchPanel({
       <div className="adv-actions">
         <button type="button" className="adv-reset-btn" onClick={resetAll}>
           条件をクリア
-        </button>
-        <button type="button" className="adv-cancel-btn" onClick={onCancel}>
-          閉じる
         </button>
         <button type="button" className="adv-submit-btn" onClick={handleSubmit}>
           適用
@@ -454,9 +443,45 @@ const css = `
     display: flex;
     flex-direction: column;
     gap: 14px;
-    padding: 16px;
+    padding: 0 16px 16px;
     color: #fff;
     font-size: 13px;
+  }
+  .adv-panel-header {
+    position: sticky;
+    top: 0;
+    z-index: 2;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 0;
+    margin: 0 -16px 0;
+    padding-left: 8px;
+    padding-right: 16px;
+    background: #121212;
+    border-bottom: 1px solid rgba(255,255,255,0.08);
+  }
+  .adv-close-btn {
+    background: transparent;
+    border: none;
+    color: #fff;
+    width: 36px;
+    height: 36px;
+    border-radius: 8px;
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+    -webkit-tap-highlight-color: transparent;
+  }
+  .adv-close-btn:hover {
+    background: rgba(255,255,255,0.08);
+  }
+  .adv-panel-title {
+    font-size: 14px;
+    font-weight: 700;
+    color: #fff;
   }
   .adv-row {
     display: flex;
@@ -623,8 +648,7 @@ const css = `
     padding-top: 12px;
     border-top: 1px solid rgba(255,255,255,0.08);
   }
-  .adv-reset-btn,
-  .adv-cancel-btn {
+  .adv-reset-btn {
     background: transparent;
     color: rgba(255,255,255,0.7);
     border: 1px solid rgba(255,255,255,0.18);

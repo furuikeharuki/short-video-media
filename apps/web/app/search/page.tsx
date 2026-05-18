@@ -129,7 +129,7 @@ export default async function SearchPage({ searchParams }: Props) {
         playlistKey={playlistKey}
         playlistTitle="詳細検索"
         headingPrefix={headerLabel}
-        headerSlot={<SearchResultsHeader label={headerLabel} keyword={query} />}
+        headerSlot={<SearchResultsHeader label={headerLabel} context={{ kind: "advanced", q: query }} />}
       />
     );
   }
@@ -151,7 +151,7 @@ export default async function SearchPage({ searchParams }: Props) {
         playlistKey={`search-${field}-${value}`}
         playlistTitle={`${prefix}「${value}」`}
         headingPrefix={`${prefix}「${value}」の作品`}
-        headerSlot={<SearchResultsHeader label={headerLabel} keyword="" />}
+        headerSlot={<SearchResultsHeader label={headerLabel} context={{ kind: "exact", field, value }} />}
       />
     );
   }
@@ -164,7 +164,7 @@ export default async function SearchPage({ searchParams }: Props) {
         playlistKey={`search-genre-${genreTag}`}
         playlistTitle={`#${genreTag}`}
         headingPrefix={`#${genreTag} の動画`}
-        headerSlot={<SearchResultsHeader label={headerLabel} keyword="" />}
+        headerSlot={<SearchResultsHeader label={headerLabel} context={{ kind: "genre", genre: genreTag }} />}
       />
     );
   }
@@ -172,7 +172,7 @@ export default async function SearchPage({ searchParams }: Props) {
   if (!query) {
     return (
       <main style={styles.main}>
-        <SearchResultsHeader label="検索" keyword="" />
+        <SearchResultsHeader label="検索" context={{ kind: "keyword", q: "" }} />
         <p style={styles.empty}>検索ワードを入力してください</p>
         <style>{pageCSS}</style>
       </main>
@@ -186,7 +186,7 @@ export default async function SearchPage({ searchParams }: Props) {
       playlistKey={`search-q-${query}`}
       playlistTitle={`「${query}」の検索結果`}
       headingPrefix={`"${query}" の検索結果`}
-      headerSlot={<SearchResultsHeader label={headerLabel} keyword={query} />}
+      headerSlot={<SearchResultsHeader label={headerLabel} context={{ kind: "keyword", q: query }} />}
     />
   );
 }

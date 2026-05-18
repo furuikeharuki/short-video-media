@@ -14,10 +14,17 @@
  *   - URL クエリと sessionStorage / サーバ保存値の優先関係:
  *     - URL クエリが空のフィールド → 復元値で埋める (検索結果ページ初回マウント時のみ)
  *     - URL クエリに値があるフィールド → URL を尊重
+ * - 適用時の URL 組み立ては「文脈」を保持する:
+ *   - keyword 経路で来た場合: q を保持
+ *   - genre 経路で来た場合: genre を保持 (genres= に書き換えない)
+ *   - exact 経路 (director/maker/label/series) で来た場合: 当該キーを保持
+ *   - advanced 経路で来た場合: q を保持
+ *   フィルターを「クリア」しても上記文脈クエリは消えない。
  */
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useSession } from "next-auth/react";
+import SimpleBackButton from "@/components/SimpleBackButton";
 import AdvancedSearchPanel, {
   type AdvancedFormInitial,
   type AdvancedSubmitPayload,
@@ -128,14 +135,56 @@ function isUrlAdvEmpty(init: AdvancedFormInitial): boolean {
   );
 }
 
+/**
+ * このサブヘッダーの「文脈」。フィルター適用 URL の組み立てで保持するキーを決める。
+ *
+ * - keyword: 通常のキーワード検索 → q を維持
+ * - genre:   `?genre=...` で来たジャンル一覧 → genre を維持
+ * - exact:   director/maker/label/series の完全一致 → 当該キーを維持
+ * - advanced: 既に詳細検索クエリで来ている → q のみ (他のチップは payload 側で上書き)
+ */
+export type SearchHeaderContext =
+  | { kind: "keyword"; q: string }
+  | { kind: "genre"; genre: string }
+  | { kind: "exact"; field: "director" | "maker" | "label" | "series"; value: string }
+  | { kind: "advanced"; q: string };
+
 type Props = {
-  /** 左側に表示するラベル (例: "「妹」" / "#プロ女優" / "監督「苺原」")。空ならラベル省略。 */
+  /** 左側に表示するラベル (例: 「妹」 / #プロ女優 / 監督「苺原」)。空ならラベル省略。 */
   label: string;
-  /** 詳細検索パネルが現在の /search?q= から拾ってくるキーワード。 */
-  keyword: string;
+  /** 適用時に URL クエリへ反映する「いま開いている検索の文脈」。 */
+  context: SearchHeaderContext;
 };
 
-export default function SearchResultsHeader({ label, keyword }: Props) {
+/** context から「文脈クエリだけが乗った」URLSearchParams を作る。 */
+function buildContextParams(context: SearchHeaderContext): URLSearchParams {
+  const p = new URLSearchParams();
+  switch (context.kind) {
+    case "keyword":
+      if (context.q.trim()) p.set("q", context.q.trim());
+      break;
+    case "genre":
+      if (context.genre.trim()) p.set("genre", context.genre.trim());
+      break;
+    case "exact":
+      if (context.value.trim()) p.set(context.field, context.value.trim());
+      break;
+    case "advanced":
+      if (context.q.trim()) p.set("q", context.q.trim());
+      break;
+  }
+  return p;
+}
+
+/** context から server 保存に渡す q (サーバ /me/search-prefs の `q` 列) を抽出する。 */
+function contextToServerQ(context: SearchHeaderContext): string | null {
+  if (context.kind === "keyword" || context.kind === "advanced") {
+    return context.q.trim() || null;
+  }
+  return null;
+}
+
+export default function SearchResultsHeader({ label, context }: Props) {
   const router = useRouter();
   const searchParams = useSearchParams();
   const { status } = useSession();
@@ -172,17 +221,9 @@ export default function SearchResultsHeader({ label, keyword }: Props) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isAuthed]);
 
-  const handleBack = useCallback(() => {
-    // ブラウザ履歴 back。直接アクセス等で履歴が無いケースに備えてフォールバック。
-    if (typeof window !== "undefined" && window.history.length > 1) {
-      router.back();
-    } else {
-      router.push("/");
-    }
-  }, [router]);
-
   const handleSubmit = useCallback(
-    (url: string, payload: AdvancedSubmitPayload) => {
+    (payload: AdvancedSubmitPayload) => {
+      // セッション保存は両モードで実施 (ログイン中も即時の UI 復元用)
       const stored: StoredPref = {
         genres: payload.genres,
         actresses: payload.actresses,
@@ -195,12 +236,11 @@ export default function SearchResultsHeader({ label, keyword }: Props) {
         date_to: payload.date_to,
         sort: payload.sort,
       };
-      // セッション保存は両モードで実施 (ログイン中も即時の UI 復元用)
       writeSessionPref(stored);
       // ログイン中ならサーバにも upsert (失敗は無視)
       if (isAuthed) {
         void putSearchPref({
-          q: keyword || null,
+          q: contextToServerQ(context),
           genres: payload.genres,
           actresses: payload.actresses,
           series_list: payload.series_list,
@@ -213,13 +253,30 @@ export default function SearchResultsHeader({ label, keyword }: Props) {
           sort: payload.sort || null,
         });
       }
+      // URL 組み立て: 文脈クエリを先に置き、その上に advanced 系を append する。
+      const params = buildContextParams(context);
+      const appendMulti = (key: string, arr: string[]) => {
+        const dedup = Array.from(new Set(arr.map((s) => s.trim()).filter(Boolean)));
+        for (const v of dedup) params.append(key, v);
+      };
+      appendMulti("genres", payload.genres);
+      appendMulti("actresses", payload.actresses);
+      appendMulti("series_list", payload.series_list);
+      appendMulti("directors", payload.directors);
+      appendMulti("makers", payload.makers);
+      appendMulti("labels", payload.labels);
+      appendMulti("ng_words", payload.ng_words);
+      if (payload.date_from) params.set("date_from", payload.date_from);
+      if (payload.date_to) params.set("date_to", payload.date_to);
+      if (payload.sort) params.set("sort", payload.sort);
+
       setOpen(false);
-      router.push(url);
+      router.push(`/search?${params.toString()}`);
     },
-    [router, isAuthed, keyword]
+    [router, isAuthed, context]
   );
 
-  const handleCancel = useCallback(() => setOpen(false), []);
+  const handleClose = useCallback(() => setOpen(false), []);
 
   // 適用済みの絞り込み数 (バッジ表示用)。
   const activeCount = useMemo(() => {
@@ -240,17 +297,7 @@ export default function SearchResultsHeader({ label, keyword }: Props) {
   return (
     <>
       <div className="sr-subheader">
-        <button
-          type="button"
-          className="sr-back-btn"
-          aria-label="戻る"
-          onClick={handleBack}
-        >
-          <svg width="22" height="22" viewBox="0 0 24 24" fill="none"
-            stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-            <polyline points="15 6 9 12 15 18" />
-          </svg>
-        </button>
+        <SimpleBackButton />
         <div className="sr-label" title={label}>{label}</div>
         <button
           type="button"
@@ -284,11 +331,9 @@ export default function SearchResultsHeader({ label, keyword }: Props) {
             aria-label="検索フィルター"
           >
             <AdvancedSearchPanel
-              isAuthed={isAuthed}
-              keyword={keyword}
               initial={initial}
               onSubmit={handleSubmit}
-              onCancel={handleCancel}
+              onClose={handleClose}
             />
           </div>
         </>
@@ -312,7 +357,6 @@ const css = `
     border-bottom: 1px solid rgba(255,255,255,0.08);
     min-height: 44px;
   }
-  .sr-back-btn,
   .sr-filter-btn {
     background: transparent;
     border: none;
@@ -328,7 +372,6 @@ const css = `
     flex-shrink: 0;
     -webkit-tap-highlight-color: transparent;
   }
-  .sr-back-btn:hover,
   .sr-filter-btn:hover {
     background: rgba(255,255,255,0.08);
   }

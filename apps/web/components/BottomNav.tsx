@@ -81,11 +81,10 @@ declare global {
   }
 }
 
-// ナビゲーションを非表示にするパス (年齢確認ページなど)。
-// 年齢確認を通さずにショート/ホーム等へ遭移されてしまう UX を防ぐため、
-// ボトムナビごと表示しない。middleware も cookie 未認証なら /age-gate にリダイレクトするが、
-// そもそもボタンを見せないことで二重の保護とクリーンな UI を提供する。
-const NAV_HIDDEN_PATHS = ["/age-gate"];
+// ナビゲーションを非表示にするパス。
+// - /age-gate: 年齢確認を通さずにショート/ホーム等へ遷移されないように
+// - /actresses: 女優詳細ページは没入型レイアウトのためボトムナビを隠す
+const NAV_HIDDEN_PATHS = ["/age-gate", "/actresses"];
 
 export default function BottomNav() {
   const pathname    = usePathname();

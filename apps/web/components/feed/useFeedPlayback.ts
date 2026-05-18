@@ -7,6 +7,11 @@ const DBL_TAP_MS = 300;
 const LONG_PRESS_MS = 500;
 const TAP_MOVE_THRESHOLD = 10;
 const PLAY_THRESHOLD = 0.85;
+// 「プロ女優」(= videoa フロア) 作品の先頭スキップ仕様。
+// 開始位置を 5 秒に飛ばし、シーク / ループのいずれでもそれより前には戻せないようにする。
+const PRO_ACTRESS_HEAD_SKIP_SEC = 5;
+// 極端に短いサンプル動画でホボ即終了するのを避けるためのガード
+const PRO_ACTRESS_MIN_DURATION_SEC = 10;
 
 let globalUserGestured = false;
 let globalIsMuted = true;
@@ -50,9 +55,20 @@ interface UseFeedPlaybackOptions {
    */
   videoSrc: string | null;
   onOpenModal: (slug: string) => void;
+  /**
+   * 「プロ女優」(= videoa フロア) ジャンルが付いた作品かどうか。
+   * true のとき先頭 5 秒を完全に隠す:
+   *   - 初回再生時に currentTime を 5 にセットして開始
+   *   - -5s スキップで currentTime < 5 にならないようクランプ
+   *   - video-seek (シークバー) も下限 5 秒でクランプ
+   *   - timeupdate / seeking で currentTime < 5 を検知したら強制的に 5 に戻す
+   *   - 再生終了 (ended) でループするときも 5 秒から再開
+   * ただし duration が PRO_ACTRESS_MIN_DURATION_SEC 未満の場合は適用しない (動画が短すぎる)。
+   */
+  isProActress?: boolean;
 }
 
-export function useFeedPlayback({ slug, title, isActive, videoSrc, onOpenModal }: UseFeedPlaybackOptions) {
+export function useFeedPlayback({ slug, title, isActive, videoSrc, onOpenModal, isProActress = false }: UseFeedPlaybackOptions) {
   // 初回マウント時に一回だけショートボタンフラグを消費
   consumeStartUnmutedFlag();
 
@@ -80,6 +96,12 @@ export function useFeedPlayback({ slug, title, isActive, videoSrc, onOpenModal }
   const pcClickTimerRef          = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const [isMuted,      setIsMuted]      = useState(globalIsMuted);
+
+  // プロ女優スキップを適用すべきかどうかを ref に保持。<video> ごとの動的判定で、
+  // メタデータロード後に duration を見て確定する (短すぎる動画は無効化)。
+  const skipEffectiveRef = useRef(false);
+  // プロ女優スキップ用の最小許容秒数。skipEffectiveRef が false なら 0。
+  const skipLowerBoundRef = useRef(0);
 
   useEffect(() => {
     const sync = () => {
@@ -156,7 +178,9 @@ export function useFeedPlayback({ slug, title, isActive, videoSrc, onOpenModal }
       if (!video || !isActiveRef.current) return;
       const dur = video.duration;
       if (!Number.isFinite(dur) || dur <= 0) return;
-      const target = Math.max(0, Math.min(dur, ce.detail.ratio * dur));
+      // プロ女優スキップが有効なら下限 5 秒でクランプ (シークバーで先頭に戻せない)
+      const lower = skipLowerBoundRef.current;
+      const target = Math.max(lower, Math.min(dur, ce.detail.ratio * dur));
       try {
         video.currentTime = target;
       } catch {
@@ -173,6 +197,16 @@ export function useFeedPlayback({ slug, title, isActive, videoSrc, onOpenModal }
     // そうしないと、「見た目は unmuted なのに video 要素だけ muted=true」などの不整合が起きる。
     video.muted = globalIsMuted;
     isMutedRef.current = globalIsMuted;
+
+    // プロ女優スキップが有効、かつまだ先頭 5 秒より前にいるなら、play() 直前に 5 秒へ飛ばす。
+    // (loadedmetadata 完了後しか currentTime を信頼してセットできないので、安全な範囲で
+    //  ガードする: duration が確定していて かつ currentTime < lower のときだけ)
+    const lower = skipLowerBoundRef.current;
+    if (lower > 0 && Number.isFinite(video.duration) && video.duration > lower) {
+      if (video.currentTime < lower) {
+        try { video.currentTime = lower; } catch { /* ignore */ }
+      }
+    }
 
     try {
       await video.play();
@@ -259,6 +293,82 @@ export function useFeedPlayback({ slug, title, isActive, videoSrc, onOpenModal }
     window.dispatchEvent(new CustomEvent("video-progress", { detail: { progress: 0 } }));
   }, [isActive, setVideoReady, setSpinnerVisible, setFastBadge, stopProgressLoop]);
 
+  // プロ女優スキップの確定処理。
+  // <video> がマウントされ duration が読めるようになったタイミングで、
+  // skipEffectiveRef / skipLowerBoundRef を確定させる。
+  // duration < MIN なら無効化 (短すぎる動画でホボ即終了するのを避ける)。
+  // また、loadedmetadata / timeupdate / seeking / ended で下限 5 秒に強制復帰させる。
+  useEffect(() => {
+    if (!isActive) return;
+    const video = videoRef.current;
+    if (!video) return;
+
+    // この <video> 用の初期値リセット
+    skipEffectiveRef.current = false;
+    skipLowerBoundRef.current = 0;
+
+    const evaluate = () => {
+      if (!isProActress) {
+        skipEffectiveRef.current = false;
+        skipLowerBoundRef.current = 0;
+        return;
+      }
+      const dur = video.duration;
+      if (!Number.isFinite(dur) || dur < PRO_ACTRESS_MIN_DURATION_SEC) {
+        // メタデータ未確定 or 動画が短すぎる場合はスキップ無効
+        skipEffectiveRef.current = false;
+        skipLowerBoundRef.current = 0;
+        return;
+      }
+      skipEffectiveRef.current = true;
+      skipLowerBoundRef.current = PRO_ACTRESS_HEAD_SKIP_SEC;
+    };
+
+    const enforceLowerBound = () => {
+      if (!skipEffectiveRef.current) return;
+      const lower = skipLowerBoundRef.current;
+      if (lower <= 0) return;
+      // タイマー精度の都合で 4.9 のような値も来るので、わずかにマージンを取って判定する
+      if (video.currentTime + 0.05 < lower) {
+        try { video.currentTime = lower; } catch { /* ignore */ }
+      }
+    };
+
+    const handleLoadedMeta = () => {
+      evaluate();
+      // メタデータ確定直後、初回再生はまだ 0 から始まっている可能性が高いので飛ばす
+      enforceLowerBound();
+    };
+    const handleTimeUpdate = () => enforceLowerBound();
+    const handleSeeking = () => enforceLowerBound();
+    const handleSeeked = () => enforceLowerBound();
+    const handleEnded = () => {
+      // 既存ループ仕様 (HTMLVideoElement の loop 属性は未使用、再生終端で何が起きるかは
+      // ブラウザ依存) に合わせ、明示的に 5 秒に戻して再生再開する。
+      if (!skipEffectiveRef.current) return;
+      const lower = skipLowerBoundRef.current;
+      try { video.currentTime = lower > 0 ? lower : 0; } catch { /* ignore */ }
+      // loop 未設定でも再開させる。ユーザージェスチャーを失っていることが多いので muted フォールバックで OK。
+      void playVideo(video, false);
+    };
+
+    // 初期評価 (もう metadata が読めていれば即評価)
+    if (video.readyState >= 1) evaluate();
+
+    video.addEventListener("loadedmetadata", handleLoadedMeta);
+    video.addEventListener("timeupdate", handleTimeUpdate);
+    video.addEventListener("seeking", handleSeeking);
+    video.addEventListener("seeked", handleSeeked);
+    video.addEventListener("ended", handleEnded);
+    return () => {
+      video.removeEventListener("loadedmetadata", handleLoadedMeta);
+      video.removeEventListener("timeupdate", handleTimeUpdate);
+      video.removeEventListener("seeking", handleSeeking);
+      video.removeEventListener("seeked", handleSeeked);
+      video.removeEventListener("ended", handleEnded);
+    };
+  }, [isActive, videoSrc, isProActress, playVideo]);
+
   // 再生中の読み込み停滾 (waiting/stalled) と、出荷再開 (playing/canplaythrough) を検知して
   // スピナーの表示・非表示を切り替える。isActive 中のときだけビデオ要素が
   // 存在するため、それに依存したイベントリスナをその単位で貼り替える。
@@ -337,7 +447,9 @@ export function useFeedPlayback({ slug, title, isActive, videoSrc, onOpenModal }
     if (!video || !section) return;
     const rect   = section.getBoundingClientRect();
     const isLeft = clientX - rect.left < rect.width / 2;
-    if (isLeft) video.currentTime = Math.max(0, video.currentTime - SKIP_SEC);
+    // プロ女優スキップが有効なら 5 秒未満には絶対に戻らない (下限クランプ)
+    const lower = skipLowerBoundRef.current;
+    if (isLeft) video.currentTime = Math.max(lower, video.currentTime - SKIP_SEC);
     else        video.currentTime = Math.min(video.duration || Infinity, video.currentTime + SKIP_SEC);
     const ripple = document.createElement("div");
     ripple.className = "skip-ripple";

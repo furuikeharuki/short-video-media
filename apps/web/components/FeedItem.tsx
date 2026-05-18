@@ -30,6 +30,13 @@ interface Props {
 // これだけ経ったら、ネットワーク進行不能とみなして onError 相当のリトライを走らせる。
 const VIDEO_HARD_TIMEOUT_MS = 8000;
 
+// 「プロ女優」(= sync_catalog で videoa フロアの作品全部に付与される擬似ジャンル)。
+// このジャンルが付いている作品は先頭 5 秒をスキップして再生する仕様。
+// FeedItem は アプリ内で動画を再生する唯一の入口 (検索 / 女優ページ / ブックマーク等
+// どこから来ても FeedViewer 経由で FeedItem に到達する) ため、ここで判定すれば
+// すべてのアクセス経路で 5 秒スキップが効く。
+const PRO_ACTRESS_GENRE = "プロ女優";
+
 export default function FeedItem({ item, isActive, isFirst, isSecond = false }: Props) {
   const [modalSlug, setModalSlug] = useState<string | null>(null);
   const { isAuthenticated, isBookmarked, toggle } = useBookmarks();
@@ -94,6 +101,8 @@ export default function FeedItem({ item, isActive, isFirst, isSecond = false }: 
     // resolver で URL を遅延取得したときでも、<video> マウント直後に自動再生を起動させる
     videoSrc,
     onOpenModal: handleOpenModal,
+    // プロ女優 (videoa) 作品は先頭 5 秒スキップ + 戻し不可
+    isProActress: item.genres?.includes(PRO_ACTRESS_GENRE) ?? false,
   });
 
   const preloadAttr = isFirst || isSecond ? "auto" : "metadata";

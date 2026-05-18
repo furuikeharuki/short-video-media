@@ -285,53 +285,6 @@ def _build_slug(item: dict, content_id: str) -> str:
     return _slugify(content_id, content_id)
 
 
-def _strip_zero_padding(cid: str) -> str:
-    """DMM content_id の中央数字部の先頭ゼロを削る。
-
-    例: mmmb00181 -> mmmb181 / scop00912 -> scop912 / 1sun00054a -> 1sun54a / host00001 -> host1
-    パターン: 先頭数字(任意) + 英字ブロック + 数字 + 末尾英字(任意)
-    マッチしないときはそのまま返す。
-    """
-    import re as _re
-    m = _re.match(r"^(\d*)([a-zA-Z_]+)(\d+)([a-zA-Z]?)$", cid)
-    if not m:
-        return cid
-    prefix_num, alpha, num, tail = m.groups()
-    return f"{prefix_num}{alpha}{int(num)}{tail}"
-
-
-def _build_sample_mp4_url(content_id: str) -> str | None:
-    """DMM の content_id から MP4 直リンク URL を組み立てる。
-
-    DMM API が返す `sampleMovieURL.size_*` は実際には HTML プレイヤーページ
-    (iframe 埋め込み用) であり、`<video src>` には使えない。
-    実際の MP4 ファイルは下記パターンで配信されている:
-        //cc3001.dmm.co.jp/litevideo/freepv/{c[0]}/{c[:3]}/{cid}/{cid}_mhb_w.mp4
-
-    重要: 多くの作品で CDN のパスに使われる cid は DMM API の content_id
-    と同じではなく、中央数字部の先頭ゼロパディングが剣げた表記になっている。
-    例: API の content_id `mmmb00181` -> CDN パスは `mmmb181`
-          API の content_id `scop00912` -> CDN パスは `scop912`
-    そのため、サーバー側では パディング無しをデフォルトとし、クライアント側で
-    onError 時にパディング有り・別 suffix を順番に試す。
-    """
-    cid = (content_id or "").strip().lower()
-    if not cid:
-        return None
-    # ゼロパディングを削った表記を使う
-    cid_no_pad = _strip_zero_padding(cid)
-    # CDN パスの prefix に使う cid は先頭の数字を除いたもの。
-    cid_for_url = cid_no_pad.lstrip("0123456789")
-    if not cid_for_url or not cid_for_url[0].isalpha():
-        return None
-    prefix1 = cid_for_url[0]
-    prefix3 = cid_for_url[:3]
-    return (
-        f"https://cc3001.dmm.co.jp/litevideo/freepv/"
-        f"{prefix1}/{prefix3}/{cid_no_pad}/{cid_no_pad}_mhb_w.mp4"
-    )
-
-
 def _floor_image_base(floor: str) -> str:
     """DMM 画像 CDN のフロア別ベース URL。"""
     if floor == "videoa":
@@ -449,15 +402,14 @@ async def upsert_movie(
     affiliate_id: str,
     floor: str,
     dry_run: bool = False,
-    refresh_sample_url: bool = False,
     actress_filter: set[str] | None = None,
     http_client: httpx.AsyncClient | None = None,
 ) -> None:
     """DMM API の 1 件を Movie テーブルに upsert する。
 
-    :param refresh_sample_url:
-        True なら既存作品の sample_movie_url を DMM ロジックで再生成した URL で上書きする。
-        False (デフォルト) のときは既存値を保護 (クライアント学習キャッシュを壊さない)。
+    sample_movie_url は resolver サービスがユーザー初回再生時に動的に解決して
+    書き戻すため、sync ジョブでは一切触らない (INSERT 時は None、UPDATE 時は保護)。
+
     :param actress_filter:
         与えられたとき、作品に含まれる女優名がこのセットに 1 つも一致しなければ skip。
         goods フロアで DB に存在する女優に関連する商品だけ保存するために使う。
@@ -491,13 +443,9 @@ async def upsert_movie(
     sample_movie = (item.get("sampleMovieURL") or {})
     sample_image = (item.get("sampleImageURL") or {})
 
-    # DMM API が返す sampleMovieURL.size_720_480 は HTML プレイヤーページ
-    # (www.dmm.co.jp/litevideo/-/part/=/...) であり、<video src> に直接
-    # 渡しても動画として読み込めない。実際の MP4 ファイルは content_id から
-    # 自前で組み立てる必要がある。
-    sample_movie_url = _build_sample_mp4_url(content_id)
-
-    # iframe プレイヤー URL は別カラムに保持 (フォールバック / 埋め込み用途)
+    # iframe プレイヤー URL は「サンプル動画あり」の存在チェックに使う。
+    # MP4 直リンクは resolver サービス (Xserver VPS) がユーザー初回再生時に
+    # 動的に解決して DB に書き戻すため、ここでは推測しない。
     sample_embed_url = (
         sample_movie.get("size_720_480")
         or sample_movie.get("size_644_414")
@@ -588,14 +536,7 @@ async def upsert_movie(
         new_image_large = image_urls.get("large") or _build_large_image_url(content_id, floor)
         movie.image_url_list = new_image_list or movie.image_url_list
         movie.image_url_large = new_image_large or movie.image_url_large
-        # sample_movie_url: クライアントがフォールバックで見つけた有効 URL を
-        # キャッシュしているため、送信でオリジナルロジックに戻さないよう保護する。
-        #   - 毎時 cron (refresh_sample_url=False): 既存値が空のときだけセット
-        #   - フル同期 (refresh_sample_url=True): 常に上書き（月 1 のリセットタイミング）
-        if refresh_sample_url:
-            movie.sample_movie_url = sample_movie_url or movie.sample_movie_url
-        elif not movie.sample_movie_url:
-            movie.sample_movie_url = sample_movie_url
+        # sample_movie_url は resolver キャッシュを保護するため、sync では一切触らない。
         movie.sample_embed_url = sample_embed_url or movie.sample_embed_url
         # affiliate_url は常に自前生成のもので上書き (既存データの無効リンクを一括で修復する)
         movie.affiliate_url = affiliate_url
@@ -633,7 +574,8 @@ async def upsert_movie(
                 image_urls.get("large")
                 or _build_large_image_url(content_id, floor)
             ),
-            sample_movie_url=sample_movie_url,
+            # sample_movie_url は resolver がユーザー初回再生時に解決して埋める。
+            sample_movie_url=None,
             sample_embed_url=sample_embed_url,
             affiliate_url=affiliate_url,
             affiliate_url_en=item.get("affiliateURLs_mobile"),
@@ -985,7 +927,6 @@ async def _process_items(
     affiliate_id: str,
     floor: str,
     dry_run: bool,
-    refresh_sample_url: bool,
     actress_filter: set[str] | None,
     http_client: httpx.AsyncClient | None = None,
 ) -> None:
@@ -1000,7 +941,6 @@ async def _process_items(
                 affiliate_id=affiliate_id,
                 floor=floor,
                 dry_run=dry_run,
-                refresh_sample_url=refresh_sample_url,
                 actress_filter=actress_filter,
                 http_client=http_client,
             )
@@ -1032,7 +972,6 @@ async def _run_floor_window(
     lte_date: str | None,
     counters: UpsertCounters,
     dry_run: bool,
-    refresh_sample_url: bool,
     actress_filter: set[str] | None,
 ) -> None:
     """一つの (floor, 期間ウィンドウ) を offset でページングして全件取得し、upsert する。
@@ -1085,7 +1024,6 @@ async def _run_floor_window(
             affiliate_id=link_affiliate_id,
             floor=floor,
             dry_run=dry_run,
-            refresh_sample_url=refresh_sample_url,
             actress_filter=actress_filter,
             http_client=client,
         )
@@ -1108,7 +1046,6 @@ async def main(
     hits_per_floor: int,
     floors_filter: list[str] | None,
     dry_run: bool,
-    refresh_sample_url: bool,
     start_date: date | None,
     end_date: date | None,
 ) -> None:
@@ -1146,8 +1083,7 @@ async def main(
 
     print(
         f"[sync_catalog] start: mode={mode} hits_per_floor={hits_per_floor} "
-        f"floors={[f[2] for f in targets]} dry_run={dry_run} "
-        f"refresh_sample_url={refresh_sample_url}"
+        f"floors={[f[2] for f in targets]} dry_run={dry_run}"
     )
 
     async with httpx.AsyncClient() as client:
@@ -1184,7 +1120,6 @@ async def main(
                             lte_date=lte,
                             counters=counters,
                             dry_run=dry_run,
-                            refresh_sample_url=refresh_sample_url,
                             actress_filter=actress_filter,
                         )
                 else:
@@ -1204,7 +1139,6 @@ async def main(
                         lte_date=None,
                         counters=counters,
                         dry_run=dry_run,
-                        refresh_sample_url=refresh_sample_url,
                         actress_filter=actress_filter,
                     )
                 # フロア切替時もちょっと休む
@@ -1248,20 +1182,12 @@ if __name__ == "__main__":
         default="",
         help="full モードで取得する期間の終了日 (YYYY-MM-DD、空なら今日)",
     )
-    parser.add_argument(
-        "--refresh-sample-url",
-        action="store_true",
-        help="sample_movie_url を常に上書き (未指定時は既存値を保護 = クライアント学習キャッシュを壊さない)",
-    )
     parser.add_argument("--dry-run", action="store_true", help="DB に書き込まずにログだけ表示")
     args = parser.parse_args()
 
     floors_filter = None
     if args.floors:
         floors_filter = [f.strip() for f in args.floors.split(",") if f.strip()]
-
-    # full モードはデフォルトで refresh_sample_url=True (月 1 のリセットタイミング)
-    refresh_sample_url = args.refresh_sample_url or (args.mode == "full")
 
     start_date: date | None = None
     end_date: date | None = None
@@ -1278,7 +1204,6 @@ if __name__ == "__main__":
         hits_per_floor=args.hits,
         floors_filter=floors_filter,
         dry_run=args.dry_run,
-        refresh_sample_url=refresh_sample_url,
         start_date=start_date,
         end_date=end_date,
     ))

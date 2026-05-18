@@ -1,4 +1,5 @@
 import logging
+import re
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
@@ -14,6 +15,25 @@ from app.services.movie_service import get_movie_by_slug_service
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+
+
+# DMM のサンプル URL には古いパターン (`_mhb_w.mp4` / `_dm_w.mp4`) と
+# 新しいパターン (`_sm_s.mp4` / `_dmb_s.mp4` / `_dm_s.mp4` など) があり、
+# 古いパターンは Chromium の Opaque Response Blocking (ORB) や 404 で
+# そもそも再生できない。DB にこれらが保存されている場合も
+# キャッシュとして使わず、必ず resolver 経由で取り直す。
+#
+# 例:
+#   bad : https://cc3001.dmm.co.jp/litevideo/freepv/a/akd/akdl046a/akdl046a_mhb_w.mp4
+#   good: https://cc3001.dmm.co.jp/litevideo/freepv/.../akdl046a_sm_s.mp4
+_UNPLAYABLE_SUFFIX_RE = re.compile(r"_(mhb|dm)_w\.mp4(\?|$)", re.IGNORECASE)
+
+
+def _is_unplayable_legacy_url(url: str | None) -> bool:
+    """DB に保存された sample_movie_url が旧形式で再生不可能かを判定。"""
+    if not url:
+        return False
+    return _UNPLAYABLE_SUFFIX_RE.search(url) is not None
 
 
 @router.get("/movies/{slug}", response_model=MovieDetail)
@@ -73,7 +93,9 @@ async def resolve_mp4(
     movie_id, content_id, cached_url = row
 
     # force でなければ DB キャッシュをそのまま使う。
-    if not force and cached_url:
+    # ただし旧形式 (_mhb_w.mp4 / _dm_w.mp4) はそもそも再生できないので
+    # キャッシュとして採用しず、resolver 経由で取り直す。
+    if not force and cached_url and not _is_unplayable_legacy_url(cached_url):
         return ResolveMp4Response(
             content_id=content_id, mp4_url=cached_url, cached=True
         )
@@ -107,7 +129,8 @@ async def resolve_mp4(
         ) from e
     except resolver_client.ResolverUnavailable as e:
         # resolver に繋がらない / 5xx。キャッシュがあればそれでフォールバック。
-        if cached_url and not force:
+        # ただし旧形式 URL にフォールバックしても再生できないので意味がない。
+        if cached_url and not force and not _is_unplayable_legacy_url(cached_url):
             logger.warning(
                 "resolver unavailable, falling back to cached url: %s", e
             )

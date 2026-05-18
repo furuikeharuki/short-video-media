@@ -1048,6 +1048,8 @@ async def main(
     dry_run: bool,
     start_date: date | None,
     end_date: date | None,
+    incremental_gte: str | None = None,
+    incremental_lte: str | None = None,
 ) -> None:
     api_id = os.getenv("DMM_API_ID")
     # DMM API 呼び出し用 ID (末尾 -990〜-999 必須)
@@ -1123,7 +1125,9 @@ async def main(
                             actress_filter=actress_filter,
                         )
                 else:
-                    # incremental モード: 期間指定なし、件数上限だけ
+                    # incremental モード: 件数上限 + (任意) 期間フィルタ
+                    # 年代サンプリング用に incremental_gte / incremental_lte を使うと
+                    # 「この期間で入演作の先頭 N 件」を取ってこれる。
                     await _run_floor_window(
                         client=client,
                         session=session,
@@ -1135,8 +1139,8 @@ async def main(
                         floor=floor,
                         prefix=prefix,
                         hits_limit=hits_per_floor,
-                        gte_date=None,
-                        lte_date=None,
+                        gte_date=incremental_gte,
+                        lte_date=incremental_lte,
                         counters=counters,
                         dry_run=dry_run,
                         actress_filter=actress_filter,
@@ -1182,6 +1186,18 @@ if __name__ == "__main__":
         default="",
         help="full モードで取得する期間の終了日 (YYYY-MM-DD、空なら今日)",
     )
+    parser.add_argument(
+        "--gte-date",
+        type=str,
+        default="",
+        help="incremental モードで期間フィルタをかけるときの下限 (YYYY-MM-DD)",
+    )
+    parser.add_argument(
+        "--lte-date",
+        type=str,
+        default="",
+        help="incremental モードで期間フィルタをかけるときの上限 (YYYY-MM-DD)",
+    )
     parser.add_argument("--dry-run", action="store_true", help="DB に書き込まずにログだけ表示")
     args = parser.parse_args()
 
@@ -1199,6 +1215,18 @@ if __name__ == "__main__":
             else date.today()
         )
 
+    # incremental モード用の期間フィルタ (DMM API の gte_date/lte_date は ISO 8601 なので
+    # T00:00:00 / T23:59:59 を付ける)
+    incremental_gte: str | None = None
+    incremental_lte: str | None = None
+    if args.gte_date:
+        # 検証だけ (パースして退取りしたものは使わず、文字列に戻して使う)
+        datetime.strptime(args.gte_date, "%Y-%m-%d")
+        incremental_gte = f"{args.gte_date}T00:00:00"
+    if args.lte_date:
+        datetime.strptime(args.lte_date, "%Y-%m-%d")
+        incremental_lte = f"{args.lte_date}T23:59:59"
+
     asyncio.run(main(
         mode=args.mode,
         hits_per_floor=args.hits,
@@ -1206,4 +1234,6 @@ if __name__ == "__main__":
         dry_run=args.dry_run,
         start_date=start_date,
         end_date=end_date,
+        incremental_gte=incremental_gte,
+        incremental_lte=incremental_lte,
     ))

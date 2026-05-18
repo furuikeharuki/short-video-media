@@ -33,6 +33,14 @@ on:
         description: "DB に書かずに動作確認だけ行う"
         required: false
         default: "false"
+      gte_date:
+        description: "取得対象の最小発売日 (YYYY-MM-DD、incremental モードのみ)"
+        required: false
+        default: ""
+      lte_date:
+        description: "取得対象の最大発売日 (YYYY-MM-DD、incremental モードのみ)"
+        required: false
+        default: ""
 
 concurrency:
   group: sync-catalog-prod
@@ -74,6 +82,8 @@ jobs:
           HITS: ${{ github.event.inputs.hits || '100' }}
           FLOORS_INPUT: ${{ github.event.inputs.floors || '' }}
           DRY_RUN_INPUT: ${{ github.event.inputs.dry_run || 'false' }}
+          GTE_DATE_INPUT: ${{ github.event.inputs.gte_date || '' }}
+          LTE_DATE_INPUT: ${{ github.event.inputs.lte_date || '' }}
         run: |
           ARGS="--hits ${HITS}"
           if [ -n "${FLOORS_INPUT}" ]; then
@@ -81,6 +91,12 @@ jobs:
           fi
           if [ "${DRY_RUN_INPUT}" = "true" ]; then
             ARGS="${ARGS} --dry-run"
+          fi
+          if [ -n "${GTE_DATE_INPUT}" ]; then
+            ARGS="${ARGS} --gte-date ${GTE_DATE_INPUT}"
+          fi
+          if [ -n "${LTE_DATE_INPUT}" ]; then
+            ARGS="${ARGS} --lte-date ${LTE_DATE_INPUT}"
           fi
           echo "Running: python -m src.sync_catalog ${ARGS}"
           python -m src.sync_catalog ${ARGS}

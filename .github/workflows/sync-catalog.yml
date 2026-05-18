@@ -4,7 +4,10 @@ name: Sync Catalog (DMM ItemList)
 # 全件取得 (ブートストラップ / 月 1) は sync-catalog-full.yml を使う。
 #
 # トリガー:
-#   - cron: 2 時間ごと (各偶数時 0 分 UTC = 同じタイミングの JST)
+#   - cron: 日中のみ 2 時間ごと (JST 10/12/14/16/18 の 5 回)
+#     深夜帯はサービスのピークタイムなので避ける。
+#   - sync 完了後に同ジョブで resolve_sample_urls も連続実行し、
+#     新着作品の sample_movie_url をその場で埋める。
 #   - 手動実行 (workflow_dispatch) も可。--hits を指定して任意件数を取得できる。
 #
 # 必要な Secrets:
@@ -13,12 +16,14 @@ name: Sync Catalog (DMM ItemList)
 #   - DMM_LINK_AFFILIATE_ID   : 購入ページに付ける af_id (末尾 -001 などサイト紐付け用)
 #                               未設定時は DMM_AFFILIATE_ID をフォールバックで使用
 #   - DATABASE_URL            : 本番 Postgres への接続文字列 (Railway Public URL)
+#   - RESOLVER_BASE_URL       : Xserver VPS resolver の URL (resolve ステップ用)
+#   - RESOLVER_API_KEY        : resolver Bearer 認証用 API キー (resolve ステップ用)
 
 on:
   schedule:
-    # UTC で 2 時間に 1 回 (00, 02, 04, ... 分)
-    # JST でも 2 時間に 1 回のタイミングになる。
-    - cron: "0 */2 * * *"
+    # 日中のみ 2 時間ごと (JST 10/12/14/16/18 = UTC 01/03/05/07/09)
+    # 深夜帯 (JST 0-9時) はサービスのピークタイムなので走らせない。
+    - cron: "0 1,3,5,7,9 * * *"
   workflow_dispatch:
     inputs:
       hits:
@@ -100,3 +105,18 @@ jobs:
           fi
           echo "Running: python -m src.sync_catalog ${ARGS}"
           python -m src.sync_catalog ${ARGS}
+
+      # sync で新規追加された作品は sample_movie_url=NULL で保存されるため、
+      # その場で resolver を叩いて MP4 URL を埋める。静かに走らせたいので
+      # 並列度は控えめ (4)、同ジョブ内なので dry-run トリガー時はスキップ。
+      - name: Resolve new sample_movie_url
+        if: ${{ github.event.inputs.dry_run != 'true' }}
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          RESOLVER_BASE_URL: ${{ secrets.RESOLVER_BASE_URL }}
+          RESOLVER_API_KEY: ${{ secrets.RESOLVER_API_KEY }}
+        run: |
+          # 取りこぼしがあるといけないので --limit なし (=全件を NULL から埋める)。
+          # resolver に負荷をかけすぎないよう concurrency=4。
+          echo "Running: python -m src.resolve_sample_urls --concurrency 4"
+          python -m src.resolve_sample_urls --concurrency 4

@@ -70,7 +70,10 @@ export default async function MovieDetailPage({ params }: PageProps) {
     const hasReview = movie.review_count > 0 && movie.review_average != null;
     const canonical = `${SITE_URL}/movies/${slug}`;
 
-    const fieldLink = (field: "director" | "maker" | "label", value: string) => (
+    const fieldLink = (
+      field: "director" | "maker" | "label" | "series",
+      value: string,
+    ) => (
       <Link
         href={`/search?${field}=${encodeURIComponent(value)}`}
         style={styles.metaLink}
@@ -97,7 +100,7 @@ export default async function MovieDetailPage({ params }: PageProps) {
 
     const metaRows: { label: string; value: React.ReactNode }[] = [
       { label: "出演",       value: movie.actresses.length > 0 ? actressLinks(movie.actresses) : NA },
-      { label: "シリーズ",   value: movie.series_name ?? NA },
+      { label: "シリーズ",   value: movie.series_name ? fieldLink("series", movie.series_name) : NA },
       { label: "監督",       value: movie.director_name ? fieldLink("director", movie.director_name) : NA },
       { label: "メーカー",   value: movie.maker_name ? fieldLink("maker", movie.maker_name) : NA },
       { label: "レーベル",   value: movie.label_name ? fieldLink("label", movie.label_name) : NA },
@@ -155,7 +158,7 @@ export default async function MovieDetailPage({ params }: PageProps) {
               height={1280}
               loading="eager"
             />
-            <BackButton />
+            <BackButton resumeFeedUnmuted />
           </div>
 
           <div style={styles.content}>

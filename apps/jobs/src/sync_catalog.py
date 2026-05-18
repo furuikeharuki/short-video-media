@@ -527,10 +527,19 @@ async def upsert_movie(
     review_count, review_avg = _extract_review(item)
 
     # 制作者情報 (リストになる場合があるので最初の 1 件)
+    # DMM API は「メーカー / レーベル未設定」を表すプレースホルダとして
+    # name="----" あるいは空文字列を返してくることがある (例: 1sun00055a の label)。
+    # それをそのまま保存すると UI で「レーベル: ----」と表示されてしまうため、None に正規化する。
     def _first_name(key: str) -> str | None:
         arr = iteminfo.get(key) or []
         if isinstance(arr, list) and arr:
-            return arr[0].get("name")
+            name = arr[0].get("name")
+            if name is None:
+                return None
+            s = str(name).strip()
+            if not s or s == "----":
+                return None
+            return s
         return None
 
     director_name = _first_name("director")

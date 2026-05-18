@@ -15,6 +15,7 @@ from app.db.models.user import Bookmark
 
 
 SortKey = Literal["new", "popular", "rating", "views", "bookmarks"]
+SuggestField = Literal["actress", "series", "director", "maker", "label", "genre"]
 
 
 def _build_keyword_where(query: str):
@@ -353,3 +354,90 @@ async def advanced_search_movies(
 
     result = await db.execute(stmt)
     return list(result.scalars().unique().all()), int(total)
+
+
+# ----------------------------------------------------------------------
+# Suggest (詳細検索パネルの入力サジェスト用)
+# ----------------------------------------------------------------------
+
+
+async def suggest_field_values(
+    db: AsyncSession,
+    *,
+    field: SuggestField,
+    q: str = "",
+    limit: int = 10,
+) -> list[str]:
+    """指定フィールドの値を「その値を持つ可視作品数の多い順」で返す。
+
+    詳細検索パネルのテキスト入力時のサジェスト用。NULL/空文字は除外し、
+    is_visible=False の作品は集計から外す (検索結果と整合させる)。
+
+    マッピング:
+      - actress / genre: M:N (movie_actresses / movie_genres) を JOIN し、
+        Movie.is_visible=True で絞ってから COUNT(DISTINCT Movie.id)
+      - series: Series ←→ Movie の 1:M。Series.name を返し、
+        紐づく可視作品数で並べる
+      - director / maker / label: Movie のカラム直値。値で GROUP BY して
+        COUNT(DISTINCT Movie.id)
+    """
+    pattern = f"%{q}%" if q else None
+
+    if field == "actress":
+        name_col = Actress.name
+        stmt = (
+            select(name_col, func.count(func.distinct(Movie.id)).label("cnt"))
+            .select_from(Actress)
+            .join(MovieActress, MovieActress.actress_id == Actress.id)
+            .join(Movie, Movie.id == MovieActress.movie_id)
+            .where(Movie.is_visible.is_(True), name_col.is_not(None), name_col != "")
+        )
+    elif field == "genre":
+        name_col = Genre.name
+        stmt = (
+            select(name_col, func.count(func.distinct(Movie.id)).label("cnt"))
+            .select_from(Genre)
+            .join(MovieGenre, MovieGenre.genre_id == Genre.id)
+            .join(Movie, Movie.id == MovieGenre.movie_id)
+            .where(Movie.is_visible.is_(True), name_col.is_not(None), name_col != "")
+        )
+    elif field == "series":
+        name_col = Series.name
+        # Movie.series_id FK 経由。可視作品を持たないシリーズは出さない (INNER JOIN)
+        stmt = (
+            select(name_col, func.count(func.distinct(Movie.id)).label("cnt"))
+            .select_from(Series)
+            .join(Movie, Movie.series_id == Series.id)
+            .where(Movie.is_visible.is_(True), name_col.is_not(None), name_col != "")
+        )
+    elif field == "director":
+        name_col = Movie.director_name
+        stmt = select(name_col, func.count(func.distinct(Movie.id)).label("cnt")).where(
+            Movie.is_visible.is_(True), name_col.is_not(None), name_col != ""
+        )
+    elif field == "maker":
+        name_col = Movie.maker_name
+        stmt = select(name_col, func.count(func.distinct(Movie.id)).label("cnt")).where(
+            Movie.is_visible.is_(True), name_col.is_not(None), name_col != ""
+        )
+    elif field == "label":
+        name_col = Movie.label_name
+        stmt = select(name_col, func.count(func.distinct(Movie.id)).label("cnt")).where(
+            Movie.is_visible.is_(True), name_col.is_not(None), name_col != ""
+        )
+    else:
+        # Literal で塞いではいるが念のため
+        return []
+
+    if pattern is not None:
+        stmt = stmt.where(name_col.ilike(pattern))
+
+    # 同件数の場合は名前順で安定ソート
+    stmt = (
+        stmt.group_by(name_col)
+        .order_by(func.count(func.distinct(Movie.id)).desc(), name_col.asc())
+        .limit(limit)
+    )
+
+    result = await db.execute(stmt)
+    return [row[0] for row in result.all()]

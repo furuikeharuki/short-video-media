@@ -339,3 +339,72 @@ def test_legacy_single_exact_fields_still_supported(
         assert captured["exact"]["director"] == "監督A"
     finally:
         app.dependency_overrides.clear()
+
+
+# ---------------- /search/suggest ----------------
+
+
+@pytest.fixture
+def suggest_client(
+    monkeypatch: pytest.MonkeyPatch, captured: dict[str, Any]
+) -> Iterator[TestClient]:
+    """suggest_field_values をモックして field / q / limit が渡ることを確認するクライアント。"""
+
+    async def fake_suggest(db, *, field, q, limit):  # type: ignore[no-untyped-def]
+        captured["suggest"] = {"field": field, "q": q, "limit": limit}
+        # ダミーで件数の多い順を模した文字列リストを返す
+        return [f"{field}-1", f"{field}-2", f"{field}-3"][:limit]
+
+    # エンドポイントは search_repository から直接 import しているため、
+    # endpoint モジュール側の参照 (app.api.v1.endpoints.search.suggest_field_values) を差し替える。
+    monkeypatch.setattr(search_endpoint, "suggest_field_values", fake_suggest)
+
+    async def _fake_db():
+        yield _FakeDB([])
+
+    app.dependency_overrides[get_db] = _fake_db
+    yield TestClient(app)
+    app.dependency_overrides.clear()
+
+
+@pytest.mark.parametrize(
+    "field", ["actress", "series", "director", "maker", "label", "genre"]
+)
+def test_suggest_field_passes_through(
+    suggest_client: TestClient, captured: dict[str, Any], field: str
+) -> None:
+    """6 フィールドそれぞれが repo まで届き、items が返ること。"""
+    res = suggest_client.get(
+        "/api/v1/search/suggest",
+        params={"field": field, "q": "テス", "limit": 5},
+    )
+    assert res.status_code == 200
+    body = res.json()
+    assert "items" in body
+    assert body["items"] == [f"{field}-1", f"{field}-2", f"{field}-3"]
+    assert captured["suggest"] == {"field": field, "q": "テス", "limit": 5}
+
+
+def test_suggest_default_q_and_limit(
+    suggest_client: TestClient, captured: dict[str, Any]
+) -> None:
+    """q 未指定なら空文字、limit 未指定なら 10 が repo に渡る。"""
+    res = suggest_client.get("/api/v1/search/suggest", params={"field": "genre"})
+    assert res.status_code == 200
+    assert captured["suggest"] == {"field": "genre", "q": "", "limit": 10}
+
+
+def test_suggest_rejects_unknown_field(suggest_client: TestClient) -> None:
+    """Literal バリデーションで知らない field は 422 になる。"""
+    res = suggest_client.get(
+        "/api/v1/search/suggest", params={"field": "unknown_field"}
+    )
+    assert res.status_code == 422
+
+
+def test_suggest_limit_out_of_range(suggest_client: TestClient) -> None:
+    """limit のレンジ外 (>50) は 422。"""
+    res = suggest_client.get(
+        "/api/v1/search/suggest", params={"field": "genre", "limit": 100}
+    )
+    assert res.status_code == 422

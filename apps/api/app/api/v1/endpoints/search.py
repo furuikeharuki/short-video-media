@@ -4,12 +4,14 @@ from datetime import date
 from typing import Annotated, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.security import get_optional_user
 from app.db.models.user import User, UserNgWord
 from app.db.session import get_db
+from app.repositories.search_repository import suggest_field_values
 from app.schemas.search import SearchResponse
 from app.services.search_service import (
     advanced_search,
@@ -21,6 +23,16 @@ router = APIRouter()
 
 
 SortKey = Literal["new", "popular", "rating", "views", "bookmarks"]
+SuggestField = Literal["actress", "series", "director", "maker", "label", "genre"]
+
+
+class SuggestResponse(BaseModel):
+    """詳細検索パネルのテキスト入力サジェスト用レスポンス。
+
+    候補名のリストのみ。使用頻度 (件数) はクライアントに必須ではないので返さない。
+    """
+
+    items: list[str]
 
 
 def _is_advanced_request(
@@ -170,3 +182,19 @@ async def search_movies(
         limit=limit,
         offset=offset,
     )
+
+
+@router.get("/search/suggest", response_model=SuggestResponse)
+async def search_suggest(
+    field: SuggestField = Query(..., description="サジェスト対象のフィールド"),
+    q: str = Query(default="", description="部分一致 (case-insensitive)。空なら全件対象"),
+    limit: int = Query(default=10, ge=1, le=50, description="返す件数"),
+    db: AsyncSession = Depends(get_db),
+) -> SuggestResponse:
+    """詳細検索パネルの入力サジェスト。
+
+    使用頻度 (= その値を持つ可視作品の COUNT DISTINCT) で desc 順に並べて返す。
+    NULL / 空文字 / is_visible=False の作品は集計から除外する。
+    """
+    items = await suggest_field_values(db, field=field, q=q, limit=limit)
+    return SuggestResponse(items=items)

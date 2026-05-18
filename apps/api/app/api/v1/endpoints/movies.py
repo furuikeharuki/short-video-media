@@ -85,8 +85,14 @@ async def resolve_mp4(
         )
 
     # resolver を呼ぶ。エラーは resolver 側のステータスを透過させる。
+    # force=true のときは resolver_client 側の短期キャッシュもスキップして
+    # 必ず resolver を叩く (トークン期限切れのリセット用途)。
+    # ここでの in-flight デデュープは両ケースとも有効なので、連打しても
+    # resolver へは 1 リクエストしか転ばない。
     try:
-        mp4_url = await resolver_client.resolve_mp4_url(content_id)
+        mp4_url = await resolver_client.resolve_mp4_url(
+            content_id, bypass_cache=force
+        )
     except resolver_client.ResolverNotFound as e:
         # 作品が非公開とか。web 側はサムネにフォールバック。
         raise HTTPException(status_code=404, detail=str(e)) from e

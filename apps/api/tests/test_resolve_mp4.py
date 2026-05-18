@@ -124,8 +124,10 @@ def test_calls_resolver_when_cache_empty(
     row = ("movie-uuid", "1sun00052a", None)
     client, session = _make_client(row)
 
-    async def _fake_resolve(content_id: str) -> str:
+    async def _fake_resolve(content_id: str, *, bypass_cache: bool = False) -> str:
         assert content_id == "1sun00052a"
+        # キャッシュが空だが force=False なので bypass_cache=False
+        assert bypass_cache is False
         return FRESH_URL
 
     monkeypatch.setattr(resolver_client, "resolve_mp4_url", _fake_resolve)
@@ -150,7 +152,9 @@ def test_force_true_bypasses_cache(
     row = ("movie-uuid", "1sun00052a", CACHED_URL)
     client, session = _make_client(row)
 
-    async def _fake_resolve(content_id: str) -> str:  # noqa: ARG001
+    async def _fake_resolve(content_id: str, *, bypass_cache: bool = False) -> str:  # noqa: ARG001
+        # force=true なので 短期キャッシュもスキップさせるため bypass_cache=True が渡る
+        assert bypass_cache is True
         return FRESH_URL
 
     monkeypatch.setattr(resolver_client, "resolve_mp4_url", _fake_resolve)
@@ -191,7 +195,7 @@ def test_resolver_not_found_propagates_as_404(
     row = ("movie-uuid", "1sun00052a", None)
     client, _ = _make_client(row)
 
-    async def _raise(content_id: str) -> str:  # noqa: ARG001
+    async def _raise(content_id: str, *, bypass_cache: bool = False) -> str:  # noqa: ARG001
         raise resolver_client.ResolverNotFound("not found upstream")
 
     monkeypatch.setattr(resolver_client, "resolve_mp4_url", _raise)
@@ -206,7 +210,7 @@ def test_resolver_timeout_propagates_as_504(
     row = ("movie-uuid", "1sun00052a", None)
     client, _ = _make_client(row)
 
-    async def _raise(content_id: str) -> str:  # noqa: ARG001
+    async def _raise(content_id: str, *, bypass_cache: bool = False) -> str:  # noqa: ARG001
         raise resolver_client.ResolverTimeout("slow")
 
     monkeypatch.setattr(resolver_client, "resolve_mp4_url", _raise)
@@ -221,7 +225,7 @@ def test_resolver_upstream_error_propagates_as_502(
     row = ("movie-uuid", "1sun00052a", None)
     client, _ = _make_client(row)
 
-    async def _raise(content_id: str) -> str:  # noqa: ARG001
+    async def _raise(content_id: str, *, bypass_cache: bool = False) -> str:  # noqa: ARG001
         raise resolver_client.ResolverUpstreamError("dmm broken")
 
     monkeypatch.setattr(resolver_client, "resolve_mp4_url", _raise)
@@ -236,7 +240,7 @@ def test_resolver_config_error_returns_500(
     row = ("movie-uuid", "1sun00052a", None)
     client, _ = _make_client(row)
 
-    async def _raise(content_id: str) -> str:  # noqa: ARG001
+    async def _raise(content_id: str, *, bypass_cache: bool = False) -> str:  # noqa: ARG001
         raise resolver_client.ResolverConfigError("not set")
 
     monkeypatch.setattr(resolver_client, "resolve_mp4_url", _raise)
@@ -252,7 +256,7 @@ def test_resolver_unavailable_falls_back_to_cache(
     row = ("movie-uuid", "1sun00052a", CACHED_URL)
     client, _ = _make_client(row)
 
-    async def _raise(content_id: str) -> str:  # noqa: ARG001
+    async def _raise(content_id: str, *, bypass_cache: bool = False) -> str:  # noqa: ARG001
         raise resolver_client.ResolverUnavailable("connection refused")
 
     monkeypatch.setattr(resolver_client, "resolve_mp4_url", _raise)
@@ -276,7 +280,7 @@ def test_resolver_unavailable_without_cache_returns_502(
     row = ("movie-uuid", "1sun00052a", None)
     client, _ = _make_client(row)
 
-    async def _raise(content_id: str) -> str:  # noqa: ARG001
+    async def _raise(content_id: str, *, bypass_cache: bool = False) -> str:  # noqa: ARG001
         raise resolver_client.ResolverUnavailable("network down")
 
     monkeypatch.setattr(resolver_client, "resolve_mp4_url", _raise)

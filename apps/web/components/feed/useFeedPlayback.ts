@@ -156,7 +156,17 @@ export function useFeedPlayback({ slug, title, isActive, videoSrc, onOpenModal, 
     const tick = () => {
       const video = videoRef.current;
       if (!video || !isActiveRef.current) return;
-      const progress = video.duration > 0 ? video.currentTime / video.duration : 0;
+      // プロ女優スキップ有効時はシークバーの 0% を「下限 (5秒) 目」に対応させる。
+      // 進捗 = (currentTime - lower) / (duration - lower)。
+      // 通常動画 (lower = 0) はこれまでと同じ currentTime / duration。
+      const dur = video.duration;
+      const lower = skipLowerBoundRef.current;
+      let progress = 0;
+      if (Number.isFinite(dur) && dur > lower) {
+        progress = (video.currentTime - lower) / (dur - lower);
+        if (progress < 0) progress = 0;
+        else if (progress > 1) progress = 1;
+      }
       window.dispatchEvent(new CustomEvent("video-progress", { detail: { progress } }));
       rafRef.current = requestAnimationFrame(tick);
     };
@@ -178,11 +188,16 @@ export function useFeedPlayback({ slug, title, isActive, videoSrc, onOpenModal, 
       if (!video || !isActiveRef.current) return;
       const dur = video.duration;
       if (!Number.isFinite(dur) || dur <= 0) return;
-      // プロ女優スキップが有効なら下限 5 秒でクランプ (シークバーで先頭に戻せない)
+      // シークバー座標系も「0% = lower 秒目 / 100% = 末尾」に統一する。
+      // ratio はシークバー左端=0, 右端=1 で送られてくるので、
+      //   target = lower + ratio * (dur - lower)
+      // これにより通常動画 (lower=0) は従来通り ratio * dur。
       const lower = skipLowerBoundRef.current;
-      const target = Math.max(lower, Math.min(dur, ce.detail.ratio * dur));
+      const usableSpan = Math.max(0, dur - lower);
+      const ratio = Math.max(0, Math.min(1, ce.detail.ratio));
+      const target = lower + ratio * usableSpan;
       try {
-        video.currentTime = target;
+        video.currentTime = Math.min(dur, target);
       } catch {
         /* seek 不可能なタイミングは無視 */
       }

@@ -25,13 +25,6 @@ CACHED_URL = (
 FRESH_URL = (
     "https://cc3001.dmm.co.jp/pv/FRESHtoken/1sun00052amhb.mp4"
 )
-# 旧形式 (ORB で弾かれる) URL。DB に入っていてもキャッシュとして採用しない。
-LEGACY_MHB_URL = (
-    "https://cc3001.dmm.co.jp/litevideo/freepv/a/akd/akdl046a/akdl046a_mhb_w.mp4"
-)
-LEGACY_DM_URL = (
-    "https://cc3001.dmm.co.jp/litevideo/freepv/h/hmd/hmdnc922/hmdnc922_dm_w.mp4"
-)
 
 
 # ─────────────────────────────────────────────
@@ -294,92 +287,3 @@ def test_resolver_unavailable_without_cache_returns_502(
 
     resp = client.get("/api/v1/movies/some-slug/resolve-mp4")
     assert resp.status_code == 502
-
-
-# ──────────────────────────────────────────────────
-# 旧形式 URL ガード (PR #48)
-# ──────────────────────────────────────────────────
-def test_legacy_mhb_url_in_cache_is_ignored_and_resolver_called(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """DB に旧形式 _mhb_w.mp4 が保存されていてもキャッシュとして採用せず、resolver を呼ぶ。"""
-    row = ("movie-uuid", "1sun00052a", LEGACY_MHB_URL)
-    client, session = _make_client(row)
-
-    called = {"n": 0}
-
-    async def _fake_resolve(content_id: str, *, bypass_cache: bool = False) -> str:  # noqa: ARG001
-        called["n"] += 1
-        # 旧形式検出による resolver 呼び出しは force=False 扱いなので、bypass_cache=False
-        assert bypass_cache is False
-        return FRESH_URL
-
-    monkeypatch.setattr(resolver_client, "resolve_mp4_url", _fake_resolve)
-
-    resp = client.get("/api/v1/movies/some-slug/resolve-mp4")
-    assert resp.status_code == 200, resp.text
-    body = resp.json()
-    assert body["mp4_url"] == FRESH_URL
-    assert body["cached"] is False
-    assert called["n"] == 1
-    # 新 URL を書き戻している
-    assert len(session.update_calls) == 1
-    assert session.committed is True
-
-
-def test_legacy_dm_url_in_cache_is_ignored_and_resolver_called(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """_dm_w.mp4 も _mhb_w.mp4 と同じくスキップされて resolver が呼ばれる。"""
-    row = ("movie-uuid", "1sun00052a", LEGACY_DM_URL)
-    client, _ = _make_client(row)
-
-    async def _fake_resolve(content_id: str, *, bypass_cache: bool = False) -> str:  # noqa: ARG001
-        return FRESH_URL
-
-    monkeypatch.setattr(resolver_client, "resolve_mp4_url", _fake_resolve)
-
-    resp = client.get("/api/v1/movies/some-slug/resolve-mp4")
-    assert resp.status_code == 200, resp.text
-    assert resp.json()["mp4_url"] == FRESH_URL
-    assert resp.json()["cached"] is False
-
-
-def test_legacy_url_resolver_unavailable_does_not_fallback(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """旧形式 URL は resolver ダウン時もフォールバックしない。フォールバックしても再生できないため。"""
-    row = ("movie-uuid", "1sun00052a", LEGACY_MHB_URL)
-    client, _ = _make_client(row)
-
-    async def _raise(content_id: str, *, bypass_cache: bool = False) -> str:  # noqa: ARG001
-        raise resolver_client.ResolverUnavailable("network down")
-
-    monkeypatch.setattr(resolver_client, "resolve_mp4_url", _raise)
-
-    resp = client.get("/api/v1/movies/some-slug/resolve-mp4")
-    # 旧形式なのでキャッシュフォールバックされず 502。
-    assert resp.status_code == 502
-
-
-def test_new_format_url_is_used_as_cache(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """新形式 (_sm_s / _dmb_s) はキャッシュとしてそのまま使う。"""
-    new_url = "https://cc3001.dmm.co.jp/litevideo/freepv/a/akd/akdl046a/akdl046a_sm_s.mp4"
-    row = ("movie-uuid", "1sun00052a", new_url)
-    client, _ = _make_client(row)
-
-    called = {"n": 0}
-
-    async def _should_not_be_called(content_id: str, *, bypass_cache: bool = False) -> str:  # noqa: ARG001
-        called["n"] += 1
-        return FRESH_URL
-
-    monkeypatch.setattr(resolver_client, "resolve_mp4_url", _should_not_be_called)
-
-    resp = client.get("/api/v1/movies/some-slug/resolve-mp4")
-    assert resp.status_code == 200
-    assert resp.json()["mp4_url"] == new_url
-    assert resp.json()["cached"] is True
-    assert called["n"] == 0

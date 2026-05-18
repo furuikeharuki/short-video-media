@@ -29,6 +29,19 @@ export type FeedResponse = {
   total?: number | null;
 };
 
+/** /feed エンドポイントに渡せる詳細フィルター (検索結果と同名でそろえる)。 */
+export type FeedAdvancedParams = {
+  q?: string;
+  actresses?: string[];
+  series_list?: string[];
+  directors?: string[];
+  makers?: string[];
+  labels?: string[];
+  ng_words?: string[];
+  date_from?: string;
+  date_to?: string;
+};
+
 const API_BASE_URL =
   process.env.API_BASE_URL ||
   process.env.NEXT_PUBLIC_API_BASE_URL ||
@@ -39,6 +52,7 @@ export async function getFeed(
   limit = 20,
   seed?: number,
   genres?: string[],
+  advanced?: FeedAdvancedParams,
 ): Promise<FeedResponse> {
   const params = new URLSearchParams({
     offset: String(offset),
@@ -48,6 +62,29 @@ export async function getFeed(
   // genresは複数可能: genres=A&genres=B
   if (genres && genres.length > 0) {
     genres.forEach((g) => params.append("genres", g));
+  }
+
+  if (advanced) {
+    const appendMulti = (key: string, arr: string[] | undefined) => {
+      if (!arr) return;
+      for (const v of arr) {
+        const t = v.trim();
+        if (t) params.append(key, t);
+      }
+    };
+    if (advanced.q && advanced.q.trim()) params.set("q", advanced.q.trim());
+    appendMulti("actresses", advanced.actresses);
+    appendMulti("series_list", advanced.series_list);
+    appendMulti("directors", advanced.directors);
+    appendMulti("makers", advanced.makers);
+    appendMulti("labels", advanced.labels);
+    appendMulti("ng_words", advanced.ng_words);
+    if (advanced.date_from && advanced.date_from.trim()) {
+      params.set("date_from", advanced.date_from.trim());
+    }
+    if (advanced.date_to && advanced.date_to.trim()) {
+      params.set("date_to", advanced.date_to.trim());
+    }
   }
 
   const res = await fetch(`${API_BASE_URL}/api/v1/feed?${params}`, {

@@ -22,6 +22,7 @@ import {
 
 /** 親が渡す初期値 (自動保存からの復元用)。空配列/空文字なら未指定扱い。 */
 export type AdvancedFormInitial = {
+  q?: string;
   genres?: string[];
   actresses?: string[];
   series_list?: string[];
@@ -45,6 +46,7 @@ type Props = {
 
 /** onSubmit に渡すペイロード (親側で sessionStorage / サーバ保存に使う)。 */
 export type AdvancedSubmitPayload = {
+  q: string;
   genres: string[];
   actresses: string[];
   series_list: string[];
@@ -99,6 +101,11 @@ export default function AdvancedSearchPanel({
   onSubmit,
   onClose,
 }: Props) {
+  // キーワードもチップで管理 (複数語は AND 風に space 連結して API の q に渡す)
+  const [qChips, setQChips] = useState<string[]>(() => {
+    const raw = initial?.q ?? "";
+    return raw.split(/\s+/).map((s) => s.trim()).filter(Boolean);
+  });
   const [chips, setChips] = useState<Record<FieldKey, string[]>>(() => ({
     genres: initial?.genres ?? [],
     actresses: initial?.actresses ?? [],
@@ -133,6 +140,16 @@ export default function AdvancedSearchPanel({
     }));
   }, []);
 
+  // キーワードチップ操作 (FieldChipRow は使わずに簡易な手書き UI にする = サジェスト不要なので)
+  const addQChip = useCallback((value: string) => {
+    const v = value.trim();
+    if (!v) return;
+    setQChips((prev) => (prev.includes(v) ? prev : [...prev, v]));
+  }, []);
+  const removeQChip = useCallback((value: string) => {
+    setQChips((prev) => prev.filter((s) => s !== value));
+  }, []);
+
   // NG ワード操作
   const addNg = useCallback(() => {
     const v = ngInput.trim();
@@ -147,6 +164,7 @@ export default function AdvancedSearchPanel({
 
   const handleSubmit = useCallback(() => {
     const payload: AdvancedSubmitPayload = {
+      q: qChips.join(" ").trim(),
       genres: chips.genres,
       actresses: chips.actresses,
       series_list: chips.series_list,
@@ -159,9 +177,10 @@ export default function AdvancedSearchPanel({
       sort,
     };
     onSubmit(payload);
-  }, [chips, dateFrom, dateTo, sort, ng, onSubmit]);
+  }, [qChips, chips, dateFrom, dateTo, sort, ng, onSubmit]);
 
   const resetAll = useCallback(() => {
+    setQChips([]);
     setChips({
       genres: [], actresses: [], series_list: [],
       directors: [], makers: [], labels: [],
@@ -229,6 +248,13 @@ export default function AdvancedSearchPanel({
           />
         </div>
       </div>
+
+      {/* キーワード (ジャンルより上に配置。チップで複数指定可。送信時は space 連結) */}
+      <KeywordChipRow
+        values={qChips}
+        onAdd={addQChip}
+        onRemove={removeQChip}
+      />
 
       {/* 各フィールド (チップ + 末尾の「＋」で入力欄が出るタイプ) */}
       {FIELD_KEYS.map((key) => (
@@ -431,6 +457,88 @@ function FieldChipRow({
                 ))}
               </div>
             )}
+          </span>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/**
+ * キーワード専用のチップ行。サジェストは不要、Enter or blur で確定。
+ */
+function KeywordChipRow({
+  values,
+  onAdd,
+  onRemove,
+}: {
+  values: string[];
+  onAdd: (v: string) => void;
+  onRemove: (v: string) => void;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [text, setText] = useState("");
+  const inputRef = useRef<HTMLInputElement | null>(null);
+
+  const commit = () => {
+    const v = text.trim();
+    if (v) onAdd(v);
+    setText("");
+  };
+
+  return (
+    <div className="adv-row adv-row-field adv-row-q">
+      <label className="adv-label">キーワード</label>
+      <div className="adv-chips">
+        {values.map((v) => (
+          <span key={v} className="adv-chip">
+            {v}
+            <button
+              type="button"
+              className="adv-chip-x"
+              aria-label={`${v} を削除`}
+              onClick={() => onRemove(v)}
+            >×</button>
+          </span>
+        ))}
+        {!editing ? (
+          <button
+            type="button"
+            className="adv-chip adv-chip-add"
+            onClick={() => {
+              setEditing(true);
+              setTimeout(() => inputRef.current?.focus(), 0);
+            }}
+            aria-label="キーワードを追加"
+          >
+            <span className="adv-chip-add-plus" aria-hidden="true">＋</span>
+          </button>
+        ) : (
+          <span className="adv-chip adv-chip-edit">
+            <input
+              ref={inputRef}
+              type="text"
+              className="adv-chip-input"
+              value={text}
+              onChange={(e) => setText(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") {
+                  e.preventDefault();
+                  commit();
+                } else if (e.key === "Escape") {
+                  setText("");
+                  setEditing(false);
+                }
+              }}
+              onBlur={() => {
+                setTimeout(() => {
+                  commit();
+                  setEditing(false);
+                }, 120);
+              }}
+              placeholder="タイトル・説明など"
+              autoComplete="off"
+            />
           </span>
         )}
       </div>

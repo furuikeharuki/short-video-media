@@ -4,6 +4,7 @@ import { usePathname, useRouter } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { fetchPopularTags } from "@/lib/api/tags";
 import HamburgerMenu from "@/components/HamburgerMenu";
+import GlobalFilterButton from "@/components/GlobalFilterButton";
 import { logEvent } from "@/lib/api/events";
 
 const FEED_SEED_KEY  = "feed_seed";
@@ -181,6 +182,7 @@ export default function Header() {
             </svg>
           )}
         </button>
+        <GlobalFilterButton />
         <HamburgerMenu />
       </div>
 

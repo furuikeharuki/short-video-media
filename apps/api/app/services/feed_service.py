@@ -1,5 +1,8 @@
+import hashlib
 import json
 import random
+from datetime import date
+
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.cache import get_redis
@@ -8,6 +11,7 @@ from app.repositories.movie_repository import (
     get_movies_by_ids,
     get_movies_paginated,
 )
+from app.repositories.search_repository import get_advanced_movie_ids
 from app.schemas.feed import FeedResponse
 from app.schemas.movie import MovieCard, PriceList
 
@@ -45,6 +49,16 @@ def _card_to_dict(card: MovieCard) -> dict:
     return card.model_dump()
 
 
+def _adv_cache_key(seed: int, adv: dict) -> str:
+    """advanced 条件入りシャッフル ID 一覧のキャッシュキー。
+
+    キャッシュバスト用に条件 dict を sha1 でハッシュ化したものをキーに混ぜる。
+    """
+    payload = json.dumps(adv, sort_keys=True, default=str, ensure_ascii=False)
+    h = hashlib.sha1(payload.encode("utf-8")).hexdigest()[:16]
+    return f"{SHUFFLE_KEY_PREFIX}{seed}:adv:{h}"
+
+
 async def _get_shuffled_ids(
     db: AsyncSession,
     seed: int,
@@ -60,6 +74,64 @@ async def _get_shuffled_ids(
             return json.loads(cached)
 
     ids = await get_all_movie_ids(db, genres=genres)
+    rng = random.Random(seed)
+    rng.shuffle(ids)
+
+    if redis is not None:
+        await redis.set(key, json.dumps(ids), ex=SHUFFLE_CACHE_TTL)
+
+    return ids
+
+
+async def _get_advanced_shuffled_ids(
+    db: AsyncSession,
+    seed: int,
+    *,
+    q: str | None,
+    genres: list[str],
+    actresses: list[str],
+    series_list: list[str],
+    directors: list[str],
+    makers: list[str],
+    labels: list[str],
+    ng_words: list[str],
+    date_from: date | None,
+    date_to: date | None,
+) -> list[str]:
+    """詳細検索条件にマッチする movie_id を shuffle して返す (redis にキャッシュ)。"""
+    adv_dict = {
+        "q": q or "",
+        "genres": sorted(genres),
+        "actresses": sorted(actresses),
+        "series_list": sorted(series_list),
+        "directors": sorted(directors),
+        "makers": sorted(makers),
+        "labels": sorted(labels),
+        "ng_words": sorted(ng_words),
+        "date_from": date_from.isoformat() if date_from else "",
+        "date_to": date_to.isoformat() if date_to else "",
+    }
+    redis = get_redis()
+    key = _adv_cache_key(seed, adv_dict)
+
+    if redis is not None:
+        cached = await redis.get(key)
+        if cached:
+            return json.loads(cached)
+
+    ids = await get_advanced_movie_ids(
+        db,
+        q=q or None,
+        genres=genres or None,
+        actresses=actresses or None,
+        series_list=series_list or None,
+        directors=directors or None,
+        makers=makers or None,
+        labels=labels or None,
+        ng_words=ng_words or None,
+        date_from=date_from,
+        date_to=date_to,
+    )
     rng = random.Random(seed)
     rng.shuffle(ids)
 
@@ -101,15 +173,106 @@ async def _get_movies_with_cache(
     return result
 
 
+def _has_advanced_filter(
+    *,
+    q: str | None,
+    actresses: list[str],
+    series_list: list[str],
+    directors: list[str],
+    makers: list[str],
+    labels: list[str],
+    ng_words: list[str],
+    date_from: date | None,
+    date_to: date | None,
+) -> bool:
+    """advanced 経路に乗せるべきかどうか (genres 以外で条件が指定されているか)。
+
+    genres は元々フィードでサポートしていたフィルターなので、これだけの場合は
+    既存の `_get_shuffled_ids(seed, genres=...)` 経路をそのまま使うほうが速い
+    (M:N ジャンル AND ではなく OR でいい既存挙動を維持する)。
+    """
+    return bool(
+        (q and q.strip())
+        or actresses
+        or series_list
+        or directors
+        or makers
+        or labels
+        or ng_words
+        or date_from is not None
+        or date_to is not None
+    )
+
+
 async def get_feed_paginated(
     db: AsyncSession,
     offset: int = 0,
     limit: int = 20,
     seed: int | None = None,
     genres: list[str] | None = None,
+    *,
+    q: str | None = None,
+    actresses: list[str] | None = None,
+    series_list: list[str] | None = None,
+    directors: list[str] | None = None,
+    makers: list[str] | None = None,
+    labels: list[str] | None = None,
+    ng_words: list[str] | None = None,
+    date_from: date | None = None,
+    date_to: date | None = None,
 ) -> FeedResponse:
+    genres_norm = genres or []
+    actresses_norm = actresses or []
+    series_list_norm = series_list or []
+    directors_norm = directors or []
+    makers_norm = makers or []
+    labels_norm = labels or []
+    ng_words_norm = ng_words or []
+
+    advanced = _has_advanced_filter(
+        q=q,
+        actresses=actresses_norm,
+        series_list=series_list_norm,
+        directors=directors_norm,
+        makers=makers_norm,
+        labels=labels_norm,
+        ng_words=ng_words_norm,
+        date_from=date_from,
+        date_to=date_to,
+    )
+
+    # advanced 経路: 必ず seed (= shuffle) が必要。seed 無しなら 0 で固定し、安定した順序にする。
+    if advanced:
+        effective_seed = seed if seed is not None else 0
+        shuffled_ids = await _get_advanced_shuffled_ids(
+            db,
+            effective_seed,
+            q=q,
+            # advanced 経路は genres も AND 条件 (`advanced_search_movies`) に乗せる
+            genres=genres_norm,
+            actresses=actresses_norm,
+            series_list=series_list_norm,
+            directors=directors_norm,
+            makers=makers_norm,
+            labels=labels_norm,
+            ng_words=ng_words_norm,
+            date_from=date_from,
+            date_to=date_to,
+        )
+        total = len(shuffled_ids)
+        page_ids = shuffled_ids[offset: offset + limit]
+        if not page_ids:
+            return FeedResponse(items=[], next_cursor=None, total=total)
+
+        card_map = await _get_movies_with_cache(db, page_ids)
+        items = [card_map[i] for i in page_ids if i in card_map]
+        next_offset = offset + limit
+        next_cursor = str(next_offset) if next_offset < total else None
+        return FeedResponse(items=items, next_cursor=next_cursor, total=total)
+
+    # 既存ルート (genres 単独 OR / または無条件) はそのまま
     if seed is not None:
-        shuffled_ids = await _get_shuffled_ids(db, seed, genres=genres)
+        shuffled_ids = await _get_shuffled_ids(db, seed, genres=genres_norm or None)
         total = len(shuffled_ids)
         page_ids = shuffled_ids[offset: offset + limit]
 
@@ -123,7 +286,9 @@ async def get_feed_paginated(
         next_cursor = str(next_offset) if next_offset < total else None
         return FeedResponse(items=items, next_cursor=next_cursor, total=total)
 
-    movies, total = await get_movies_paginated(db, offset=offset, limit=limit, genres=genres)
+    movies, total = await get_movies_paginated(
+        db, offset=offset, limit=limit, genres=genres_norm or None
+    )
     items = [_to_card(m) for m in movies]
     next_offset = offset + limit
     next_cursor = str(next_offset) if next_offset < total else None

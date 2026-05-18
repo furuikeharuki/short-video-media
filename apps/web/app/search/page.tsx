@@ -1,7 +1,5 @@
 import SearchInfiniteGrid from "./SearchInfiniteGrid";
-import SearchResultsHeader, {
-  type SearchHeaderContext,
-} from "@/components/SearchResultsHeader";
+import SearchResultsHeader from "@/components/SearchResultsHeader";
 import type { AdvancedSearchInput, SortKey } from "@/lib/api/search";
 
 type Props = {
@@ -132,31 +130,22 @@ export default async function SearchPage({ searchParams }: Props) {
       date_to: dateTo || undefined,
       sort,
     };
-    // サブヘッダーラベル / context: 文脈クエリ (q/genre/exact) があればそれを優先し、
-    // それを失わずフィルター適用・クリアでも保持されるようにする。
+    // サブヘッダーラベル: 文脈クエリ (q/genre/exact) があればそれを優先表示、
+    // 無ければ代表チップを 1 つラベル化する。
     let headerLabel: string;
-    let headerContext: SearchHeaderContext;
     if (query) {
       headerLabel = `「${query}」`;
-      headerContext = { kind: "keyword", q: query };
     } else if (genreTag) {
       headerLabel = `#${genreTag}`;
-      headerContext = { kind: "genre", genre: genreTag };
     } else if (directorName) {
       headerLabel = `監督「${directorName}」`;
-      headerContext = { kind: "exact", field: "director", value: directorName };
     } else if (makerName) {
       headerLabel = `メーカー「${makerName}」`;
-      headerContext = { kind: "exact", field: "maker", value: makerName };
     } else if (labelName) {
       headerLabel = `レーベル「${labelName}」`;
-      headerContext = { kind: "exact", field: "label", value: labelName };
     } else if (seriesName) {
       headerLabel = `シリーズ「${seriesName}」`;
-      headerContext = { kind: "exact", field: "series", value: seriesName };
     } else {
-      // 文脈が一つも無い → 純粋な「詳細検索」ケース (詳細検索のチップだけで進んだ状態)。
-      // ラベルは「詳細検索」と代表適用チップ 1 つをコンパクトに表示。
       let tip = "詳細検索";
       if (mergedGenres.length) tip = `#${mergedGenres[0]}`;
       else if (actresses.length) tip = actresses[0];
@@ -165,7 +154,6 @@ export default async function SearchPage({ searchParams }: Props) {
       else if (mergedMakers.length) tip = `メーカー: ${mergedMakers[0]}`;
       else if (mergedLabels.length) tip = `レーベル: ${mergedLabels[0]}`;
       headerLabel = tip;
-      headerContext = { kind: "advanced", q: "" };
     }
     // playlistKey は input から導出 (string 化で安定するキーを作る)
     const playlistKey = `search-adv-${JSON.stringify({
@@ -186,7 +174,7 @@ export default async function SearchPage({ searchParams }: Props) {
         playlistKey={playlistKey}
         playlistTitle={headerLabel}
         headingPrefix={headerLabel}
-        headerSlot={<SearchResultsHeader label={headerLabel} context={headerContext} />}
+        headerSlot={<SearchResultsHeader label={headerLabel} />}
       />
     );
   }
@@ -208,7 +196,7 @@ export default async function SearchPage({ searchParams }: Props) {
         playlistKey={`search-${field}-${value}`}
         playlistTitle={`${prefix}「${value}」`}
         headingPrefix={`${prefix}「${value}」の作品`}
-        headerSlot={<SearchResultsHeader label={headerLabel} context={{ kind: "exact", field, value }} />}
+        headerSlot={<SearchResultsHeader label={headerLabel} />}
       />
     );
   }
@@ -221,7 +209,7 @@ export default async function SearchPage({ searchParams }: Props) {
         playlistKey={`search-genre-${genreTag}`}
         playlistTitle={`#${genreTag}`}
         headingPrefix={`#${genreTag} の動画`}
-        headerSlot={<SearchResultsHeader label={headerLabel} context={{ kind: "genre", genre: genreTag }} />}
+        headerSlot={<SearchResultsHeader label={headerLabel} />}
       />
     );
   }
@@ -229,7 +217,7 @@ export default async function SearchPage({ searchParams }: Props) {
   if (!query) {
     return (
       <main style={styles.main}>
-        <SearchResultsHeader label="検索" context={{ kind: "keyword", q: "" }} />
+        <SearchResultsHeader label="検索" />
         <p style={styles.empty}>検索ワードを入力してください</p>
         <style>{pageCSS}</style>
       </main>
@@ -243,7 +231,7 @@ export default async function SearchPage({ searchParams }: Props) {
       playlistKey={`search-q-${query}`}
       playlistTitle={`「${query}」の検索結果`}
       headingPrefix={`"${query}" の検索結果`}
-      headerSlot={<SearchResultsHeader label={headerLabel} context={{ kind: "keyword", q: query }} />}
+      headerSlot={<SearchResultsHeader label={headerLabel} />}
     />
   );
 }

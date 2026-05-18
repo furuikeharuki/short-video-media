@@ -356,6 +356,46 @@ async def advanced_search_movies(
     return list(result.scalars().unique().all()), int(total)
 
 
+async def get_advanced_movie_ids(
+    db: AsyncSession,
+    *,
+    q: str | None = None,
+    genres: list[str] | None = None,
+    actresses: list[str] | None = None,
+    series_list: list[str] | None = None,
+    directors: list[str] | None = None,
+    makers: list[str] | None = None,
+    labels: list[str] | None = None,
+    date_from: date | None = None,
+    date_to: date | None = None,
+    ng_words: list[str] | None = None,
+) -> list[str]:
+    """詳細検索条件にマッチする movie_id を全件列挙して返す。
+
+    フィード (ショート動画) の shuffle 源として使う。ソート順は shuffle されるため
+    ステートメントのソート・スタビリティ以外は不要なので id ASC だけ使う。
+    """
+    conditions = _build_advanced_conditions(
+        q=q,
+        genres=genres or [],
+        actresses=actresses or [],
+        series_list=series_list or [],
+        directors=directors or [],
+        makers=makers or [],
+        labels=labels or [],
+        date_from=date_from,
+        date_to=date_to,
+        ng_words=ng_words or [],
+    )
+    stmt = (
+        select(Movie.id)
+        .where(*conditions)
+        .order_by(Movie.id.asc())
+    )
+    result = await db.execute(stmt)
+    return [str(r[0]) for r in result.all()]
+
+
 # ----------------------------------------------------------------------
 # Suggest (詳細検索パネルの入力サジェスト用)
 # ----------------------------------------------------------------------

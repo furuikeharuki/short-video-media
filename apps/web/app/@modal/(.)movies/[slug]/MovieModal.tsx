@@ -179,7 +179,11 @@ export default function MovieModal({ movie }: { movie: MovieDetail }) {
 
 const backdropStyle: React.CSSProperties = {
   position: "fixed",
-  inset: 0,
+  top: 0,
+  left: 0,
+  right: 0,
+  // ボトムナビバーを覆わず見える状態を保つ
+  bottom: "calc(var(--bottom-nav-h, 56px) + env(safe-area-inset-bottom, 0px))" as unknown as string,
   background: "rgba(0,0,0,0.6)",
   zIndex: 100,
   cursor: "pointer",
@@ -191,7 +195,8 @@ const modalStyle: React.CSSProperties = {
   top: "var(--header-h, 52px)" as unknown as string,
   left: 0,
   right: 0,
-  bottom: 0,
+  // ボトムナビバー分の余白を確保して、モーダル表示中もナビが見えるようにする
+  bottom: "calc(var(--bottom-nav-h, 56px) + env(safe-area-inset-bottom, 0px))" as unknown as string,
   zIndex: 101,
   background: "#0a0a0a",
   color: "#fff",
@@ -259,8 +264,7 @@ const backBtnStyle: React.CSSProperties = {
 };
 
 const contentStyle: React.CSSProperties = {
-  padding: "20px 16px",
-  paddingBottom: "calc(var(--bottom-nav-h, 56px) + env(safe-area-inset-bottom, 0px) + 10px)" as unknown as string,
+  padding: "20px 16px 24px",
   width: "100%",
   boxSizing: "border-box",
 };

@@ -1,11 +1,11 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { useSession } from "next-auth/react";
 import FeedViewer from "@/components/FeedViewer";
 import { markSeen, getOrCreateSeed } from "@/lib/feedOrder";
-import { getFeed } from "@/lib/api/feed";
+import { getFeed, type FeedAdvancedParams } from "@/lib/api/feed";
 import { getHomeSection, type HomeSectionKey } from "@/lib/api/homeSection";
 import { getMovieBySlug } from "@/lib/api/movies";
 import { loadPlaylist, clearPlaylist, type PlaylistSource } from "@/lib/feedPlaylist";
@@ -18,18 +18,34 @@ const FEED_SEED_KEY   = "feed_seed";
 const FEED_INDEX_KEY  = "feed_index";
 const FEED_ITEMS_KEY  = "feed_items";
 const FEED_CURSOR_KEY = "feed_next_cursor";
+// 現在 sessionStorage に保存しているフィードの「フィルタ署名」。
+// URL クエリが変わった (=フィルター適用が変わった) のを検知するためのキー。
+const FEED_FILTER_KEY = "feed_filter_sig";
 
-function saveSession(seed: number, index: number, items: object[], nextCursor: string | null) {
+function saveSession(
+  seed: number,
+  index: number,
+  items: object[],
+  nextCursor: string | null,
+  filterSig: string,
+) {
   try {
     sessionStorage.setItem(FEED_SEED_KEY,  String(seed));
     sessionStorage.setItem(FEED_INDEX_KEY, String(index));
     sessionStorage.setItem(FEED_ITEMS_KEY, JSON.stringify(items));
+    sessionStorage.setItem(FEED_FILTER_KEY, filterSig);
     if (nextCursor !== null) sessionStorage.setItem(FEED_CURSOR_KEY, nextCursor);
     else                     sessionStorage.removeItem(FEED_CURSOR_KEY);
   } catch { /* ignore */ }
 }
 
-function loadSession(): { seed: number; index: number; items: object[]; nextCursor: string | null } | null {
+function loadSession(): {
+  seed: number;
+  index: number;
+  items: object[];
+  nextCursor: string | null;
+  filterSig: string;
+} | null {
   try {
     const seed  = sessionStorage.getItem(FEED_SEED_KEY);
     const index = sessionStorage.getItem(FEED_INDEX_KEY);
@@ -40,8 +56,19 @@ function loadSession(): { seed: number; index: number; items: object[]; nextCurs
       index: parseInt(index, 10),
       items: JSON.parse(items),
       nextCursor: sessionStorage.getItem(FEED_CURSOR_KEY),
+      filterSig: sessionStorage.getItem(FEED_FILTER_KEY) ?? "",
     };
   } catch { return null; }
+}
+
+function clearFeedSession() {
+  try {
+    sessionStorage.removeItem(FEED_SEED_KEY);
+    sessionStorage.removeItem(FEED_INDEX_KEY);
+    sessionStorage.removeItem(FEED_ITEMS_KEY);
+    sessionStorage.removeItem(FEED_CURSOR_KEY);
+    sessionStorage.removeItem(FEED_FILTER_KEY);
+  } catch { /* ignore */ }
 }
 
 function isPageReload(): boolean {
@@ -84,6 +111,56 @@ const SECTION_KEYS: ReadonlySet<HomeSectionKey> = new Set<HomeSectionKey>([
   "genre",
 ]);
 
+/** URL から advanced 系クエリと genres を抜き出す。 */
+function readFilters(sp: URLSearchParams): {
+  genres: string[];
+  advanced: FeedAdvancedParams;
+  hasAny: boolean;
+} {
+  const arr = (k: string) => sp.getAll(k).map((s) => s.trim()).filter(Boolean);
+  const genres = arr("genres");
+  const advanced: FeedAdvancedParams = {
+    q: (sp.get("q") ?? "").trim() || undefined,
+    actresses: arr("actresses"),
+    series_list: arr("series_list"),
+    directors: arr("directors"),
+    makers: arr("makers"),
+    labels: arr("labels"),
+    ng_words: arr("ng_words"),
+    date_from: (sp.get("date_from") ?? "").trim() || undefined,
+    date_to: (sp.get("date_to") ?? "").trim() || undefined,
+  };
+  const hasAny =
+    genres.length > 0 ||
+    !!advanced.q ||
+    (advanced.actresses?.length ?? 0) > 0 ||
+    (advanced.series_list?.length ?? 0) > 0 ||
+    (advanced.directors?.length ?? 0) > 0 ||
+    (advanced.makers?.length ?? 0) > 0 ||
+    (advanced.labels?.length ?? 0) > 0 ||
+    (advanced.ng_words?.length ?? 0) > 0 ||
+    !!advanced.date_from ||
+    !!advanced.date_to;
+  return { genres, advanced, hasAny };
+}
+
+/** フィルター内容を安定文字列化して、URL 変化検知のキーにする。 */
+function filterSignature(genres: string[], advanced: FeedAdvancedParams): string {
+  const norm = {
+    g: [...genres].sort(),
+    q: advanced.q ?? "",
+    a: [...(advanced.actresses ?? [])].sort(),
+    sl: [...(advanced.series_list ?? [])].sort(),
+    d: [...(advanced.directors ?? [])].sort(),
+    m: [...(advanced.makers ?? [])].sort(),
+    l: [...(advanced.labels ?? [])].sort(),
+    n: [...(advanced.ng_words ?? [])].sort(),
+    df: advanced.date_from ?? "",
+    dt: advanced.date_to ?? "",
+  };
+  return JSON.stringify(norm);
+}
+
 export default function FeedClient() {
   const searchParams  = useSearchParams();
   const { status: authStatus } = useSession();
@@ -94,18 +171,42 @@ export default function FeedClient() {
   // playlist 経由で起動したときは /api/v1/home/section で継足しするため、
   // その出所情報 (セクション key / ジャンル名) を保持する。
   const playlistSourceRef = useRef<PlaylistSource | null>(null);
+  // 現在のフィルター内容を ref で保持して、fetchMore からも参照できるようにする。
+  const filtersRef = useRef<{ genres: string[]; advanced: FeedAdvancedParams }>({
+    genres: [],
+    advanced: {},
+  });
 
   const [items,        setItems]        = useState<MovieCard[]>([]);
   const [initialIndex, setInitialIndex] = useState(0);
   const [isEmpty,      setIsEmpty]      = useState(false);
   const [isLoading,    setIsLoading]    = useState(true);
 
-  const fetchInitial = useCallback(async (seed: number, startIndex = 0, prependSlug?: string) => {
+  // searchParams から現在のフィルターと署名を計算しておく。
+  const { currentGenres, currentAdvanced, currentSig, hasAnyFilter } = useMemo(() => {
+    const sp = new URLSearchParams(searchParams?.toString() ?? "");
+    const { genres, advanced, hasAny } = readFilters(sp);
+    return {
+      currentGenres: genres,
+      currentAdvanced: advanced,
+      currentSig: filterSignature(genres, advanced),
+      hasAnyFilter: hasAny,
+    };
+  }, [searchParams]);
+
+  const fetchInitial = useCallback(async (
+    seed: number,
+    startIndex = 0,
+    prependSlug?: string,
+    genres?: string[],
+    advanced?: FeedAdvancedParams,
+    filterSig = "",
+  ) => {
     if (isFetchingRef.current) return;
     isFetchingRef.current = true;
     try {
       const [res, pinnedMovie] = await Promise.all([
-        getFeed(0, 20, seed),
+        getFeed(0, 20, seed, genres, advanced),
         prependSlug ? getMovieBySlug(prependSlug).catch(() => null) : Promise.resolve(null),
       ]);
 
@@ -117,12 +218,12 @@ export default function FeedClient() {
         feedItems = [card, ...feedItems.filter((i) => i.slug !== card.slug)];
       }
 
-      const idx = Math.min(startIndex, feedItems.length - 1);
+      const idx = Math.min(startIndex, Math.max(feedItems.length - 1, 0));
       setItems(feedItems);
       setInitialIndex(idx);
       setIsEmpty(feedItems.length === 0);
       nextCursorRef.current = res.next_cursor;
-      saveSession(seed, idx, feedItems, res.next_cursor);
+      saveSession(seed, idx, feedItems, res.next_cursor, filterSig);
     } catch (e) {
       console.error("fetchInitial failed", e);
     } finally {
@@ -132,6 +233,9 @@ export default function FeedClient() {
   }, []);
 
   useEffect(() => {
+    // フィルター ref を最新に更新 (fetchMore から参照される)
+    filtersRef.current = { genres: currentGenres, advanced: currentAdvanced };
+
     const vSlug = searchParams.get("v") ?? undefined;
     const playlistKey = searchParams.get("playlist") ?? undefined;
 
@@ -156,7 +260,7 @@ export default function FeedClient() {
           playlistSourceRef.current = null;
           nextCursorRef.current = null;
         }
-        saveSession(seed, idx, pl.items, nextCursorRef.current);
+        saveSession(seed, idx, pl.items, nextCursorRef.current, currentSig);
         // 遷移後は一度だけ使えればよいのでクリア
         clearPlaylist(playlistKey);
         return;
@@ -168,25 +272,39 @@ export default function FeedClient() {
     if (vSlug) {
       const seed = getOrCreateSeed();
       seedRef.current = seed;
-      fetchInitial(seed, 0, vSlug);
+      fetchInitial(
+        seed,
+        0,
+        vSlug,
+        currentGenres.length > 0 ? currentGenres : undefined,
+        hasAnyFilter ? currentAdvanced : undefined,
+        currentSig,
+      );
       return;
     }
 
     if (isPageReload()) {
-      try {
-        sessionStorage.removeItem(FEED_SEED_KEY);
-        sessionStorage.removeItem(FEED_INDEX_KEY);
-        sessionStorage.removeItem(FEED_ITEMS_KEY);
-        sessionStorage.removeItem(FEED_CURSOR_KEY);
-      } catch { /* ignore */ }
+      clearFeedSession();
       const seed = getOrCreateSeed();
       seedRef.current = seed;
-      fetchInitial(seed, 0);
+      fetchInitial(
+        seed,
+        0,
+        undefined,
+        currentGenres.length > 0 ? currentGenres : undefined,
+        hasAnyFilter ? currentAdvanced : undefined,
+        currentSig,
+      );
       return;
     }
 
     const session = loadSession();
-    if (session && session.items.length > 0) {
+    // フィルター署名が一致しているときだけセッションを復元、変わっていたら再 fetch
+    if (
+      session &&
+      session.items.length > 0 &&
+      session.filterSig === currentSig
+    ) {
       seedRef.current = session.seed;
       const idx = Math.min(session.index, (session.items as MovieCard[]).length - 1);
       setItems(session.items as MovieCard[]);
@@ -195,12 +313,26 @@ export default function FeedClient() {
       setIsLoading(false);
       nextCursorRef.current = session.nextCursor;
     } else {
+      // 既存セッションがあってもフィルターが違うので破棄して再 fetch する
+      if (session) clearFeedSession();
       const seed = getOrCreateSeed();
       seedRef.current = seed;
-      fetchInitial(seed, 0);
+      // フィルターが変わった瞬間に画面のチラつきを抑えるためロード中表示に戻す
+      setIsLoading(true);
+      setItems([]);
+      setIsEmpty(false);
+      fetchInitial(
+        seed,
+        0,
+        undefined,
+        currentGenres.length > 0 ? currentGenres : undefined,
+        hasAnyFilter ? currentAdvanced : undefined,
+        currentSig,
+      );
     }
+  // currentSig が変わったらフィルター適用扱いで再フェッチさせる
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [currentSig]);
 
   // 追加ページを取得して items に append する。
   // FeedViewer は残り 5 件以下になったとき onNearEnd を引いてくるので、
@@ -235,7 +367,24 @@ export default function FeedClient() {
         resCursor = res.next_cursor;
       } else {
         if (seed === null) return;
-        const res = await getFeed(offset, 20, seed);
+        const { genres, advanced } = filtersRef.current;
+        const hasAdvanced =
+          !!advanced.q ||
+          (advanced.actresses?.length ?? 0) > 0 ||
+          (advanced.series_list?.length ?? 0) > 0 ||
+          (advanced.directors?.length ?? 0) > 0 ||
+          (advanced.makers?.length ?? 0) > 0 ||
+          (advanced.labels?.length ?? 0) > 0 ||
+          (advanced.ng_words?.length ?? 0) > 0 ||
+          !!advanced.date_from ||
+          !!advanced.date_to;
+        const res = await getFeed(
+          offset,
+          20,
+          seed,
+          genres.length > 0 ? genres : undefined,
+          hasAdvanced ? advanced : undefined,
+        );
         resItems = res.items;
         resCursor = res.next_cursor;
       }
@@ -252,6 +401,7 @@ export default function FeedClient() {
         // 現在保存されている値をそのまま使う。
         try {
           const savedIdx = sessionStorage.getItem(FEED_INDEX_KEY);
+          const savedSig = sessionStorage.getItem(FEED_FILTER_KEY) ?? "";
           // seed がないケース (playlist 経由で初期取得をスキップしたとき) もセッションに
           // 存在しないとダメなので、-1 でダミーとして保存しておく。
           saveSession(
@@ -259,6 +409,7 @@ export default function FeedClient() {
             savedIdx ? parseInt(savedIdx, 10) : 0,
             merged,
             nextCursorRef.current,
+            savedSig,
           );
         } catch { /* ignore */ }
         return merged;

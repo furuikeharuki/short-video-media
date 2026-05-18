@@ -8,6 +8,7 @@ _HERE = Path(__file__).resolve()
 sys.path.insert(0, str(_HERE.parents[1]))
 
 from src.sync_catalog import (  # noqa: E402
+    _PL_EXISTS_CACHE,
     _build_affiliate_url,
     _build_content_id,
     _build_large_image_url,
@@ -18,6 +19,7 @@ from src.sync_catalog import (  # noqa: E402
     _parse_date,
     _parse_float,
     _parse_int,
+    _pl_image_exists,
     _upgrade_goods_image_to_pl,
     _slugify,
 )
@@ -182,3 +184,48 @@ def test_upgrade_goods_image_to_pl_replaces_suffix():
     assert _upgrade_goods_image_to_pl("") is None
     # パターン外 URL
     assert _upgrade_goods_image_to_pl("https://example.com/foo.png") is None
+
+
+class _FakeResp:
+    def __init__(self, status_code: int, url: str):
+        self.status_code = status_code
+        self.url = url
+
+
+class _FakeClient:
+    """_pl_image_exists テスト用: HEAD レスポンスを mock する httpx 互換クライアント。"""
+
+    def __init__(self, mapping: dict[str, _FakeResp]):
+        self.mapping = mapping
+        self.calls: list[str] = []
+
+    async def head(self, url, *, timeout=5, follow_redirects=True):  # noqa: ARG002
+        self.calls.append(url)
+        if url not in self.mapping:
+            raise KeyError(url)
+        return self.mapping[url]
+
+
+def test_pl_image_exists():
+    import asyncio
+
+    _PL_EXISTS_CACHE.clear()
+    ok_url = "https://pics.dmm.co.jp/mono/goods/ho4670/ho4670pl.jpg"
+    bad_url = "https://pics.dmm.co.jp/mono/goods/foo/foopl.jpg"
+    client = _FakeClient({
+        # 実在: 最終 URL が同じ
+        ok_url: _FakeResp(200, ok_url),
+        # CDN が now_printing にリダイレクトしたケース: status=200 だが最終 URL に now_printing 含む
+        bad_url: _FakeResp(
+            200,
+            "https://pics.dmm.co.jp/mono/goods/noimage/now_printing.jpg",
+        ),
+    })
+
+    assert asyncio.run(_pl_image_exists(client, ok_url)) is True
+    assert asyncio.run(_pl_image_exists(client, bad_url)) is False
+    # 2 回目はキャッシュが効いて HEAD が走らない
+    asyncio.run(_pl_image_exists(client, ok_url))
+    asyncio.run(_pl_image_exists(client, bad_url))
+    assert len(client.calls) == 2
+    _PL_EXISTS_CACHE.clear()

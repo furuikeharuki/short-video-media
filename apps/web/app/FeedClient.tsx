@@ -246,6 +246,27 @@ export default function FeedClient() {
   }, []);
 
   useEffect(() => {
+    // /feed 上で MovieDetailModal を開くと window.history.pushState で URL バーが
+    // /movies/<slug> に書き換わる。Next.js 15 ではこの pushState を router が検知し、
+    // useSearchParams() が空文字列を返すようになるため、ここでの currentSig が変わって
+    // しまい意図せず再フェッチが走り「別の feed が始まる」ように見えてしまう。
+    // モーダル open/close で URL バーが一時的に /movies/ 系に切り替わっている間は
+    // フィードの再ロードを抑止する。
+    //
+    // 重要: filtersRef.current の更新も /feed 上にいるときだけにする。
+    // モーダル open で pushState されると useSearchParams が空を返し、
+    // currentGenres / currentAdvanced も空になる。ここで filtersRef を上書きしてしまうと、
+    // モーダル open 中にユーザーがスワイプして FeedViewer の onNearEnd が発火 → fetchMore →
+    // 「フィルターなし」でページ追加 fetch されてしまい、モーダルを閉じた後の /feed に
+    // フィルター違反作品が混ざる (= 「フィルターの設定がなくなったように見える」) ことに
+    // なる。pathname が /feed のときだけ ref を最新化し、それ以外では現状値を保つ。
+    if (
+      typeof window !== "undefined" &&
+      !window.location.pathname.startsWith("/feed")
+    ) {
+      return;
+    }
+
     // フィルター ref を最新に更新 (fetchMore から参照される)
     filtersRef.current = { genres: currentGenres, advanced: currentAdvanced };
 
@@ -257,19 +278,6 @@ export default function FeedClient() {
     // そのタイミングで初期 fetch を走らせる。
     if (enforceStatus === "pending") {
       setIsLoading(true);
-      return;
-    }
-
-    // /feed 上で MovieDetailModal を開くと window.history.pushState で URL バーが
-    // /movies/<slug> に書き換わる。Next.js 15 ではこの pushState を router が検知し、
-    // useSearchParams() が空文字列を返すようになるため、ここでの currentSig が変わって
-    // しまい意図せず再フェッチが走り「別の feed が始まる」ように見えてしまう。
-    // モーダル open/close で URL バーが一時的に /movies/ 系に切り替わっている間は
-    // フィードの再ロードを抑止する。
-    if (
-      typeof window !== "undefined" &&
-      !window.location.pathname.startsWith("/feed")
-    ) {
       return;
     }
 

@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import FeedItem from "@/components/FeedItem";
 import type { MovieCard } from "@/lib/api/feed";
 import { markFeedGesture } from "@/components/feed/useFeedPlayback";
+import { usePrefetchResolveMp4 } from "@/components/feed/usePrefetchResolveMp4";
 
 // 同時にレンダリングするスライド数 = 中央 + 前後1枚ずつの計3枚。
 // 4枚以上の `<video>` を同時に持つとモバイル Safari の同時接続上限に
@@ -31,6 +32,10 @@ export default function FeedViewer({
   const [currentIndex, setCurrentIndex] = useState(initialIndex);
   const [windowItems,  setWindowItems]  = useState<MovieCard[]>([]);
   const windowStartRef = useRef(0);
+
+  // 先 3 枚分の MP4 URL を resolver で事前解決しておき、スワイプ到達時の
+  // 再生開始を早める (resolver 側の 60s キャッシュを温めるだけで <video> は増やさない)。
+  usePrefetchResolveMp4(items, currentIndex);
 
   const [dragPx,         setDragPx]       = useState(0);
   const dragStartY       = useRef(0);

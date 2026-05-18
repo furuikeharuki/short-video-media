@@ -15,7 +15,7 @@
  *     `/search` の場合のみ行う。`/feed` で適用するときは URL に q をそのまま乗せる
  *     (=詳細検索パネル内のキーワード入力欄が真実のソース)。
  */
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { Suspense, useCallback, useEffect, useMemo, useState } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { useSession } from "next-auth/react";
 import AdvancedSearchPanel, {
@@ -154,7 +154,19 @@ function isFilterablePath(pathname: string): boolean {
          pathname === "/feed" || pathname.startsWith("/feed/");
 }
 
+/**
+ * ルートレイアウトの Header で使うため、どのページの prerender 時にもマウントされる。
+ * useSearchParams() を使うので Next.js 15 では Suspense バウンダリが必須 (CSR bailout を防ぐ)。
+ */
 export default function GlobalFilterButton() {
+  return (
+    <Suspense fallback={null}>
+      <GlobalFilterButtonInner />
+    </Suspense>
+  );
+}
+
+function GlobalFilterButtonInner() {
   const router = useRouter();
   const pathname = usePathname() ?? "";
   const searchParams = useSearchParams();

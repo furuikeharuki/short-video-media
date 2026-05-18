@@ -51,7 +51,6 @@ type Page = {
   items: MovieCard[];
   /** 次ページの offset (null なら末尾)。 */
   nextOffset: number | null;
-  total: number | null;
 };
 
 /** ソース種別に応じて 1 ページ取得する。 */
@@ -65,7 +64,6 @@ async function fetchPage(
     return {
       items: res.items,
       nextOffset: res.next_cursor !== null ? parseInt(res.next_cursor, 10) : null,
-      total: res.total,
     };
   }
   if (source.kind === "exact") {
@@ -78,18 +76,15 @@ async function fetchPage(
     return {
       items: res.items,
       nextOffset: res.next_cursor !== null ? parseInt(res.next_cursor, 10) : null,
-      total: res.total,
     };
   }
   // genre
-  // seed を渡さず通常ページングで取り出す。これにより total を確実に取得できる。
   const res = await getFeed(offset, limit, undefined, [source.genre]);
   const nextOffset =
     res.next_cursor !== null ? parseInt(res.next_cursor, 10) : null;
   return {
     items: res.items,
     nextOffset: Number.isNaN(nextOffset as number) ? null : nextOffset,
-    total: res.total ?? null,
   };
 }
 
@@ -101,7 +96,6 @@ export default function SearchInfiniteGrid({
 }: Props) {
   const [items, setItems] = useState<MovieCard[]>([]);
   const [nextOffset, setNextOffset] = useState<number | null>(0);
-  const [total, setTotal] = useState<number | null>(null);
   const [isLoadingMore, setIsLoadingMore] = useState(false);
   const [isInitialLoading, setIsInitialLoading] = useState(true);
   const fetchingRef = useRef(false);
@@ -129,7 +123,6 @@ export default function SearchInfiniteGrid({
         return fresh.length === 0 ? prev : [...prev, ...fresh];
       });
       setNextOffset(page.nextOffset);
-      if (page.total !== null) setTotal(page.total);
     } catch (e) {
       console.error("search fetchMore failed", e);
     } finally {
@@ -144,7 +137,6 @@ export default function SearchInfiniteGrid({
     let cancelled = false;
     setItems([]);
     setNextOffset(0);
-    setTotal(null);
     setIsInitialLoading(true);
     (async () => {
       columnsRef.current = columnsForWidth(window.innerWidth);
@@ -154,7 +146,6 @@ export default function SearchInfiniteGrid({
         if (cancelled) return;
         setItems(page.items);
         setNextOffset(page.nextOffset);
-        if (page.total !== null) setTotal(page.total);
       } catch (e) {
         console.error("search initial load failed", e);
       } finally {
@@ -183,16 +174,6 @@ export default function SearchInfiniteGrid({
     return () => io.disconnect();
   }, [fetchMore]);
 
-  // 件数表示文字列
-  // total が確定していればそれを使う。万が一 total が取れなくても、
-  // 全件読み終わっていれば実数で表示する (next_cursor が null のとき)。
-  const countLabel =
-    total !== null
-      ? `${total}件`
-      : nextOffset === null
-        ? `${items.length}件`
-        : `${items.length}件+`;
-
   if (isInitialLoading) {
     return (
       <main className="search-main">
@@ -209,7 +190,7 @@ export default function SearchInfiniteGrid({
   if (items.length === 0) {
     return (
       <main className="search-main">
-        <p className="search-meta">{headingPrefix}：0件</p>
+        <p className="search-meta">{headingPrefix}</p>
         <p className="search-empty">該当する作品が見つかりませんでした</p>
         <style>{pageCSS}</style>
       </main>
@@ -218,9 +199,7 @@ export default function SearchInfiniteGrid({
 
   return (
     <main className="search-main">
-      <p className="search-meta">
-        {headingPrefix}：{countLabel}
-      </p>
+      <p className="search-meta">{headingPrefix}</p>
       <div className="search-grid">
         {items.map((item, index) => (
           <MovieCardThumb

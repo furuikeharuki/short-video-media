@@ -43,6 +43,7 @@ type StoredPref = {
   directors?: string[];
   makers?: string[];
   labels?: string[];
+  ng_words?: string[];
   date_from?: string;
   date_to?: string;
   sort?: SortKey | "";
@@ -87,13 +88,14 @@ function payloadToInitial(p: StoredPref | null): AdvancedFormInitial {
     directors: asStringArray(p.directors),
     makers: asStringArray(p.makers),
     labels: asStringArray(p.labels),
+    ng_words: asStringArray(p.ng_words),
     date_from: typeof p.date_from === "string" ? p.date_from : "",
     date_to: typeof p.date_to === "string" ? p.date_to : "",
     sort: normalizeSort(p.sort),
   };
 }
 
-/** URL 上に存在している advanced 系クエリ (チップ/日付/ソート) を抜き出す。 */
+/** URL 上に存在している advanced 系クエリ (チップ/NG/日付/ソート) を抜き出す。 */
 function readFromUrl(sp: URLSearchParams): AdvancedFormInitial {
   const arr = (k: string) => sp.getAll(k).map((s) => s.trim()).filter(Boolean);
   return {
@@ -103,6 +105,7 @@ function readFromUrl(sp: URLSearchParams): AdvancedFormInitial {
     directors: arr("directors"),
     makers: arr("makers"),
     labels: arr("labels"),
+    ng_words: arr("ng_words"),
     date_from: (sp.get("date_from") ?? "").trim(),
     date_to: (sp.get("date_to") ?? "").trim(),
     sort: normalizeSort(sp.get("sort")),
@@ -118,6 +121,7 @@ function isUrlAdvEmpty(init: AdvancedFormInitial): boolean {
     (init.directors?.length ?? 0) === 0 &&
     (init.makers?.length ?? 0) === 0 &&
     (init.labels?.length ?? 0) === 0 &&
+    (init.ng_words?.length ?? 0) === 0 &&
     !init.date_from &&
     !init.date_to &&
     !init.sort
@@ -186,6 +190,7 @@ export default function SearchResultsHeader({ label, keyword }: Props) {
         directors: payload.directors,
         makers: payload.makers,
         labels: payload.labels,
+        ng_words: payload.ng_words,
         date_from: payload.date_from,
         date_to: payload.date_to,
         sort: payload.sort,
@@ -202,6 +207,7 @@ export default function SearchResultsHeader({ label, keyword }: Props) {
           directors: payload.directors,
           makers: payload.makers,
           labels: payload.labels,
+          ng_words: payload.ng_words,
           date_from: payload.date_from || null,
           date_to: payload.date_to || null,
           sort: payload.sort || null,
@@ -224,6 +230,7 @@ export default function SearchResultsHeader({ label, keyword }: Props) {
       (initial.directors?.length ?? 0) +
       (initial.makers?.length ?? 0) +
       (initial.labels?.length ?? 0) +
+      (initial.ng_words?.length ?? 0) +
       (initial.date_from ? 1 : 0) +
       (initial.date_to ? 1 : 0) +
       (initial.sort ? 1 : 0);

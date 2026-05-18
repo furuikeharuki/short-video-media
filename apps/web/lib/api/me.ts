@@ -119,7 +119,8 @@ export async function putNgWords(words: string[]): Promise<boolean> {
 
 /**
  * 「最後に適用した検索条件」の永続化用ペイロード。
- * API 側 SearchPrefPayload と一致。NG ワードは別エンドポイント (/me/ng-words) で管理する。
+ * API 側 SearchPrefPayload と一致。NG ワードも一緒にここで保存する。
+ * (旧 /me/ng-words エンドポイントとは独立。`PUT /me/search-prefs` 一発で全置換)
  */
 export type SearchPrefPayload = {
   q?: string | null;
@@ -129,6 +130,7 @@ export type SearchPrefPayload = {
   directors?: string[] | null;
   makers?: string[] | null;
   labels?: string[] | null;
+  ng_words?: string[] | null;
   date_from?: string | null;
   date_to?: string | null;
   sort?: string | null;

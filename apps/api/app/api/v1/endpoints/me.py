@@ -305,6 +305,7 @@ class SearchPrefPayload(BaseModel):
     directors: list[str] | None = None
     makers: list[str] | None = None
     labels: list[str] | None = None
+    ng_words: list[str] | None = None
     date_from: str | None = None
     date_to: str | None = None
     sort: str | None = None

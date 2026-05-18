@@ -84,3 +84,35 @@ export async function getViews(opts?: {
   const data = (await res.json()) as { items: ViewItem[] };
   return data.items;
 }
+
+/**
+ * サーバ保存された NG ワード一覧を取得。
+ * 未ログイン (401) は空配列を返し、UI をローカル限定モードにフォールバックさせる。
+ */
+export async function getNgWords(): Promise<string[]> {
+  try {
+    const res = await fetch("/api/proxy/me/ng-words", { cache: "no-store" });
+    if (!res.ok) return [];
+    const data = (await res.json()) as { words: string[] };
+    return Array.isArray(data.words) ? data.words : [];
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * NG ワードを全置換で保存する。
+ * 401/500 等で失敗したら false、成功なら true。
+ */
+export async function putNgWords(words: string[]): Promise<boolean> {
+  try {
+    const res = await fetch("/api/proxy/me/ng-words", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ words }),
+    });
+    return res.ok;
+  } catch {
+    return false;
+  }
+}

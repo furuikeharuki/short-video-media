@@ -7,7 +7,9 @@ import { getFeed } from "@/lib/api/feed";
 import {
   searchMovies,
   searchMoviesByExactField,
+  advancedSearch,
   type ExactField,
+  type AdvancedSearchInput,
 } from "@/lib/api/search";
 
 /**
@@ -21,7 +23,8 @@ import {
 type SourceKeyword = { kind: "keyword"; query: string };
 type SourceExact = { kind: "exact"; field: ExactField; value: string };
 type SourceGenre = { kind: "genre"; genre: string };
-type Source = SourceKeyword | SourceExact | SourceGenre;
+type SourceAdvanced = { kind: "advanced"; input: AdvancedSearchInput };
+type Source = SourceKeyword | SourceExact | SourceGenre | SourceAdvanced;
 
 type Props = {
   source: Source;
@@ -78,13 +81,20 @@ async function fetchPage(
       nextOffset: res.next_cursor !== null ? parseInt(res.next_cursor, 10) : null,
     };
   }
-  // genre
-  const res = await getFeed(offset, limit, undefined, [source.genre]);
-  const nextOffset =
-    res.next_cursor !== null ? parseInt(res.next_cursor, 10) : null;
+  if (source.kind === "genre") {
+    const res = await getFeed(offset, limit, undefined, [source.genre]);
+    const nextOffset =
+      res.next_cursor !== null ? parseInt(res.next_cursor, 10) : null;
+    return {
+      items: res.items,
+      nextOffset: Number.isNaN(nextOffset as number) ? null : nextOffset,
+    };
+  }
+  // advanced
+  const res = await advancedSearch(source.input, offset, limit);
   return {
     items: res.items,
-    nextOffset: Number.isNaN(nextOffset as number) ? null : nextOffset,
+    nextOffset: res.next_cursor !== null ? parseInt(res.next_cursor, 10) : null,
   };
 }
 

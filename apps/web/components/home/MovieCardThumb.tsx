@@ -36,7 +36,11 @@ export default function MovieCardThumb({
   fluid = false,
 }: Props) {
   const router = useRouter();
-  const imgSrc = movie.image_url_list ?? movie.image_url_large ?? "";
+  // DMM の image_url_list (短 content_id) は 404 で now_printing.jpg にリダイレクトされる
+  // ケースがあるため、image_url_large (ゼロパディング形式で 200 OK) を優先する。
+  // image_url_large も末尾が pl.jpg なので、下の `src$="pl.jpg"` CSS による右半分切り出しは
+  // そのまま適用される (videoa(pl.jpg) のみ右端領域を見せる仕様を維持)。
+  const imgSrc = movie.image_url_large ?? movie.image_url_list ?? "";
   const linkHref = href ?? `/movies/${encodeURIComponent(movie.slug)}`;
 
   const handleClick = (e: React.MouseEvent<HTMLAnchorElement>) => {

@@ -1,11 +1,24 @@
 "use client";
 import { useRouter } from "next/navigation";
+import { markFeedStartUnmuted } from "@/lib/feedNav";
 
-export default function BackButton() {
+type Props = {
+  /**
+   * 動画詳細フルページ (/movies/[slug]) のヘッダーで使うときに true にすると、
+   * フィードに戻る際に「ユーザー操作で戻った」フラグを立て、
+   * 動画を音声ONで再生始めさせる。
+   */
+  resumeFeedUnmuted?: boolean;
+};
+
+export default function BackButton({ resumeFeedUnmuted = false }: Props = {}) {
   const router = useRouter();
   return (
     <button
-      onClick={() => router.back()}
+      onClick={() => {
+        if (resumeFeedUnmuted) markFeedStartUnmuted();
+        router.back();
+      }}
       aria-label="前のページに戻る"
       style={{
         position: 'absolute',

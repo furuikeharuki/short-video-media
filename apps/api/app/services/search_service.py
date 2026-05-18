@@ -28,10 +28,29 @@ def _to_card(movie) -> MovieCard:
     )
 
 
-async def search(db: AsyncSession, query: str) -> SearchResponse:
-    movies = await search_movies(db, query)
+def _build_response(
+    movies: list, total: int, offset: int, limit: int
+) -> SearchResponse:
+    """共通: items / total / next_cursor を組み立てる。"""
     items = [_to_card(m) for m in movies]
-    return SearchResponse(items=items, total=len(items))
+    next_offset = offset + len(items)
+    has_more = next_offset < total
+    return SearchResponse(
+        items=items,
+        total=total,
+        next_cursor=str(next_offset) if has_more else None,
+    )
+
+
+async def search(
+    db: AsyncSession,
+    query: str,
+    *,
+    limit: int = 20,
+    offset: int = 0,
+) -> SearchResponse:
+    movies, total = await search_movies(db, query, limit=limit, offset=offset)
+    return _build_response(movies, total, offset, limit)
 
 
 async def search_by_exact_field(
@@ -40,9 +59,17 @@ async def search_by_exact_field(
     director: str | None = None,
     maker: str | None = None,
     label: str | None = None,
+    series: str | None = None,
+    limit: int = 20,
+    offset: int = 0,
 ) -> SearchResponse:
-    movies = await search_movies_by_exact_field(
-        db, director=director, maker=maker, label=label,
+    movies, total = await search_movies_by_exact_field(
+        db,
+        director=director,
+        maker=maker,
+        label=label,
+        series=series,
+        limit=limit,
+        offset=offset,
     )
-    items = [_to_card(m) for m in movies]
-    return SearchResponse(items=items, total=len(items))
+    return _build_response(movies, total, offset, limit)

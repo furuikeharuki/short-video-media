@@ -62,6 +62,18 @@ class Settings(BaseSettings):
     SAMPLE_URL_RATE_LIMIT_PER_MINUTE: int = 30
 
     # ─────────────────────────────────────────────
+    # Resolver サービス (Xserver VPS 上の apps/resolver) 連携
+    # ─────────────────────────────────────────────
+    # MP4 URL 解決サービスのベース URL (例: http://162.43.24.128)。
+    # 末尾スラッシュは付けても付けなくても良い。
+    RESOLVER_BASE_URL: str = ""
+    # resolver の Bearer 認証用 API キー。VPS の .env と同じ値を入れる。
+    RESOLVER_API_KEY: str = ""
+    # resolver への HTTP タイムアウト (ミリ秒)。Playwright 抽出は通常 8 秒程度。
+    # ナビ 15s + 描画 8s + マージン分で 25 秒。Railway の 30s 上限を超えないこと。
+    RESOLVER_TIMEOUT_MS: int = 25000
+
+    # ─────────────────────────────────────────────
     # DB 接続プール (asyncpg)
     # ─────────────────────────────────────────────
     # Railway Postgres は idle 接続を約 5 分で切断するため pool_recycle を 300s に。

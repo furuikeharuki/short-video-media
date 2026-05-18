@@ -1,0 +1,80 @@
+name: Debug DMM API Response
+
+# 特定の content_id について DMM API の生レスポンスをダンプする。
+# 取得漏れフィールドの調査用。
+
+on:
+  workflow_dispatch:
+    inputs:
+      content_id:
+        description: "対象の content_id (例: 1sun00055a)"
+        required: true
+        default: "1sun00055a"
+      floor:
+        description: "DMM floor (videoa, videoc, doujin, etc.)"
+        required: false
+        default: "videoa"
+
+concurrency:
+  group: debug-dmm-api
+  cancel-in-progress: true
+
+jobs:
+  dump:
+    name: Dump DMM API response
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install httpx
+        run: pip install httpx==0.27.0
+
+      - name: Fetch and dump
+        env:
+          DMM_API_ID: ${{ secrets.DMM_API_ID }}
+          DMM_AFFILIATE_ID: ${{ secrets.DMM_AFFILIATE_ID }}
+          CONTENT_ID: ${{ inputs.content_id }}
+          FLOOR: ${{ inputs.floor }}
+        run: |
+          python - <<'PY'
+          import os, json, httpx
+          api_id = os.environ["DMM_API_ID"]
+          aff_id = os.environ["DMM_AFFILIATE_ID"]
+          cid = os.environ["CONTENT_ID"]
+          floor = os.environ["FLOOR"]
+          # content_id にはプレフィックス (例: 1sun) が含まれているので、cid 検索を使う
+          params = {
+              "api_id": api_id,
+              "affiliate_id": aff_id,
+              "site": "FANZA",
+              "service": "digital",
+              "floor": floor,
+              "cid": cid,
+              "hits": 1,
+              "output": "json",
+          }
+          r = httpx.get("https://api.dmm.com/affiliate/v3/ItemList", params=params, timeout=30)
+          r.raise_for_status()
+          data = r.json()
+          items = data.get("result", {}).get("items", [])
+          print("==== STATUS ====")
+          print(data.get("result", {}).get("status"))
+          print("==== RESULT COUNT ====")
+          print(data.get("result", {}).get("result_count"))
+          print("==== ITEMS ====")
+          print(json.dumps(items, ensure_ascii=False, indent=2))
+          if items:
+              keys = sorted(items[0].keys())
+              print("==== TOP-LEVEL KEYS ====")
+              for k in keys:
+                  print(" -", k)
+              info = items[0].get("iteminfo", {})
+              print("==== ITEMINFO KEYS ====")
+              for k in sorted(info.keys()):
+                  print(" -", k, "=>", json.dumps(info[k], ensure_ascii=False)[:200])
+          PY

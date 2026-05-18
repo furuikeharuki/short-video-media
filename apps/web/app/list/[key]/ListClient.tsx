@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import MovieCardThumb from "@/components/home/MovieCardThumb";
+import SimpleBackButton from "@/components/SimpleBackButton";
 import type { MovieCard } from "@/lib/api/feed";
 import { getHomeSection, type HomeSectionKey } from "@/lib/api/homeSection";
 
@@ -120,8 +121,9 @@ export default function ListClient({
   if (isInitialLoading) {
     return (
       <main className="list-main">
-        <div className="list-meta">
-          <h1 className="list-title">{title}</h1>
+        <div className="list-subheader">
+          <SimpleBackButton />
+          <div className="list-subheader-title" title={title}>{title}</div>
         </div>
         <div className="list-initial-loading" role="status" aria-live="polite">
           <span className="list-spinner" aria-hidden="true" />
@@ -135,6 +137,10 @@ export default function ListClient({
   if (items.length === 0) {
     return (
       <main className="list-main">
+        <div className="list-subheader">
+          <SimpleBackButton />
+          <div className="list-subheader-title" title={title}>{title}</div>
+        </div>
         <p className="list-empty">該当する作品が見つかりませんでした</p>
         <style>{pageCSS}</style>
       </main>
@@ -143,8 +149,9 @@ export default function ListClient({
 
   return (
     <main className="list-main">
-      <div className="list-meta">
-        <h1 className="list-title">{title}</h1>
+      <div className="list-subheader">
+        <SimpleBackButton />
+        <div className="list-subheader-title" title={title}>{title}</div>
       </div>
       <div className="list-grid">
         {items.map((item, index) => (
@@ -192,15 +199,27 @@ const pageCSS = `
     color: #fff;
     font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
   }
-  .list-meta {
-    padding: 12px 16px 4px;
+  .list-subheader {
+    position: sticky;
+    top: 0;
+    z-index: 5;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 12px;
+    background: #0a0a0a;
+    border-bottom: 1px solid rgba(255,255,255,0.08);
+    min-height: 44px;
   }
-  .list-title {
-    margin: 0;
-    font-size: 17px;
-    font-weight: 800;
+  .list-subheader-title {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
     color: #fff;
-    letter-spacing: -0.01em;
+    font-size: 14px;
+    font-weight: 600;
   }
   .list-empty {
     text-align: center;

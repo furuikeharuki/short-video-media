@@ -1,3 +1,6 @@
+import os
+from urllib.parse import quote
+
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.repositories.actress_repository import (
@@ -9,6 +12,26 @@ from app.repositories.actress_repository import (
 )
 from app.schemas.actress import ActressDetail, ActressProfile, ActressStats, GoodsCard
 from app.schemas.movie import MovieCard, PriceList
+
+
+def _build_fanza_search_fallback_url(actress_name: str) -> str | None:
+    """`dmm_list_url` が DB に保存されていない女優向けのフォールバック URL を作る。
+
+    DMM ActressSearch API の `listURL.digital` が空 (または該当が無い) ケースでも
+    「DMM で 〜 の作品を見る」ボタンを出したいので、FANZA キーワード検索ページに
+    アフィリエイトリンク経由で飛ばす URL を組み立てる。
+
+    `DMM_LINK_AFFILIATE_ID` が未設定のときはアフィ収益が紐づかないので None を返し、
+    呼び出し側は従来通り「URL が無い」扱いにする。
+    """
+    af_id = os.getenv("DMM_LINK_AFFILIATE_ID") or os.getenv("DMM_AFFILIATE_ID")
+    if not af_id or not actress_name:
+        return None
+    # FANZA 動画 (videoa) の女優名検索ページに飛ばす。
+    # アクセス時に DMM 側で年齢確認 → 年齢通過後に検索結果が表示される。
+    inner = f"https://www.dmm.co.jp/digital/videoa/-/list/search/=/searchstr={quote(actress_name)}/"
+    lurl = quote(inner, safe="")
+    return f"https://al.dmm.co.jp/?lurl={lurl}&af_id={af_id}&ch=link_tool&ch_id=link"
 
 
 def _to_card(movie) -> MovieCard:
@@ -86,7 +109,10 @@ async def get_actress_detail_service(
         blood_type=actress.blood_type,
         hobby=actress.hobby,
         prefectures=actress.prefectures,
-        dmm_list_url=actress.dmm_list_url,
+        dmm_list_url=(
+            actress.dmm_list_url
+            or _build_fanza_search_fallback_url(actress.name)
+        ),
     )
 
     stats = ActressStats(**stats_dict)

@@ -2,6 +2,7 @@ import type { Metadata, Viewport } from "next";
 import Header from "@/components/Header";
 import BottomNav from "@/components/BottomNav";
 import SessionProvider from "@/components/SessionProvider";
+import SavedFilterEnforcer from "@/components/SavedFilterEnforcer";
 import "./globals.css";
 
 const SITE_NAME = "AV Shorts";
@@ -89,6 +90,8 @@ export default function RootLayout({
       </head>
       <body>
         <SessionProvider>
+          {/* /feed と /search 表示時に保存済みフィルターを URL に自動注入する透明コンポーネント */}
+          <SavedFilterEnforcer />
           <Header />
           {children}
           {modal}

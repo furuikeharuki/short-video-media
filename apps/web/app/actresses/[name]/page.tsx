@@ -4,7 +4,8 @@ import { notFound } from "next/navigation";
 
 import ActressBackButton from "@/components/ActressBackButton";
 import { getActressByName } from "@/lib/api/actresses";
-import SearchGrid from "@/app/search/SearchGrid";
+import HorizontalCardRow from "@/components/home/HorizontalCardRow";
+import MovieCardThumb from "@/components/home/MovieCardThumb";
 
 const SITE_NAME = "AV Shorts";
 const SITE_URL = "https://av-shorts.com";
@@ -212,18 +213,37 @@ export default async function ActressDetailPage({ params }: PageProps) {
           </section>
         )}
 
-        <section style={styles.section}>
-          <h2 style={styles.sectionTitle}>出演作品 ({movies.length})</h2>
-          {movies.length === 0 ? (
+        {movies.length === 0 ? (
+          <section style={styles.section}>
+            <h2 style={styles.sectionTitle}>出演作品 ({movies.length})</h2>
             <p style={styles.empty}>出演作品が見つかりませんでした</p>
-          ) : (
-            <SearchGrid
-              items={movies}
-              playlistKey={`actress-${profile.id}`}
-              playlistTitle={`${profile.name}の出演作品`}
-            />
-          )}
-        </section>
+          </section>
+        ) : (
+          <div style={styles.hcrWrap}>
+            <HorizontalCardRow
+              title={`出演作品 (${stats.movie_count})`}
+              subtitle={`新しい順 ・ ${movies.length} 件表示`}
+              action={{
+                label: "もっと見る",
+                href: `/search?actresses=${encodeURIComponent(profile.name)}&sort=new`,
+              }}
+            >
+              {movies.map((m, i) => (
+                <MovieCardThumb
+                  key={m.id}
+                  movie={m}
+                  aspect="portrait"
+                  playlist={{
+                    key: `actress-${profile.id}`,
+                    title: `${profile.name}の出演作品`,
+                    startIndex: i,
+                    items: movies,
+                  }}
+                />
+              ))}
+            </HorizontalCardRow>
+          </div>
+        )}
 
         {goods.length > 0 && (
           <section style={styles.section}>
@@ -362,6 +382,10 @@ const styles: Record<string, React.CSSProperties> = {
   section: {
     marginBottom: "28px",
   },
+  hcrWrap: {
+    // HorizontalCardRow は自分で 16px padding を持つので、body の 16px padding を打ち消す。
+    margin: "0 -16px 16px",
+  },
   sectionTitle: {
     fontSize: "13px",
     fontWeight: 700,
@@ -490,21 +514,6 @@ const styles: Record<string, React.CSSProperties> = {
 const pageCSS = `
   *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
   html, body { background: #0a0a0a !important; overflow: hidden !important; }
-  .search-grid {
-    display: grid;
-    grid-template-columns: repeat(3, minmax(0, 1fr));
-    gap: 8px;
-    padding: 8px 0 0;
-  }
-  .search-grid > .mct { width: 100%; min-width: 0; }
-  @media (min-width: 640px) {
-    .search-grid { grid-template-columns: repeat(5, minmax(0, 1fr)); }
-  }
-  @media (min-width: 1024px) {
-    .search-grid {
-      grid-template-columns: repeat(7, minmax(0, 1fr));
-    }
-  }
   .goods-grid {
     display: grid;
     grid-template-columns: repeat(3, minmax(0, 1fr));

@@ -265,6 +265,25 @@ function GlobalFilterButtonInner() {
 
       // ベースパス: /feed 系なら /feed 、それ以外は /search に集約
       const basePath = pathname.startsWith("/feed") ? "/feed" : "/search";
+
+      // /search に来るときの「文脈クエリ」(サブヘッダーに #ハイビジョン や
+      // 監督「〇〇」のラベルを表示するためのキー) は、フィルター適用後も
+      // 維持しないとサブヘッダーが消えてしまう。現在の URL から拾って残す。
+      // - /feed では文脈クエリ自体を扱わないので何もしない。
+      // - payload.q がある場合は単独 q を上書きするので、文脈の q だけは入れない。
+      if (basePath === "/search") {
+        const currentParams = new URLSearchParams(urlKey);
+        const contextKeys = ["genre", "director", "maker", "label", "series"] as const;
+        for (const key of contextKeys) {
+          const v = (currentParams.get(key) ?? "").trim();
+          if (v && !params.has(key)) params.set(key, v);
+        }
+        // 単独 q (キーワード文脈)。payload.q が空のときだけ復元する。
+        if (!params.get("q")) {
+          const ctxQ = (currentParams.get("q") ?? "").trim();
+          if (ctxQ) params.set("q", ctxQ);
+        }
+      }
       const qs = params.toString();
       const nextUrl = qs ? `${basePath}?${qs}` : basePath;
 

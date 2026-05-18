@@ -27,14 +27,6 @@ on:
         description: "対象件数の上限 (空 = 全件、テスト時に小さい値を指定)"
         required: false
         default: ""
-      include_legacy:
-        description: "旧形式 URL (_mhb_w / _dm_w) も対象にする"
-        required: false
-        default: "false"
-        type: choice
-        options:
-          - "false"
-          - "true"
       dry_run:
         description: "DB に書かずログ出力だけ"
         required: false
@@ -81,15 +73,11 @@ jobs:
           RESOLVER_API_KEY: ${{ secrets.RESOLVER_API_KEY }}
           CONCURRENCY: ${{ github.event.inputs.concurrency || '4' }}
           LIMIT_INPUT: ${{ github.event.inputs.limit || '' }}
-          INCLUDE_LEGACY_INPUT: ${{ github.event.inputs.include_legacy || 'false' }}
           DRY_RUN_INPUT: ${{ github.event.inputs.dry_run || 'false' }}
         run: |
           ARGS="--concurrency ${CONCURRENCY}"
           if [ -n "${LIMIT_INPUT}" ]; then
             ARGS="${ARGS} --limit ${LIMIT_INPUT}"
-          fi
-          if [ "${INCLUDE_LEGACY_INPUT}" = "true" ]; then
-            ARGS="${ARGS} --include-legacy"
           fi
           if [ "${DRY_RUN_INPUT}" = "true" ]; then
             ARGS="${ARGS} --dry-run"

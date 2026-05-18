@@ -1,16 +1,13 @@
 """resolver サービスを HTTP で叩いて movies.sample_movie_url をバックフィルするジョブ。
 
 背景:
-    sync_catalog.py は DMM Affiliate API が返す `sampleMovieURL` の生値を DB に
-    保存していたが、それは litevideo iframe (HTML) や旧形式の `_mhb_w.mp4` で、
-    Chromium の Opaque Response Blocking や 404 で再生できない。
-    PR #39 以降、sync_catalog は `sample_movie_url=None` で保存し、resolver が
-    ユーザー初回再生時に動的に解決する設計に切り替わったが、初回アクセスのたびに
-    9 秒待ち (resolver の Playwright 実行) が発生してしまう。
+    sync_catalog.py は `sample_movie_url=None` で保存し、resolver がユーザー初回再生時に
+    動的に解決する設計だが、初回アクセスのたびに 9 秒待ち (resolver の Playwright
+    実行) が発生してしまう。
 
     このジョブは `sample_movie_url IS NULL` の movies を対象に、Xserver VPS Tokyo の
-    resolver サービスを HTTP で並列に叩き、再生可能な MP4 URL を取得して DB に
-    書き戻すことでユーザー体験を先回りで改善する。
+    resolver サービスを HTTP で並列に叩き、MP4 URL を取得して DB に書き戻すことで
+    ユーザー体験を先回りで改善する。
 
 実行要件:
     - DATABASE_URL 環境変数
@@ -24,9 +21,6 @@
 
     # 上限指定 (テスト用)
     python -m src.resolve_sample_urls --limit 100
-
-    # 旧形式 (_mhb_w / _dm_w) も対象にする (ガード強化)
-    python -m src.resolve_sample_urls --include-legacy
 
     # DB に書き込まずログ出力だけ
     python -m src.resolve_sample_urls --dry-run --limit 10
@@ -52,18 +46,6 @@ sys.path.insert(0, os.path.join(_REPO_ROOT, "apps", "api"))
 from app.db.models.movie import Movie  # noqa: E402
 
 logger = logging.getLogger(__name__)
-
-# 旧形式の URL パターン。--include-legacy で対象に加える。
-# (apps/api/app/api/v1/endpoints/movies.py の同名定数とそろえる)
-import re  # noqa: E402
-
-LEGACY_PATTERN = re.compile(r"_(mhb|dm)_w\.mp4(\?|$)", re.IGNORECASE)
-
-
-def _is_legacy(url: str | None) -> bool:
-    if not url:
-        return False
-    return LEGACY_PATTERN.search(url) is not None
 
 
 def _get_async_url(url: str) -> str:
@@ -185,7 +167,6 @@ async def main(
     *,
     concurrency: int,
     limit: int | None,
-    include_legacy: bool,
     dry_run: bool,
 ) -> None:
     db_url = os.getenv("DATABASE_URL")
@@ -201,27 +182,27 @@ async def main(
 
     print(
         f"[resolve_sample_urls] start concurrency={concurrency} "
-        f"limit={limit} include_legacy={include_legacy} dry_run={dry_run}"
+        f"limit={limit} dry_run={dry_run}"
     )
 
     engine = create_async_engine(_get_async_url(db_url))
     Session = async_sessionmaker(engine, expire_on_commit=False)
 
-    # 対象 movies を取得
+    # 対象 movies を取得 (sample_movie_url IS NULL のものだけ)
     async with Session() as session:
         stmt = select(
-            Movie.id, Movie.content_id, Movie.slug, Movie.sample_movie_url
-        ).where(Movie.content_id.is_not(None))
+            Movie.id, Movie.content_id, Movie.slug
+        ).where(
+            Movie.content_id.is_not(None),
+            Movie.sample_movie_url.is_(None),
+        )
         rows = (await session.execute(stmt)).all()
 
-    targets: list[tuple[str, str, str]] = []
-    for movie_id, content_id, slug, sample_url in rows:
-        if not content_id:
-            continue
-        if sample_url is None:
-            targets.append((movie_id, content_id, slug))
-        elif include_legacy and _is_legacy(sample_url):
-            targets.append((movie_id, content_id, slug))
+    targets: list[tuple[str, str, str]] = [
+        (movie_id, content_id, slug)
+        for movie_id, content_id, slug in rows
+        if content_id
+    ]
 
     if limit is not None:
         targets = targets[:limit]
@@ -264,10 +245,6 @@ if __name__ == "__main__":
         help="対象件数の上限。指定なしで全件。テスト時に使う。",
     )
     parser.add_argument(
-        "--include-legacy", action="store_true",
-        help="sample_movie_url が旧形式 (_mhb_w / _dm_w) のレコードも対象にする",
-    )
-    parser.add_argument(
         "--dry-run", action="store_true",
         help="DB 書き込みせずログ出力だけ",
     )
@@ -276,6 +253,5 @@ if __name__ == "__main__":
     asyncio.run(main(
         concurrency=args.concurrency,
         limit=args.limit,
-        include_legacy=args.include_legacy,
         dry_run=args.dry_run,
     ))

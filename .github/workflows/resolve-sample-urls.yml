@@ -1,0 +1,98 @@
+name: Resolve Sample URLs (backfill)
+
+# DB の sample_movie_url を Xserver VPS resolver で並列にバックフィルするワークフロー。
+# sync_catalog は sample_movie_url=NULL で保存するため、これを定期的に動かして
+# ユーザー初回再生時の resolver 待ち (~9 秒) を先回りで解消する。
+#
+# トリガー:
+#   - schedule: 1 日 1 回 (UTC 18:00 = JST 03:00)
+#   - workflow_dispatch: 手動実行
+#
+# 必要な Secrets:
+#   - DATABASE_URL         : 本番 Postgres への接続文字列
+#   - RESOLVER_BASE_URL    : Xserver VPS resolver の URL (e.g. http://162.43.24.128)
+#   - RESOLVER_API_KEY     : resolver Bearer 認証用 API キー
+
+on:
+  schedule:
+    # UTC 18:00 = JST 03:00。深夜に実行してユーザーへの影響を最小化する。
+    - cron: "0 18 * * *"
+  workflow_dispatch:
+    inputs:
+      concurrency:
+        description: "並列度 (VPS resolver の RESOLVER_CONCURRENCY=8 に合わせる)"
+        required: false
+        default: "4"
+      limit:
+        description: "対象件数の上限 (空 = 全件、テスト時に小さい値を指定)"
+        required: false
+        default: ""
+      include_legacy:
+        description: "旧形式 URL (_mhb_w / _dm_w) も対象にする"
+        required: false
+        default: "false"
+        type: choice
+        options:
+          - "false"
+          - "true"
+      dry_run:
+        description: "DB に書かずログ出力だけ"
+        required: false
+        default: "false"
+        type: choice
+        options:
+          - "false"
+          - "true"
+
+concurrency:
+  group: resolve-sample-urls-prod
+  cancel-in-progress: false
+
+jobs:
+  resolve:
+    name: Backfill sample_movie_url via resolver
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    defaults:
+      run:
+        working-directory: apps/jobs
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ../api
+          pip install -e .
+
+      - name: Run resolve_sample_urls
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          RESOLVER_BASE_URL: ${{ secrets.RESOLVER_BASE_URL }}
+          RESOLVER_API_KEY: ${{ secrets.RESOLVER_API_KEY }}
+          CONCURRENCY: ${{ github.event.inputs.concurrency || '4' }}
+          LIMIT_INPUT: ${{ github.event.inputs.limit || '' }}
+          INCLUDE_LEGACY_INPUT: ${{ github.event.inputs.include_legacy || 'false' }}
+          DRY_RUN_INPUT: ${{ github.event.inputs.dry_run || 'false' }}
+        run: |
+          ARGS="--concurrency ${CONCURRENCY}"
+          if [ -n "${LIMIT_INPUT}" ]; then
+            ARGS="${ARGS} --limit ${LIMIT_INPUT}"
+          fi
+          if [ "${INCLUDE_LEGACY_INPUT}" = "true" ]; then
+            ARGS="${ARGS} --include-legacy"
+          fi
+          if [ "${DRY_RUN_INPUT}" = "true" ]; then
+            ARGS="${ARGS} --dry-run"
+          fi
+          echo "Running: python -m src.resolve_sample_urls ${ARGS}"
+          python -m src.resolve_sample_urls ${ARGS}

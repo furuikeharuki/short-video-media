@@ -244,5 +244,29 @@ export function useEnforceSavedFilter(): SavedFilterStatus {
     };
   }, [isTarget, pathname, urlKey, isAuthed, status, router]);
 
+  // render フェーズで「直前のレンダーでまだ処理していない URL」なら
+  // 同期的に "pending" を返す。これにより、ホーム/マイページから /feed に
+  // 戻ってきたときに、SavedFilterEnforcer が前ページ滞在中に "ready" にしていた
+  // 値を持ち越して、FeedClient のマウント直後 1 回目の useEffect が
+  // 「フィルター無しで fetch」してしまう不具合を防ぐ。
+  //
+  // useEffect 内の setEnforceStatus("pending") は次レンダーまで反映されないため、
+  // マウント直後のレンダーで FeedClient に渡る Context value は前回の "ready" の
+  // ままになりうる。ここで派生計算して同期的に "pending" を返すことで、
+  // 「URL 確定前は絶対に fetch しない」契約を厳密に守れる。
+  if (isTarget && status !== "loading") {
+    const handleKey = `${pathname}?${urlKey}`;
+    if (lastHandledRef.current !== handleKey) {
+      const sp = new URLSearchParams(urlKey);
+      if (!hasAdvancedInUrl(sp)) {
+        // URL に advanced が乗っていない & まだ処理済みでない → pref 注入の
+        // 可能性があるので確実に "pending" を返す
+        return "pending";
+      }
+      // URL に advanced が乗っているので即 ready 扱いでよい
+      return "ready";
+    }
+  }
+
   return enforceStatus;
 }

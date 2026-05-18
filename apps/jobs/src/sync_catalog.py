@@ -403,6 +403,35 @@ def _upgrade_goods_image_to_pl(url: str | None) -> str | None:
     return new_url if n > 0 else None
 
 
+# pl.jpg の存在確認キャッシュ: 同一 URL の HEAD リクエストを重複させない
+# True=実在 (200), False=不在 (404 or now_printing にリダイレクト)
+_PL_EXISTS_CACHE: dict[str, bool] = {}
+
+
+async def _pl_image_exists(client: httpx.AsyncClient, url: str) -> bool:
+    """pl.jpg URL が実際にサーバー上に存在するか HEAD リクエストで確認する。
+
+    DMM CDN は存在しない商品画像についても HTTP 200 を返しつつ、`now_printing.jpg`
+    に 30x リダイレクトさせる。そのため、follow_redirects=True で最終 URL に
+    `now_printing` が含まれているかも判定する。
+    """
+    if not url:
+        return False
+    cached = _PL_EXISTS_CACHE.get(url)
+    if cached is not None:
+        return cached
+    try:
+        resp = await client.head(url, timeout=5, follow_redirects=True)
+        ok = (
+            resp.status_code == 200
+            and "now_printing" not in str(resp.url).lower()
+        )
+    except httpx.HTTPError:
+        ok = False
+    _PL_EXISTS_CACHE[url] = ok
+    return ok
+
+
 @dataclass
 class UpsertCounters:
     inserted: int = 0
@@ -422,6 +451,7 @@ async def upsert_movie(
     dry_run: bool = False,
     refresh_sample_url: bool = False,
     actress_filter: set[str] | None = None,
+    http_client: httpx.AsyncClient | None = None,
 ) -> None:
     """DMM API の 1 件を Movie テーブルに upsert する。
 
@@ -442,6 +472,7 @@ async def upsert_movie(
             affiliate_id=affiliate_id,
             dry_run=dry_run,
             actress_filter=actress_filter,
+            http_client=http_client,
         )
         return
 
@@ -690,6 +721,7 @@ async def upsert_goods(
     affiliate_id: str,
     dry_run: bool = False,
     actress_filter: set[str] | None = None,
+    http_client: httpx.AsyncClient | None = None,
 ) -> None:
     """DMM goods フロアの 1 件を Goods テーブルに upsert する。
 
@@ -741,17 +773,27 @@ async def upsert_goods(
         await session.execute(select(Goods).where(Goods.content_id == content_id))
     ).scalar_one_or_none()
 
-    # goods の画像 URL は DMM API が返す imageURL をベースにする。
-    # API は通常 pt.jpg (一覧用サムネ) と ps.jpg (小) しか返さず、pl.jpg (大) は欠ける
-    # ことが多いが、実際には CDN 上に pl.jpg は存在する。そのため API の pt/ps URL から
-    # 同じパスの pl.jpg を生成して大画像として採用する。
+    # goods の画像 URL 選定:
+    #   1. API が imageURL.large を返していたらそれを使う
+    #   2. そうでなければ pt.jpg/ps.jpg パスから pl.jpg URL を生成し、HEAD で実在確認
+    #      (CDN は欠けている画像を now_printing.jpg にリダイレクトするため、遷移後 URL も見る)
+    #   3. それもダメなら imageURL.small (ps.jpg) 、最後に list (pt.jpg) に fallback
     api_list = image_urls.get("list") or image_urls.get("small")
+    api_small = image_urls.get("small") or api_list
     new_image_list = api_list
-    new_image_large = (
-        image_urls.get("large")
-        or _upgrade_goods_image_to_pl(api_list)
-        or api_list
-    )
+
+    new_image_large: str | None = image_urls.get("large")
+    if not new_image_large:
+        candidate_pl = _upgrade_goods_image_to_pl(api_list)
+        if candidate_pl and http_client is not None:
+            if await _pl_image_exists(http_client, candidate_pl):
+                new_image_large = candidate_pl
+            else:
+                # pl.jpg が不在 → small (ps.jpg) に fallback
+                new_image_large = api_small
+        else:
+            # http_client がない (テスト等) やパターン外: 以前と同じ振る舞いで pl.jpg をそのまま採用
+            new_image_large = candidate_pl or api_small or api_list
     # 調査用ログ: 最初の 3 件だけ API が返す imageURL の生データを出す
     if counters.inserted + counters.updated < 3:
         print(
@@ -936,6 +978,7 @@ async def _process_items(
     dry_run: bool,
     refresh_sample_url: bool,
     actress_filter: set[str] | None,
+    http_client: httpx.AsyncClient | None = None,
 ) -> None:
     """取得した items リストを 1 件ずつ upsert してコミットする。"""
     for item in items:
@@ -950,6 +993,7 @@ async def _process_items(
                 dry_run=dry_run,
                 refresh_sample_url=refresh_sample_url,
                 actress_filter=actress_filter,
+                http_client=http_client,
             )
             # 1件ずつコミット: そうしないと 1 件失敗で batch 全体が巻き込まれる
             if not dry_run:
@@ -1034,6 +1078,7 @@ async def _run_floor_window(
             dry_run=dry_run,
             refresh_sample_url=refresh_sample_url,
             actress_filter=actress_filter,
+            http_client=client,
         )
         fetched += len(items)
         offset += len(items)

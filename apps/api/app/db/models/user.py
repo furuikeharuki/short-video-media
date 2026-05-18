@@ -10,6 +10,7 @@ import uuid
 from datetime import datetime, timezone
 
 from sqlalchemy import ForeignKey, Integer, String, UniqueConstraint, func
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base
@@ -104,4 +105,28 @@ class UserNgWord(Base):
     word: Mapped[str] = mapped_column(String(64), primary_key=True)
     created_at: Mapped[datetime] = mapped_column(
         default=_utcnow_naive, server_default=func.now()
+    )
+
+
+class UserSearchPref(Base):
+    """ユーザー固有の最後に適用した検索条件 (1 ユーザー 1 件)。
+
+    フィルターのチップ・日付・ソートを JSON で保存しておき、検索結果ページを
+    再訪したときに前回の絞り込みを自動復元する。NG ワードは UserNgWord
+    に既に保存されているので含めない。
+    """
+
+    __tablename__ = "user_search_prefs"
+
+    user_id: Mapped[str] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), primary_key=True
+    )
+    # 中身は { q, genres, actresses, series_list, directors, makers,
+    #         labels, date_from, date_to, sort } の JSON。
+    # サーバ側ではバリデーションせずに通す (Web 側で URL に組み立てる構造と一致)。
+    payload: Mapped[dict] = mapped_column(JSONB, default=dict, server_default="{}")
+    updated_at: Mapped[datetime] = mapped_column(
+        default=_utcnow_naive,
+        server_default=func.now(),
+        onupdate=_utcnow_naive,
     )

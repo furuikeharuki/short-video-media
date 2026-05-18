@@ -91,6 +91,8 @@ export default function FeedItem({ item, isActive, isFirst, isSecond = false }: 
     slug: item.slug,
     title: item.title,
     isActive,
+    // resolver で URL を遅延取得したときでも、<video> マウント直後に自動再生を起動させる
+    videoSrc,
     onOpenModal: handleOpenModal,
   });
 

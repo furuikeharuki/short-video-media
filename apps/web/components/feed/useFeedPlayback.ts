@@ -40,10 +40,19 @@ interface UseFeedPlaybackOptions {
   slug: string;
   title: string;
   isActive: boolean;
+  /**
+   * 現在マウントされている <video> の src。
+   * resolver で遅延取得されたケース、isActive=true になった時点では
+   * まだ <video> がマウントされていないため、isActive だけを deps にしても
+   * playVideo が呼ばれない。videoSrc を deps に含めることで
+   * <video> マウント直後に一度 effect を再実行させ、自動再生を起動させる。
+   * null の間 (resolver 待ちや exhausted) は <video> がそもそも存在しない。
+   */
+  videoSrc: string | null;
   onOpenModal: (slug: string) => void;
 }
 
-export function useFeedPlayback({ slug, title, isActive, onOpenModal }: UseFeedPlaybackOptions) {
+export function useFeedPlayback({ slug, title, isActive, videoSrc, onOpenModal }: UseFeedPlaybackOptions) {
   // 初回マウント時に一回だけショートボタンフラグを消費
   consumeStartUnmutedFlag();
 
@@ -212,11 +221,14 @@ export function useFeedPlayback({ slug, title, isActive, onOpenModal }: UseFeedP
   }, [isActive]);
 
   // 親 (FeedViewer) で isActive=true になったタイミングで自動再生を試みる。
-  // <video> 要素は isActive=true のときだけマウントされるので、ここで videoRef.current は
-  // マウント直後に存在するようになる。effect の deps に isActive を含めることで、
-  // 再マウントごとに新しい video 要素に対して playVideo が呼ばれる。
+  // <video> 要素は isActive && videoSrc のときだけマウントされるため、resolver で URL を遅延
+  // 取得したケースでは isActive=true になった時点では videoRef.current はまだ null。
+  // そのため deps に videoSrc を含め、URL が返ってきて <video> がマウントされた直後に
+  // effect が再実行されるようにする。同じ src での再マウントやスクロールでの再アクティブ化
+  // もこれでカバーされる。
   useEffect(() => {
     if (!isActive) return;
+    if (!videoSrc) return;
     const video = videoRef.current;
     if (!video) return;
     isActiveRef.current = true;
@@ -225,7 +237,7 @@ export function useFeedPlayback({ slug, title, isActive, onOpenModal }: UseFeedP
     // 同期で muted 属性を反映してから play を呼ぶ
     video.muted = globalIsMuted;
     playVideo(video, false);
-  }, [isActive, playVideo]);
+  }, [isActive, videoSrc, playVideo]);
 
   // isActive=false に切り替わったタイミングで video を停止・リセット。
   // <video> 要素自体はこの直後にアンマウントされるが、進捗 UI のリセットも兼ねる。
@@ -284,6 +296,8 @@ export function useFeedPlayback({ slug, title, isActive, onOpenModal }: UseFeedP
 
   // フォールバック: 念のため IntersectionObserver でも監視する。
   // (端末向きを変えたときや SSR ハイドレート直後など、isActive prop の同期前に発火するケースに備える)
+  // videoSrc を deps に含めることで、resolver で URL が遅延取得され <video> が今マウントされた
+  // ときにも observer を貼り直し、このフォールバック経路でも自動再生を起こせるようにしておく。
   useEffect(() => {
     const video = videoRef.current;
     if (!video) return;
@@ -304,7 +318,7 @@ export function useFeedPlayback({ slug, title, isActive, onOpenModal }: UseFeedP
     return () => {
       playObserver.disconnect();
     };
-  }, [playVideo, isActive]);
+  }, [playVideo, isActive, videoSrc]);
 
   // 長押しメニュー・右クリックメニューをフィードアイテム全体で拒否する。
   // 動画コンテナだけだと、サムネイルのみ表示中のスライドやボトムバーの押下でコンテキストメニューが出てしまうため、

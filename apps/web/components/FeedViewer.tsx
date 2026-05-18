@@ -73,7 +73,24 @@ export default function FeedViewer({
     setWindowItems(items.slice(start, end));
   }, [items]);
 
+  // 初期インデックスを適用するのはマウント時 1 回だけ。
+  // fetchMore() で items が追記されるたびにこの effect が再生して
+  // setCurrentIndex(initialIndex) で先頭に戻されてしまうバグを防ぐ。
+  // items が増えるだけのケースは windowItems を現在 idx で再計算すればよい。
+  const didInitRef = useRef(false);
   useEffect(() => {
+    if (didInitRef.current) {
+      // 2 回目以降: items が追記されたときは window だけ現在 idx で更新。
+      // 現在インデックスが新しい items 長の範囲を越えないようクランプ。
+      const clamped = Math.min(currentIdxRef.current, Math.max(0, items.length - 1));
+      if (clamped !== currentIdxRef.current) {
+        currentIdxRef.current = clamped;
+        setCurrentIndex(clamped);
+      }
+      updateWindow(clamped);
+      return;
+    }
+    didInitRef.current = true;
     currentIdxRef.current = initialIndex;
     setCurrentIndex(initialIndex);
     updateWindow(initialIndex);

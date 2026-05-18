@@ -1,6 +1,6 @@
 "use client";
 
-import { useRouter } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { FALLBACK_TAGS } from "@/lib/api/tags";
 import HamburgerMenu from "@/components/HamburgerMenu";
@@ -10,8 +10,14 @@ const FEED_SEED_KEY  = "feed_seed";
 const FEED_INDEX_KEY = "feed_index";
 const FEED_ITEMS_KEY = "feed_items";
 
+// ヘッダーを非表示にするパス (年齢確認ページなど)。
+// 年齢確認を通さずにロゴからボトムナビやハンバーガーメニュー経由で遷移されてしまうのを防ぐ。
+const HEADER_HIDDEN_PATHS = ["/age-gate"];
+
 export default function Header() {
   const router      = useRouter();
+  const pathname    = usePathname();
+  const isHidden    = HEADER_HIDDEN_PATHS.some((p) => pathname.startsWith(p));
   const inputRef    = useRef<HTMLInputElement>(null);
   const dropdownRef = useRef<HTMLDivElement>(null);
   const btnRef      = useRef<HTMLButtonElement>(null);
@@ -97,6 +103,13 @@ export default function Header() {
     } catch { /* ignore */ }
     window.location.href = "/";
   }, []);
+
+  // ヘッダーを非表示にするページ (年齢確認など) ではロゴや検索ボタンを見せず、
+  // 年齢確認を通さずにサイト内へ遷移できてしまうことを防ぐ。
+  // フックの起動順序を守るため、早期 return はフック定義の後に置く。
+  if (isHidden) {
+    return null;
+  }
 
   return (
     <div ref={wrapperRef} className="site-header-wrapper">

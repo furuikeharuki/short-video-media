@@ -81,9 +81,16 @@ declare global {
   }
 }
 
+// ナビゲーションを非表示にするパス (年齢確認ページなど)。
+// 年齢確認を通さずにショート/ホーム等へ遭移されてしまう UX を防ぐため、
+// ボトムナビごと表示しない。middleware も cookie 未認証なら /age-gate にリダイレクトするが、
+// そもそもボタンを見せないことで二重の保護とクリーンな UI を提供する。
+const NAV_HIDDEN_PATHS = ["/age-gate"];
+
 export default function BottomNav() {
   const pathname    = usePathname();
   const isShortPage = pathname === "/feed" || pathname.startsWith("/search/feed");
+  const isHidden    = NAV_HIDDEN_PATHS.some((p) => pathname.startsWith(p));
 
   const trackRef   = useRef<HTMLDivElement>(null);
   const isDragging = useRef(false);
@@ -135,6 +142,12 @@ export default function BottomNav() {
   const handleTouchEnd = useCallback(() => {
     isDragging.current = false;
   }, []);
+
+  // ナビを非表示にするパス (年齢確認ページなど) では何もレンダリングしない。
+  // フックの起動順序を守るため、早期 return はフック定義の後に置く。
+  if (isHidden) {
+    return null;
+  }
 
   return (
     <nav className="bottom-nav" aria-label="メインナビゲーション">

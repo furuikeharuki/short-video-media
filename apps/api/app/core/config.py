@@ -56,11 +56,6 @@ class Settings(BaseSettings):
     EVENTS_RATE_LIMIT_PER_SECOND: int = 10
     EVENTS_RATE_LIMIT_PER_MINUTE: int = 120
 
-    # sample-url 報告 API のレート制限 (per IP)。
-    # 通常は 1 ユーザー 1 作品につき 1 回だけ呼ばれるため、events より厳しめに絞る。
-    SAMPLE_URL_RATE_LIMIT_PER_SECOND: int = 2
-    SAMPLE_URL_RATE_LIMIT_PER_MINUTE: int = 30
-
     # ─────────────────────────────────────────────
     # Resolver サービス (Xserver VPS 上の apps/resolver) 連携
     # ─────────────────────────────────────────────

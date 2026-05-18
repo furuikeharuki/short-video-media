@@ -274,7 +274,7 @@ const styles: Record<string, React.CSSProperties> = {
     top: "52px",
     left: 0,
     right: 0,
-    bottom: "var(--bottom-nav-h, 56px)" as unknown as string,
+    bottom: 0,
     overflowY: "auto" as const,
     background: "#0a0a0a",
     color: "#fff",

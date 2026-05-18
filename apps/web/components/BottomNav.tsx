@@ -39,7 +39,9 @@ const NAV_ITEMS = [
   {
     label: "ショート",
     href: "/feed",
-    extraActive: ["/search/feed"],
+    // 動画再生中 (フィード + 動画詳細 + モーダル) はすべて「ショート」をアクティブ表示にする。
+    // /movies/* は動画詳細ページ および モーダル経由でも同じ pathname になるため、ここで拾う。
+    extraActive: ["/search/feed", "/movies/"],
     iconOutline: (
       <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
         <rect x="4" y="2" width="16" height="20" rx="2"/>

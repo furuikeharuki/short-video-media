@@ -70,7 +70,23 @@ export default function MovieDetailModal({ slug, onClose }: Props) {
     window.addEventListener("popstate", onPop);
     return () => {
       window.removeEventListener("popstate", onPop);
-      window.history.replaceState(null, "", prev);
+      // cleanup で URL を元に戻すのは「ユーザーがモーダルを閉じてフィードに戻る」
+      // ケースだけに限る。
+      //
+      // モーダル中の <Link> や router.push で他ページ (/search?maker=X 等) に
+      // 遷移したときは、URL バーは既に /search に変わっている。
+      // そこで replaceState(null, "", prev) で /feed... に巻き戻してしまうと、
+      // Next.js の内部 path と URL バーが完全に乖離し、ブラウザ back を押した
+      // ときに画面が真っ暗になる不具合を起こす。
+      // pathname がまだ /movies/<slug> のときは「フィードに戻る」経路なので replaceState、
+      // それ以外は URL をそのまま保ち、back で /movies/<slug> に戻れるようにする。
+      try {
+        if (window.location.pathname === `/movies/${slug}`) {
+          window.history.replaceState(null, "", prev);
+        }
+      } catch {
+        // history API が使えない環境は無視
+      }
     };
   }, [slug]);
 

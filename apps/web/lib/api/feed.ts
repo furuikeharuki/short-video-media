@@ -40,6 +40,8 @@ export type FeedAdvancedParams = {
   ng_words?: string[];
   date_from?: string;
   date_to?: string;
+  /** 並び替え。未指定 (空文字 / undefined) なら従来通り shuffle 順。 */
+  sort?: string;
 };
 
 const API_BASE_URL =
@@ -84,6 +86,9 @@ export async function getFeed(
     }
     if (advanced.date_to && advanced.date_to.trim()) {
       params.set("date_to", advanced.date_to.trim());
+    }
+    if (advanced.sort && advanced.sort.trim()) {
+      params.set("sort", advanced.sort.trim());
     }
   }
 

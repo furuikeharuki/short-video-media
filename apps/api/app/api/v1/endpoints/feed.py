@@ -1,4 +1,5 @@
 from datetime import date
+from typing import Literal
 
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -8,6 +9,9 @@ from app.schemas.feed import FeedResponse
 from app.services.feed_service import get_feed_paginated
 
 router = APIRouter()
+
+
+SortKey = Literal["new", "popular", "rating", "views", "bookmarks"]
 
 
 @router.get("/feed", response_model=FeedResponse)
@@ -26,6 +30,10 @@ async def feed(
     ng_words: list[str] = Query(default=[]),
     date_from: date | None = Query(default=None),
     date_to: date | None = Query(default=None),
+    # フィードも「並び替え」をサポートする。指定があれば advanced 経路に乗せて
+    # そのソート順 (新着 / 人気 / 評価 / 視聴 / ブックマーク) で ORDER BY を切り替える。
+    # None (未指定) のときは従来通り shuffle 順のフィードを返す。
+    sort: SortKey | None = Query(default=None),
     db: AsyncSession = Depends(get_db),
 ) -> FeedResponse:
     return await get_feed_paginated(
@@ -43,4 +51,5 @@ async def feed(
         ng_words=ng_words or None,
         date_from=date_from,
         date_to=date_to,
+        sort=sort,
     )

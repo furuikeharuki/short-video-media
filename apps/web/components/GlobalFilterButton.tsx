@@ -221,7 +221,7 @@ function GlobalFilterButtonInner() {
   const activeCount = useMemo(() => countActive(initial), [initial]);
 
   const handleSubmit = useCallback(
-    (payload: AdvancedSubmitPayload) => {
+    async (payload: AdvancedSubmitPayload) => {
       // セッションにも保存 (匿名でも次回起動で同じ条件を再現できるように)
       const stored: StoredPref = {
         q: payload.q,
@@ -237,20 +237,29 @@ function GlobalFilterButtonInner() {
         sort: payload.sort,
       };
       writeSessionPref(stored);
+      // サーバ保存は await する。これを fire-and-forget にしてしまうと、
+      // 「クリアして適用」直後に useEnforceSavedFilter が走ったとき、まだ古い
+      // サーバ pref を見て URL に再注入してしまい、クリアしたはずの条件が
+      // 復活してしまう。await することで、router.push に進む前に必ず最新の
+      // pref がサーバに反映された状態にする。
       if (isAuthed) {
-        void putSearchPref({
-          q: payload.q || null,
-          genres: payload.genres,
-          actresses: payload.actresses,
-          series_list: payload.series_list,
-          directors: payload.directors,
-          makers: payload.makers,
-          labels: payload.labels,
-          ng_words: payload.ng_words,
-          date_from: payload.date_from || null,
-          date_to: payload.date_to || null,
-          sort: payload.sort || null,
-        });
+        try {
+          await putSearchPref({
+            q: payload.q || null,
+            genres: payload.genres,
+            actresses: payload.actresses,
+            series_list: payload.series_list,
+            directors: payload.directors,
+            makers: payload.makers,
+            labels: payload.labels,
+            ng_words: payload.ng_words,
+            date_from: payload.date_from || null,
+            date_to: payload.date_to || null,
+            sort: payload.sort || null,
+          });
+        } catch {
+          /* 保存失敗時もナビゲーションは続ける (session には書けている) */
+        }
       }
 
       // URL を組み立てる。 /search でも /feed でも基本同じパラメータ。

@@ -385,10 +385,31 @@ function FieldChipRow({
     setTimeout(() => inputRef.current?.focus(), 0);
   };
 
-  const finishEditing = () => {
-    if (text.trim()) {
-      onAdd(text);
+  /**
+   * Enter ・ blur 時の確定挙動。
+   * 以前は「 text が空でなければそのままチップ化」していたため、
+   * 「あ」という 1 文字だけでもジャンルチップが作成され、サーバ側ではそのジャンル名と
+   * 完全一致しないため 0 件になったり、余計なチップが残ったりしていた。
+   * サジェスト一覧に出ている値は詳細検索サーバが「実際に名前として存在するもの」なので、
+   * それと case-insensitive で一致したときだけ、そのサジェスト値をチップ化する。
+   * それ以外 (サジェストゲットに一致しない「あ」など) はチップ化せず破棄する。
+   */
+  const tryCommitFromText = () => {
+    const trimmed = text.trim();
+    if (!trimmed) return false;
+    const lower = trimmed.toLowerCase();
+    const exact = suggestions.find((s) => s.toLowerCase() === lower);
+    if (exact) {
+      onAdd(exact);
+      return true;
     }
+    return false;
+  };
+
+  const finishEditing = () => {
+    // サジェストと完全一致したときだけチップ化。それ以外の自由入力は破棄し、
+    // そのまま適用されて「あ」一文字でジャンル検索されてしまう不具合を防ぐ。
+    tryCommitFromText();
     setText("");
     setSuggestions([]);
     setEditing(false);
@@ -432,7 +453,17 @@ function FieldChipRow({
               onKeyDown={(e) => {
                 if (e.key === "Enter") {
                   e.preventDefault();
-                  if (text.trim()) commit(text);
+                  // Enter は「サジェストと完全一致したときだけ」チップ化。
+                  // 一致しないなら入力をそのまま残し、サジェストを選ばせる。
+                  if (tryCommitFromText()) {
+                    setText("");
+                    setSuggestions([]);
+                    setTimeout(() => inputRef.current?.focus(), 0);
+                  } else if (suggestions.length > 0) {
+                    // 一致しないが候補があれば先頭を採用してやる (より使いやすい)
+                    commit(suggestions[0]);
+                  }
+                  // それ以外 (候補なし) は何もしない。
                 } else if (e.key === "Escape") {
                   setText("");
                   setEditing(false);

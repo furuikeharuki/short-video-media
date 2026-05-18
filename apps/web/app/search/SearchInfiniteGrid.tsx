@@ -11,6 +11,7 @@ import {
   type ExactField,
   type AdvancedSearchInput,
 } from "@/lib/api/search";
+import { useSavedFilterStatus } from "@/components/SavedFilterContext";
 
 /**
  * 検索結果ページ用の無限スクロールグリッド。
@@ -112,6 +113,12 @@ export default function SearchInfiniteGrid({
   headingPrefix,
   headerSlot,
 }: Props) {
+  // SavedFilterEnforcer が /search 上で保存済みフィルターを URL に注入し終わるまでは
+  // "pending"。この間 SSR が推測した source は、ユーザーの保存済みフィルターを
+  // 反映していない可能性がある (とくに 詳細経路以外: keyword / exact / genre)。
+  // ready になった時点で URL が書き換わり、再マウントされるので
+  // pending の間は スピナーだけ見せてフィルター違反作品のフラッシュを防ぐ。
+  const enforceStatus = useSavedFilterStatus();
   const [items, setItems] = useState<MovieCard[]>([]);
   const [nextOffset, setNextOffset] = useState<number | null>(0);
   const [isLoadingMore, setIsLoadingMore] = useState(false);
@@ -151,7 +158,13 @@ export default function SearchInfiniteGrid({
   }, [sourceKey, nextOffset]);
 
   // 初回マウント: 列数を確定して 1 ページ目を取る。
+  // SavedFilterEnforcer が pending の間は SSR の source を使った fetch を走らせず、
+  // ready になって URL が確定したところで初回ページを取る。
   useEffect(() => {
+    if (enforceStatus === "pending") {
+      setIsInitialLoading(true);
+      return;
+    }
     let cancelled = false;
     setItems([]);
     setNextOffset(0);
@@ -174,7 +187,7 @@ export default function SearchInfiniteGrid({
       cancelled = true;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sourceKey]);
+  }, [sourceKey, enforceStatus]);
 
   // 末尾の sentinel が見えたら次を取る。
   useEffect(() => {
@@ -192,7 +205,7 @@ export default function SearchInfiniteGrid({
     return () => io.disconnect();
   }, [fetchMore]);
 
-  if (isInitialLoading) {
+  if (enforceStatus === "pending" || isInitialLoading) {
     return (
       <main className="search-main">
         {headerSlot ?? <p className="search-meta">{headingPrefix}</p>}

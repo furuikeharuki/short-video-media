@@ -15,11 +15,12 @@
  * GlobalFilterButton.tsx と同じ復元ソース (sessionStorage / server) を使うため、
  * 同一の SESSION_KEY / sort バリデーションを共有している。
  */
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { useSession } from "next-auth/react";
 import { getSearchPref } from "@/lib/api/me";
 import type { SortKey } from "@/lib/api/search";
+import type { SavedFilterStatus } from "@/components/SavedFilterContext";
 
 const SESSION_KEY = "search_prefs_v1";
 
@@ -138,8 +139,13 @@ function mergeIntoParams(base: URLSearchParams, pref: StoredPref): URLSearchPara
 /**
  * /feed か /search 配下にいるときだけ動く。それ以外のパスでは no-op。
  * pathname or URL が変わるたびに再判定するが、1 URL ごとに 1 度だけ replace する。
+ *
+ * 戻り値の status:
+ *   - "pending": /feed ・ /search で saved pref を読み / URL に注入するか判定中。
+ *     コンテンツ側はこの間表示を押さえると "フィルター違反作品が一瞬見える" フラッシュを防げる。
+ *   - "ready":   URL が確定した / そもそも enforce 対象パスでない状態。
  */
-export function useEnforceSavedFilter() {
+export function useEnforceSavedFilter(): SavedFilterStatus {
   const router = useRouter();
   const pathname = usePathname() ?? "";
   const searchParams = useSearchParams();
@@ -147,6 +153,9 @@ export function useEnforceSavedFilter() {
   const isAuthed = status === "authenticated";
   // 同じ URL に対して二度 replace しないためのガード
   const lastHandledRef = useRef<string>("");
+  // コンテンツ側で「表示してよいか」を判断するための状態。
+  // pending の間はスピナーを見せるなどして、フィルター違反作品を一瞬も見せないようにする。
+  const [enforceStatus, setEnforceStatus] = useState<SavedFilterStatus>("pending");
 
   const urlKey = searchParams?.toString() ?? "";
   const isTarget =
@@ -156,18 +165,35 @@ export function useEnforceSavedFilter() {
     pathname.startsWith("/search/");
 
   useEffect(() => {
-    if (!isTarget) return;
+    // enforce 対象外のパスにいるときは「何もしない」と同義なので ready にしておく。
+    if (!isTarget) {
+      setEnforceStatus("ready");
+      return;
+    }
     // セッションロード判定が確定するまで待つ (authed のときはサーバ pref を優先)
-    if (status === "loading") return;
+    if (status === "loading") {
+      setEnforceStatus("pending");
+      return;
+    }
 
     const handleKey = `${pathname}?${urlKey}`;
-    if (lastHandledRef.current === handleKey) return;
+    if (lastHandledRef.current === handleKey) {
+      // この URL は既に判定済み → 安定しているので ready
+      setEnforceStatus("ready");
+      return;
+    }
 
     const sp = new URLSearchParams(urlKey);
     if (hasAdvancedInUrl(sp)) {
+      // URL に既に advanced が乗っている → この URL をそのまま使うだけなので ready
       lastHandledRef.current = handleKey;
+      setEnforceStatus("ready");
       return;
     }
+
+    // ここからは「pref を読んで URL を replace するか判断する」フェーズ。
+    // コンテンツを見せるのはこれが終わってからにしたいので pending に下げる。
+    setEnforceStatus("pending");
 
     let cancelled = false;
     (async () => {
@@ -186,19 +212,30 @@ export function useEnforceSavedFilter() {
       }
       if (cancelled) return;
       lastHandledRef.current = handleKey;
-      if (isPrefEmpty(pref)) return;
+      if (isPrefEmpty(pref)) {
+        // 何も注入しない = この URL で ready
+        setEnforceStatus("ready");
+        return;
+      }
 
       const merged = mergeIntoParams(sp, pref!);
       const qs = merged.toString();
       const nextUrl = qs ? `${pathname}?${qs}` : pathname;
       // 同一 URL ならスキップ (理論上来ないが念のため)
       const currentUrl = urlKey ? `${pathname}?${urlKey}` : pathname;
-      if (nextUrl === currentUrl) return;
-      // history を増やさず差し替え
+      if (nextUrl === currentUrl) {
+        setEnforceStatus("ready");
+        return;
+      }
+      // history を増やさず差し替え。遷移後の URL で useEffect が再走し
+      // hasAdvancedInUrl=true パスに入りステータスはそこで ready になるので、
+      // ここでは setEnforceStatus("ready") しない。
       router.replace(nextUrl);
     })();
     return () => {
       cancelled = true;
     };
   }, [isTarget, pathname, urlKey, isAuthed, status, router]);
+
+  return enforceStatus;
 }

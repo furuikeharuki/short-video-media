@@ -11,6 +11,7 @@ import { getMovieBySlug } from "@/lib/api/movies";
 import { loadPlaylist, clearPlaylist, type PlaylistSource } from "@/lib/feedPlaylist";
 import { logEvent } from "@/lib/api/events";
 import { recordView } from "@/lib/api/me";
+import { useSavedFilterStatus } from "@/components/SavedFilterContext";
 import type { MovieCard } from "@/lib/api/feed";
 import type { MovieDetail } from "@/lib/api/movies";
 
@@ -164,6 +165,10 @@ function filterSignature(genres: string[], advanced: FeedAdvancedParams): string
 export default function FeedClient() {
   const searchParams  = useSearchParams();
   const { status: authStatus } = useSession();
+  // SavedFilterEnforcer が URL に保存済みフィルターを注入し終わるまで "pending"。
+  // pending の間は 古い / フィルター未適用の feed を一瞬でも描画させず、
+  // 読み込みスピナーを持続表示する。
+  const enforceStatus = useSavedFilterStatus();
   const seedRef       = useRef<number | null>(null);
   const isFetchingRef = useRef(false);
   const isFetchingMoreRef = useRef(false);
@@ -235,6 +240,17 @@ export default function FeedClient() {
   useEffect(() => {
     // フィルター ref を最新に更新 (fetchMore から参照される)
     filtersRef.current = { genres: currentGenres, advanced: currentAdvanced };
+
+    // SavedFilterEnforcer がまだ saved pref を読んで URL を確定させていない間は
+    // fetch しない。ここで走らせてしまうと、例えばフィルター設定済みで
+    // 「他ページ -> /feed (URL にフィルター無し)」と戻ったときに、
+    // フィルター未適用のフィードを 1 回取りにいってしまい "違反作品が一瞬見える" ことになる。
+    // ready になった時点では currentSig が最新の URL を反映するので、
+    // そのタイミングで初期 fetch を走らせる。
+    if (enforceStatus === "pending") {
+      setIsLoading(true);
+      return;
+    }
 
     // /feed 上で MovieDetailModal を開くと window.history.pushState で URL バーが
     // /movies/<slug> に書き換わる。Next.js 15 ではこの pushState を router が検知し、
@@ -343,9 +359,10 @@ export default function FeedClient() {
         currentSig,
       );
     }
-  // currentSig が変わったらフィルター適用扱いで再フェッチさせる
+  // currentSig / enforceStatus が変わったらフィルター適用扱いで再フェッチさせる。
+  // pending -> ready に遷移したところでも 1 回トリガーさせて初期 fetch を走らせる。
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [currentSig]);
+  }, [currentSig, enforceStatus]);
 
   // 追加ページを取得して items に append する。
   // FeedViewer は残り 5 件以下になったとき onNearEnd を引いてくるので、
@@ -360,16 +377,33 @@ export default function FeedClient() {
 
     // セッション (ホームの "ランキング" "人気" "ジャンル" など) 経由のときは
     // /api/v1/home/section で同じ順番で続けて取りにいく。
-    // それ以外 (ふつうの /feed) は従来通り seed と offset で /feed を叩く。
+    // ただし、フィルター (女優 / NG 語 / etc) が適用されているときは
+    // home/section API はフィルターを受け付けないため、そのままの順で
+    // 追加ロードするとフィルター違反作品が混ざってしまう。
+    // フィルターがある場合は playlist 順を諦めて "/feed" 通常フェッチ
+    // (フィルター適用済み) にフォールバックして、スクロールした先も
+    // 必ずフィルターに適合させる。
     const source = playlistSourceRef.current;
     const seed = seedRef.current;
+    const { genres, advanced } = filtersRef.current;
+    const hasAdvanced =
+      !!advanced.q ||
+      (advanced.actresses?.length ?? 0) > 0 ||
+      (advanced.series_list?.length ?? 0) > 0 ||
+      (advanced.directors?.length ?? 0) > 0 ||
+      (advanced.makers?.length ?? 0) > 0 ||
+      (advanced.labels?.length ?? 0) > 0 ||
+      (advanced.ng_words?.length ?? 0) > 0 ||
+      !!advanced.date_from ||
+      !!advanced.date_to;
+    const hasAnyActiveFilter = genres.length > 0 || hasAdvanced;
 
     isFetchingMoreRef.current = true;
     try {
       let resItems: MovieCard[];
       let resCursor: string | null;
 
-      if (source) {
+      if (source && !hasAnyActiveFilter) {
         const res = await getHomeSection(
           source.key as HomeSectionKey,
           offset,
@@ -380,17 +414,10 @@ export default function FeedClient() {
         resCursor = res.next_cursor;
       } else {
         if (seed === null) return;
-        const { genres, advanced } = filtersRef.current;
-        const hasAdvanced =
-          !!advanced.q ||
-          (advanced.actresses?.length ?? 0) > 0 ||
-          (advanced.series_list?.length ?? 0) > 0 ||
-          (advanced.directors?.length ?? 0) > 0 ||
-          (advanced.makers?.length ?? 0) > 0 ||
-          (advanced.labels?.length ?? 0) > 0 ||
-          (advanced.ng_words?.length ?? 0) > 0 ||
-          !!advanced.date_from ||
-          !!advanced.date_to;
+        // playlist source があってもフィルターがある場合はこちらに落ちてくるので、
+        // 以降の追加ロードは playlist 順ではなくフィルター付き feed で取る。
+        // source を null にクリアして "スクロール以降も該当フィルターだけで柜る" ようにする。
+        if (source) playlistSourceRef.current = null;
         const res = await getFeed(
           offset,
           20,
@@ -476,7 +503,8 @@ export default function FeedClient() {
     );
   }
 
-  if (isLoading || items.length === 0) {
+  // pending 中はスピナーのみ見せ、フィルター未適用の feed を描画しない。
+  if (enforceStatus === "pending" || isLoading || items.length === 0) {
     return (
       <div className="feed-loading">
         <div className="feed-spinner" />

@@ -90,12 +90,16 @@ export default function RootLayout({
       </head>
       <body>
         <SessionProvider>
-          {/* /feed と /search 表示時に保存済みフィルターを URL に自動注入する透明コンポーネント */}
-          <SavedFilterEnforcer />
-          <Header />
-          {children}
-          {modal}
-          <BottomNav />
+          {/* /feed と /search 表示時に保存済みフィルターを URL に自動注入し、
+              children に対して enforce ステータス (pending/ready) を Context で共有する。
+              FeedClient / SearchInfiniteGrid はこの値が ready になるまで
+              スピナーを出して "フィルター違反作品が一瞬見える" フラッシュを防ぐ。 */}
+          <SavedFilterEnforcer>
+            <Header />
+            {children}
+            {modal}
+            <BottomNav />
+          </SavedFilterEnforcer>
         </SessionProvider>
       </body>
     </html>

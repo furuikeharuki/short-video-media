@@ -355,20 +355,24 @@ const css = `
   }
   .sr-sheet-backdrop {
     position: fixed;
-    inset: 0;
+    top: var(--header-h, 52px);
+    left: 0;
+    right: 0;
+    bottom: var(--bottom-nav-h, 56px);
     background: rgba(0,0,0,0.5);
     z-index: 50;
   }
   .sr-sheet {
     position: fixed;
-    top: 0;
+    top: var(--header-h, 52px);
     right: 0;
     width: min(360px, 92vw);
-    height: 100dvh;
+    height: calc(100dvh - var(--header-h, 52px) - var(--bottom-nav-h, 56px));
     background: #121212;
     color: #fff;
     z-index: 51;
     overflow-y: auto;
+    overscroll-behavior: contain;
     box-shadow: -8px 0 24px rgba(0,0,0,0.5);
     animation: sr-sheet-in 0.18s ease-out;
   }

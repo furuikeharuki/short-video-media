@@ -236,6 +236,19 @@ export default function FeedClient() {
     // フィルター ref を最新に更新 (fetchMore から参照される)
     filtersRef.current = { genres: currentGenres, advanced: currentAdvanced };
 
+    // /feed 上で MovieDetailModal を開くと window.history.pushState で URL バーが
+    // /movies/<slug> に書き換わる。Next.js 15 ではこの pushState を router が検知し、
+    // useSearchParams() が空文字列を返すようになるため、ここでの currentSig が変わって
+    // しまい意図せず再フェッチが走り「別の feed が始まる」ように見えてしまう。
+    // モーダル open/close で URL バーが一時的に /movies/ 系に切り替わっている間は
+    // フィードの再ロードを抑止する。
+    if (
+      typeof window !== "undefined" &&
+      !window.location.pathname.startsWith("/feed")
+    ) {
+      return;
+    }
+
     const vSlug = searchParams.get("v") ?? undefined;
     const playlistKey = searchParams.get("playlist") ?? undefined;
 

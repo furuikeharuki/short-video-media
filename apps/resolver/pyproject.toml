@@ -2,7 +2,7 @@
 name = "short-video-media-resolver"
 version = "0.1.0"
 description = "DMM litevideo iframe から MP4 直リンクを抽出する FastAPI サービス (Stage A: Xserver VPS, Stage B: AWS)"
-requires-python = ">=3.12"
+requires-python = ">=3.10"
 dependencies = [
     "fastapi>=0.115.0",
     "uvicorn[standard]>=0.30.0",

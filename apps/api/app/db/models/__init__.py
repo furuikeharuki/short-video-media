@@ -4,7 +4,14 @@ from app.db.models.genre import Genre
 from app.db.models.goods import ActressGoods, Goods
 from app.db.models.movie import Movie, MovieActress, MovieGenre
 from app.db.models.series import Series
-from app.db.models.user import Bookmark, Identity, User, UserNgWord, ViewHistory
+from app.db.models.user import (
+    Bookmark,
+    Identity,
+    User,
+    UserNgWord,
+    UserSearchPref,
+    ViewHistory,
+)
 
 __all__ = [
     "Movie",
@@ -21,4 +28,5 @@ __all__ = [
     "Bookmark",
     "ViewHistory",
     "UserNgWord",
+    "UserSearchPref",
 ]

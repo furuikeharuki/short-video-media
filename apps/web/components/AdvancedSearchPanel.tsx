@@ -1,17 +1,15 @@
 "use client";
 
 /**
- * 詳細検索パネル (Header のドロップダウン内に展開して使う)。
+ * 詳細検索パネル (検索結果ページの右上「フィルター」アイコンから開くシートに配置)。
  *
- * 仕様:
- * - 6 フィールド (genre / actress / series / director / maker / label) を
- *   テキスト入力 + サジェスト + チップ追加で複数選択。
- *   - genre / actress は AND、それ以外は OR (API 側の挙動)。UI 表示としては全部チップで揃える。
- * - 配信日 from / to を date input で。
- * - ソートキーは 5 種類: 新着 / 人気 / 評価 / 視聴回数 / ブックマーク数。
- * - NG ワード: ログイン中は サーバ保存 (PUT /me/ng-words)。未ログインは「この検索だけ」のローカル。
- *   - 親が isAuthed を渡す。
- * - 「この条件で検索」ボタンを押すと URL クエリを組み立てて `/search` へ遷移する。
+ * 仕様 (修正5):
+ * - キーワード入力欄は持たない (検索結果ページ側のサブヘッダーでキーワード表示)
+ * - 「並び替え」「配信日」を最上部に固定
+ * - 6 種フィールド (ジャンル / 女優 / シリーズ / 監督 / メーカー / レーベル) は
+ *   選択済みチップを並べ、末尾の「＋」を押すと入力欄 + サジェストが展開する
+ * - NG ワード: ログイン中はサーバ保存 (PUT /me/ng-words)、未ログインはローカル限定
+ * - 「適用」を押すと URL クエリを組み立てて検索結果ページへ
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -24,18 +22,50 @@ import {
 } from "@/lib/api/search";
 import { getNgWords, putNgWords } from "@/lib/api/me";
 
+/** 親が渡す初期値 (自動保存からの復元用)。空配列/空文字なら未指定扱い。 */
+export type AdvancedFormInitial = {
+  genres?: string[];
+  actresses?: string[];
+  series_list?: string[];
+  directors?: string[];
+  makers?: string[];
+  labels?: string[];
+  date_from?: string;
+  date_to?: string;
+  sort?: SortKey | "";
+};
+
 type Props = {
   /** ログイン中かどうか。サーバ NG ワード保存 UI の出し分けに使う。 */
   isAuthed: boolean;
-  /** 検索実行時に呼ばれる (Header 側でドロップダウンを閉じる用)。 */
-  onSubmit: (url: string) => void;
+  /** 検索結果ページから渡される現在の検索キーワード (URL クエリ q=)。表示しないが復元/構築用に保持。 */
+  keyword?: string;
+  /** 自動保存からの初期値 (チップ・日付・ソート)。 */
+  initial?: AdvancedFormInitial;
+  /** 検索実行時に呼ばれる (パネルを閉じる用)。url は新しい /search?... の絶対パス。 */
+  onSubmit: (url: string, payload: AdvancedSubmitPayload) => void;
+  /** 「キャンセル」ボタン押下時 (シート閉じる用)。 */
+  onCancel: () => void;
+};
+
+/** onSubmit に渡すペイロード (親側で sessionStorage / サーバ保存に使う)。 */
+export type AdvancedSubmitPayload = {
+  genres: string[];
+  actresses: string[];
+  series_list: string[];
+  directors: string[];
+  makers: string[];
+  labels: string[];
+  date_from: string;
+  date_to: string;
+  sort: SortKey | "";
 };
 
 type FieldKey = "genres" | "actresses" | "series_list" | "directors" | "makers" | "labels";
 
 const FIELD_LABELS: Record<FieldKey, string> = {
-  genres: "ジャンル (AND)",
-  actresses: "女優 (AND)",
+  genres: "ジャンル",
+  actresses: "女優",
   series_list: "シリーズ",
   directors: "監督",
   makers: "メーカー",
@@ -59,23 +89,38 @@ const SORT_OPTIONS: { value: SortKey; label: string }[] = [
   { value: "bookmarks", label: "ブックマーク数順" },
 ];
 
-export default function AdvancedSearchPanel({ isAuthed, onSubmit }: Props) {
-  const [q, setQ] = useState("");
-  const [chips, setChips] = useState<Record<FieldKey, string[]>>({
-    genres: [],
-    actresses: [],
-    series_list: [],
-    directors: [],
-    makers: [],
-    labels: [],
-  });
-  const [dateFrom, setDateFrom] = useState("");
-  const [dateTo, setDateTo] = useState("");
-  const [sort, setSort] = useState<SortKey | "">("");
+const FIELD_KEYS: FieldKey[] = [
+  "genres",
+  "actresses",
+  "series_list",
+  "directors",
+  "makers",
+  "labels",
+];
+
+export default function AdvancedSearchPanel({
+  isAuthed,
+  keyword,
+  initial,
+  onSubmit,
+  onCancel,
+}: Props) {
+  const [chips, setChips] = useState<Record<FieldKey, string[]>>(() => ({
+    genres: initial?.genres ?? [],
+    actresses: initial?.actresses ?? [],
+    series_list: initial?.series_list ?? [],
+    directors: initial?.directors ?? [],
+    makers: initial?.makers ?? [],
+    labels: initial?.labels ?? [],
+  }));
+  const [dateFrom, setDateFrom] = useState(initial?.date_from ?? "");
+  const [dateTo, setDateTo] = useState(initial?.date_to ?? "");
+  const [sort, setSort] = useState<SortKey | "">(initial?.sort ?? "");
 
   // NG ワード: サーバ保存 (ログイン時) は別 state、ローカルのみは ngLocal
   const [ngServer, setNgServer] = useState<string[]>([]);
   const [ngLocal, setNgLocal] = useState<string[]>([]);
+  const [ngEditing, setNgEditing] = useState(false);
   const [ngInput, setNgInput] = useState("");
   const [ngSaving, setNgSaving] = useState(false);
   const [ngSavedHint, setNgSavedHint] = useState(false);
@@ -148,13 +193,12 @@ export default function AdvancedSearchPanel({ isAuthed, onSubmit }: Props) {
 
   const handleSubmit = useCallback(() => {
     // 実検索に使う NG ワード:
-    //   ログイン時: ngServer 内容をクエリには乗せず、サーバ側 user_ng_words を自動適用
-    //              ただしユーザーが画面で編集した状態の方を使いたいので、未保存でも明示的に
-    //              クエリに ngServer を送る (= サーバの永続値より「いま画面に映っているもの」を優先)
-    //   未ログイン時: ngLocal を必ずクエリに乗せる (その検索だけ適用)
+    //   ログイン時: ngServer (画面上の最新状態) をクエリにも乗せる
+    //              ※ サーバの永続値より「いま画面に映っている」方を優先したいため明示送信
+    //   未ログイン時: ngLocal を必ずクエリに乗せる
     const ngWords = isAuthed ? ngServer : ngLocal;
     const input: AdvancedSearchInput = {
-      q: q.trim() || undefined,
+      q: keyword?.trim() || undefined,
       genres: chips.genres.length > 0 ? chips.genres : undefined,
       actresses: chips.actresses.length > 0 ? chips.actresses : undefined,
       series_list: chips.series_list.length > 0 ? chips.series_list : undefined,
@@ -168,11 +212,21 @@ export default function AdvancedSearchPanel({ isAuthed, onSubmit }: Props) {
     };
     const params = buildAdvancedSearchParams(input);
     const url = `/search?${params.toString()}`;
-    onSubmit(url);
-  }, [q, chips, dateFrom, dateTo, sort, ngServer, ngLocal, isAuthed, onSubmit]);
+    const payload: AdvancedSubmitPayload = {
+      genres: chips.genres,
+      actresses: chips.actresses,
+      series_list: chips.series_list,
+      directors: chips.directors,
+      makers: chips.makers,
+      labels: chips.labels,
+      date_from: dateFrom,
+      date_to: dateTo,
+      sort,
+    };
+    onSubmit(url, payload);
+  }, [keyword, chips, dateFrom, dateTo, sort, ngServer, ngLocal, isAuthed, onSubmit]);
 
   const resetAll = useCallback(() => {
-    setQ("");
     setChips({
       genres: [], actresses: [], series_list: [],
       directors: [], makers: [], labels: [],
@@ -186,28 +240,22 @@ export default function AdvancedSearchPanel({ isAuthed, onSubmit }: Props) {
 
   return (
     <div className="adv-panel" aria-label="詳細検索">
-      <div className="adv-row adv-row-keyword">
-        <label className="adv-label">キーワード</label>
-        <input
-          type="search"
-          className="adv-input"
-          value={q}
-          onChange={(e) => setQ(e.target.value)}
-          placeholder="タイトル / 説明 / その他"
-        />
+      {/* 並び替え (最上部) */}
+      <div className="adv-row adv-row-sort">
+        <label className="adv-label">並び替え</label>
+        <select
+          className="adv-input adv-select"
+          value={sort}
+          onChange={(e) => setSort(e.target.value as SortKey | "")}
+        >
+          <option value="">指定なし</option>
+          {SORT_OPTIONS.map((o) => (
+            <option key={o.value} value={o.value}>{o.label}</option>
+          ))}
+        </select>
       </div>
 
-      {(Object.keys(FIELD_LABELS) as FieldKey[]).map((key) => (
-        <FieldChipRow
-          key={key}
-          fieldKey={key}
-          label={FIELD_LABELS[key]}
-          values={chips[key]}
-          onAdd={(v) => addChip(key, v)}
-          onRemove={(v) => removeChip(key, v)}
-        />
-      ))}
-
+      {/* 配信日 (次に固定) */}
       <div className="adv-row adv-row-date">
         <label className="adv-label">配信日</label>
         <div className="adv-date-wrap">
@@ -229,20 +277,19 @@ export default function AdvancedSearchPanel({ isAuthed, onSubmit }: Props) {
         </div>
       </div>
 
-      <div className="adv-row adv-row-sort">
-        <label className="adv-label">並び替え</label>
-        <select
-          className="adv-input adv-select"
-          value={sort}
-          onChange={(e) => setSort(e.target.value as SortKey | "")}
-        >
-          <option value="">指定なし</option>
-          {SORT_OPTIONS.map((o) => (
-            <option key={o.value} value={o.value}>{o.label}</option>
-          ))}
-        </select>
-      </div>
+      {/* 各フィールド (チップ + 末尾の「＋」で入力欄が出るタイプ) */}
+      {FIELD_KEYS.map((key) => (
+        <FieldChipRow
+          key={key}
+          fieldKey={key}
+          label={FIELD_LABELS[key]}
+          values={chips[key]}
+          onAdd={(v) => addChip(key, v)}
+          onRemove={(v) => removeChip(key, v)}
+        />
+      ))}
 
+      {/* NG ワード */}
       <div className="adv-row adv-row-ng">
         <label className="adv-label">
           NG ワード
@@ -250,39 +297,54 @@ export default function AdvancedSearchPanel({ isAuthed, onSubmit }: Props) {
             {isAuthed ? "(アカウントに保存)" : "(この検索だけ・未ログイン)"}
           </span>
         </label>
-        <div className="adv-ng-input-wrap">
-          <input
-            type="text"
-            className="adv-input"
-            value={ngInput}
-            onChange={(e) => setNgInput(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter") { e.preventDefault(); addNg(); }
-            }}
-            placeholder="除外したいキーワード"
-          />
-          <button
-            type="button"
-            className="adv-chip-add-btn"
-            onClick={addNg}
-            disabled={!ngInput.trim()}
-          >追加</button>
+        <div className="adv-chips">
+          {ngList.map((w) => (
+            <span key={w} className="adv-chip adv-chip-ng">
+              {w}
+              <button
+                type="button"
+                className="adv-chip-x"
+                aria-label={`${w} を削除`}
+                onClick={() => removeNg(w)}
+              >×</button>
+            </span>
+          ))}
+          {!ngEditing ? (
+            <button
+              type="button"
+              className="adv-chip adv-chip-add"
+              onClick={() => setNgEditing(true)}
+              aria-label="NG ワードを追加"
+            >
+              <span className="adv-chip-add-plus" aria-hidden="true">＋</span>
+            </button>
+          ) : (
+            <span className="adv-chip adv-chip-edit">
+              <input
+                type="text"
+                autoFocus
+                className="adv-chip-input"
+                value={ngInput}
+                onChange={(e) => setNgInput(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") {
+                    e.preventDefault();
+                    addNg();
+                  } else if (e.key === "Escape") {
+                    setNgInput("");
+                    setNgEditing(false);
+                  }
+                }}
+                onBlur={() => {
+                  // blur で確定 (空なら閉じるだけ)
+                  if (ngInput.trim()) addNg();
+                  setTimeout(() => setNgEditing(false), 120);
+                }}
+                placeholder="除外したい語"
+              />
+            </span>
+          )}
         </div>
-        {ngList.length > 0 && (
-          <div className="adv-chips">
-            {ngList.map((w) => (
-              <span key={w} className="adv-chip adv-chip-ng">
-                {w}
-                <button
-                  type="button"
-                  className="adv-chip-x"
-                  aria-label={`${w} を削除`}
-                  onClick={() => removeNg(w)}
-                >×</button>
-              </span>
-            ))}
-          </div>
-        )}
         {isAuthed && (
           <div className="adv-ng-save-row">
             <button
@@ -302,8 +364,11 @@ export default function AdvancedSearchPanel({ isAuthed, onSubmit }: Props) {
         <button type="button" className="adv-reset-btn" onClick={resetAll}>
           条件をクリア
         </button>
+        <button type="button" className="adv-cancel-btn" onClick={onCancel}>
+          閉じる
+        </button>
         <button type="button" className="adv-submit-btn" onClick={handleSubmit}>
-          この条件で検索
+          適用
         </button>
       </div>
 
@@ -313,8 +378,8 @@ export default function AdvancedSearchPanel({ isAuthed, onSubmit }: Props) {
 }
 
 /**
- * 1 フィールド分の「入力 + サジェスト + チップ複数」UI。
- * フォーカス中で q が空でなければ /search/suggest を 250ms デバウンスで叩く。
+ * 1 フィールド分の「選択済みチップ列 + 末尾の＋ボタン」。
+ * 「＋」を押すとインラインに入力欄が展開され、サジェストから選択 or Enter で確定。
  */
 function FieldChipRow({
   fieldKey,
@@ -329,22 +394,22 @@ function FieldChipRow({
   onAdd: (v: string) => void;
   onRemove: (v: string) => void;
 }) {
+  const [editing, setEditing] = useState(false);
   const [text, setText] = useState("");
   const [suggestions, setSuggestions] = useState<string[]>([]);
-  const [focused, setFocused] = useState(false);
   const suggestField = useMemo(() => FIELD_TO_SUGGEST[fieldKey], [fieldKey]);
   const timerRef = useRef<number | null>(null);
   const reqIdRef = useRef(0);
+  const inputRef = useRef<HTMLInputElement | null>(null);
 
   useEffect(() => {
-    if (!focused) return;
+    if (!editing) return;
     const trimmed = text.trim();
     if (!trimmed) { setSuggestions([]); return; }
     if (timerRef.current) window.clearTimeout(timerRef.current);
     timerRef.current = window.setTimeout(() => {
       const myId = ++reqIdRef.current;
       suggestFieldValues(suggestField, trimmed, 8).then((items) => {
-        // レースで古いリクエストを捨てる
         if (myId !== reqIdRef.current) return;
         setSuggestions(items.filter((s) => !values.includes(s)));
       });
@@ -352,71 +417,91 @@ function FieldChipRow({
     return () => {
       if (timerRef.current) window.clearTimeout(timerRef.current);
     };
-  }, [text, focused, suggestField, values]);
+  }, [text, editing, suggestField, values]);
 
   const commit = (v: string) => {
     onAdd(v);
     setText("");
     setSuggestions([]);
+    // 続けて追加できるよう editing は維持。フォーカスも維持。
+    setTimeout(() => inputRef.current?.focus(), 0);
+  };
+
+  const finishEditing = () => {
+    if (text.trim()) {
+      onAdd(text);
+    }
+    setText("");
+    setSuggestions([]);
+    setEditing(false);
   };
 
   return (
     <div className="adv-row adv-row-field">
       <label className="adv-label">{label}</label>
-      <div className="adv-field-input-wrap">
-        <input
-          type="text"
-          className="adv-input"
-          value={text}
-          onChange={(e) => setText(e.target.value)}
-          onFocus={() => setFocused(true)}
-          onBlur={() => {
-            // suggestion クリックを潰さないように少し遅延
-            window.setTimeout(() => setFocused(false), 120);
-          }}
-          onKeyDown={(e) => {
-            if (e.key === "Enter") {
-              e.preventDefault();
-              commit(text);
-            }
-          }}
-          placeholder="入力して候補から選択 / Enter で追加"
-        />
-        <button
-          type="button"
-          className="adv-chip-add-btn"
-          onClick={() => commit(text)}
-          disabled={!text.trim()}
-        >追加</button>
-        {focused && suggestions.length > 0 && (
-          <div className="adv-suggest-list">
-            {suggestions.map((s) => (
-              <button
-                key={s}
-                type="button"
-                className="adv-suggest-item"
-                // onBlur より先にクリックを発火させたいので mousedown を使う
-                onMouseDown={(e) => { e.preventDefault(); commit(s); }}
-              >{s}</button>
-            ))}
-          </div>
+      <div className="adv-chips">
+        {values.map((v) => (
+          <span key={v} className="adv-chip">
+            {v}
+            <button
+              type="button"
+              className="adv-chip-x"
+              aria-label={`${v} を削除`}
+              onClick={() => onRemove(v)}
+            >×</button>
+          </span>
+        ))}
+        {!editing ? (
+          <button
+            type="button"
+            className="adv-chip adv-chip-add"
+            onClick={() => {
+              setEditing(true);
+              setTimeout(() => inputRef.current?.focus(), 0);
+            }}
+            aria-label={`${label} を追加`}
+          >
+            <span className="adv-chip-add-plus" aria-hidden="true">＋</span>
+          </button>
+        ) : (
+          <span className="adv-chip adv-chip-edit">
+            <input
+              ref={inputRef}
+              type="text"
+              className="adv-chip-input"
+              value={text}
+              onChange={(e) => setText(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") {
+                  e.preventDefault();
+                  if (text.trim()) commit(text);
+                } else if (e.key === "Escape") {
+                  setText("");
+                  setEditing(false);
+                }
+              }}
+              onBlur={() => {
+                // suggestion クリックを潰さないように少し遅延
+                setTimeout(() => finishEditing(), 140);
+              }}
+              placeholder={`${label}を入力`}
+            />
+            {suggestions.length > 0 && (
+              <div className="adv-suggest-list">
+                {suggestions.map((s) => (
+                  <button
+                    key={s}
+                    type="button"
+                    className="adv-suggest-item"
+                    // onBlur より先にクリックを発火させたいので mousedown を使う
+                    onMouseDown={(e) => { e.preventDefault(); commit(s); }}
+                  >{s}</button>
+                ))}
+              </div>
+            )}
+          </span>
         )}
       </div>
-      {values.length > 0 && (
-        <div className="adv-chips">
-          {values.map((v) => (
-            <span key={v} className="adv-chip">
-              {v}
-              <button
-                type="button"
-                className="adv-chip-x"
-                aria-label={`${v} を削除`}
-                onClick={() => onRemove(v)}
-              >×</button>
-            </span>
-          ))}
-        </div>
-      )}
     </div>
   );
 }
@@ -425,15 +510,15 @@ const css = `
   .adv-panel {
     display: flex;
     flex-direction: column;
-    gap: 12px;
-    padding: 12px 4px 4px;
+    gap: 14px;
+    padding: 16px;
     color: #fff;
     font-size: 13px;
   }
   .adv-row {
     display: flex;
     flex-direction: column;
-    gap: 6px;
+    gap: 8px;
   }
   .adv-label {
     font-size: 11px;
@@ -462,36 +547,90 @@ const css = `
     border-color: var(--accent, #e91e63);
     background: rgba(255,255,255,0.09);
   }
-  .adv-field-input-wrap {
-    position: relative;
+  .adv-chips {
     display: flex;
+    flex-wrap: wrap;
     gap: 6px;
+    align-items: center;
   }
-  .adv-field-input-wrap .adv-input { flex: 1; }
-  .adv-chip-add-btn {
-    background: rgba(255,255,255,0.1);
+  /* 選択済みチップ (ピンクの楕円) */
+  .adv-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    background: rgba(233, 30, 99, 0.18);
     color: #fff;
-    border: 1px solid rgba(255,255,255,0.18);
-    border-radius: 8px;
-    padding: 0 12px;
+    border: 1px solid rgba(233, 30, 99, 0.4);
+    border-radius: 999px;
+    padding: 4px 6px 4px 12px;
     font-size: 12px;
+    line-height: 1;
+    min-height: 28px;
+  }
+  .adv-chip-ng {
+    background: rgba(255,255,255,0.08);
+    border-color: rgba(255,255,255,0.2);
+  }
+  /* 「＋」追加ボタン (チップ風に揃える) */
+  .adv-chip-add {
+    background: transparent;
+    border: 1px dashed rgba(233, 30, 99, 0.55);
+    color: rgba(233, 30, 99, 1);
     cursor: pointer;
-    white-space: nowrap;
-    transition: background 0.15s ease, opacity 0.15s ease;
+    padding: 4px 14px;
+    transition: background 0.15s ease, border-color 0.15s ease;
   }
-  .adv-chip-add-btn:hover:not(:disabled) {
-    background: rgba(255,255,255,0.16);
+  .adv-chip-add:hover {
+    background: rgba(233, 30, 99, 0.12);
+    border-color: rgba(233, 30, 99, 0.9);
   }
-  .adv-chip-add-btn:disabled {
-    opacity: 0.4;
-    cursor: not-allowed;
+  .adv-chip-add-plus {
+    font-size: 14px;
+    font-weight: 700;
+    line-height: 1;
+  }
+  /* 入力モードのチップ (インライン入力欄を埋め込む) */
+  .adv-chip-edit {
+    position: relative;
+    padding: 2px 8px 2px 10px;
+    background: rgba(233, 30, 99, 0.12);
+    border-color: rgba(233, 30, 99, 0.6);
+  }
+  .adv-chip-input {
+    background: transparent;
+    border: none;
+    outline: none;
+    color: #fff;
+    font-size: 13px;
+    min-width: 120px;
+    width: 140px;
+    padding: 2px 0;
+  }
+  .adv-chip-input::placeholder {
+    color: rgba(255,255,255,0.4);
+  }
+  .adv-chip-x {
+    background: rgba(0,0,0,0.3);
+    color: #fff;
+    border: none;
+    border-radius: 50%;
+    width: 18px;
+    height: 18px;
+    line-height: 1;
+    font-size: 14px;
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .adv-chip-x:hover {
+    background: rgba(0,0,0,0.55);
   }
   .adv-suggest-list {
     position: absolute;
-    top: 100%;
+    top: calc(100% + 4px);
     left: 0;
-    right: 0;
-    margin-top: 4px;
+    min-width: 180px;
     background: #1a1a1a;
     border: 1px solid rgba(255,255,255,0.18);
     border-radius: 8px;
@@ -514,43 +653,6 @@ const css = `
   }
   .adv-suggest-item:hover {
     background: rgba(255,255,255,0.08);
-  }
-  .adv-chips {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 6px;
-  }
-  .adv-chip {
-    display: inline-flex;
-    align-items: center;
-    gap: 4px;
-    background: rgba(233, 30, 99, 0.18);
-    color: #fff;
-    border: 1px solid rgba(233, 30, 99, 0.4);
-    border-radius: 999px;
-    padding: 3px 6px 3px 10px;
-    font-size: 12px;
-  }
-  .adv-chip-ng {
-    background: rgba(255,255,255,0.08);
-    border-color: rgba(255,255,255,0.2);
-  }
-  .adv-chip-x {
-    background: rgba(0,0,0,0.3);
-    color: #fff;
-    border: none;
-    border-radius: 50%;
-    width: 18px;
-    height: 18px;
-    line-height: 1;
-    font-size: 14px;
-    cursor: pointer;
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-  }
-  .adv-chip-x:hover {
-    background: rgba(0,0,0,0.55);
   }
   .adv-date-wrap {
     display: flex;
@@ -575,16 +677,11 @@ const css = `
     background-repeat: no-repeat;
     padding-right: 28px;
   }
-  .adv-ng-input-wrap {
-    display: flex;
-    gap: 6px;
-  }
-  .adv-ng-input-wrap .adv-input { flex: 1; }
   .adv-ng-save-row {
     display: flex;
     align-items: center;
     gap: 10px;
-    margin-top: 2px;
+    margin-top: 4px;
   }
   .adv-ng-save-btn {
     background: rgba(255,255,255,0.1);
@@ -606,11 +703,12 @@ const css = `
   .adv-actions {
     display: flex;
     gap: 8px;
-    margin-top: 4px;
-    padding-top: 8px;
+    margin-top: 8px;
+    padding-top: 12px;
     border-top: 1px solid rgba(255,255,255,0.08);
   }
-  .adv-reset-btn {
+  .adv-reset-btn,
+  .adv-cancel-btn {
     background: transparent;
     color: rgba(255,255,255,0.7);
     border: 1px solid rgba(255,255,255,0.18);

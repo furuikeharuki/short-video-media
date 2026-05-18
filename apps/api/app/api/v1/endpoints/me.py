@@ -16,7 +16,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.security import require_user
 from app.db.models.movie import Movie
-from app.db.models.user import Bookmark, User, UserNgWord, ViewHistory
+from app.db.models.user import (
+    Bookmark,
+    User,
+    UserNgWord,
+    UserSearchPref,
+    ViewHistory,
+)
 from app.db.session import get_db
 from app.repositories.movie_repository import get_movies_by_ids
 from app.schemas.movie import MovieCard
@@ -280,3 +286,66 @@ async def replace_ng_words(
         )
     await db.commit()
     return NgWordsResponse(words=words)
+
+
+# ---------- 検索条件の自動保存 ----------
+
+
+class SearchPrefPayload(BaseModel):
+    """最後に適用した検索条件。全フィールド optional。
+
+    Web 側で URL クエリに復元する用途なので None を「未指定」として保持する。
+    GET レスポンスでも PUT リクエストでも同じ構造を使う。
+    """
+
+    q: str | None = None
+    genres: list[str] | None = None
+    actresses: list[str] | None = None
+    series_list: list[str] | None = None
+    directors: list[str] | None = None
+    makers: list[str] | None = None
+    labels: list[str] | None = None
+    date_from: str | None = None
+    date_to: str | None = None
+    sort: str | None = None
+
+
+@router.get("/search-prefs", response_model=SearchPrefPayload)
+async def get_search_pref(
+    user: Annotated[User, Depends(require_user)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+) -> SearchPrefPayload:
+    """検索条件を取得。未保存なら全フィールド None で返す。"""
+    result = await db.execute(
+        select(UserSearchPref.payload).where(UserSearchPref.user_id == user.id)
+    )
+    payload = result.scalar_one_or_none()
+    if payload is None:
+        return SearchPrefPayload()
+    # 保存時の余分なキーは Pydantic が落としてくれる
+    return SearchPrefPayload.model_validate(payload)
+
+
+@router.put("/search-prefs", response_model=SearchPrefPayload)
+async def put_search_pref(
+    body: SearchPrefPayload,
+    user: Annotated[User, Depends(require_user)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+) -> SearchPrefPayload:
+    """検索条件を全置換 (upsert)。
+
+    None も保持する (`exclude_none=False`) ことで、フロントは PUT したのと
+    同じ shape を GET で取り戻せる。
+    """
+    payload = body.model_dump(exclude_none=False)
+    stmt = (
+        pg_insert(UserSearchPref)
+        .values(user_id=user.id, payload=payload)
+        .on_conflict_do_update(
+            index_elements=["user_id"],
+            set_={"payload": payload, "updated_at": _utcnow_naive()},
+        )
+    )
+    await db.execute(stmt)
+    await db.commit()
+    return body

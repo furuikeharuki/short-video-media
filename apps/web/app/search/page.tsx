@@ -1,4 +1,5 @@
 import SearchInfiniteGrid from "./SearchInfiniteGrid";
+import SearchResultsHeader from "@/components/SearchResultsHeader";
 import type { AdvancedSearchInput, SortKey } from "@/lib/api/search";
 
 type Props = {
@@ -31,8 +32,8 @@ type Props = {
  * - director / maker / label / series: 各メタデータの完全一致
  * - 詳細検索: genres / actresses / series_list / directors / makers / labels / date_from / date_to / sort / ng_words
  *
- * いずれの条件でも `SearchInfiniteGrid` がクライアント側で 20件前後ずつ
- * ページング読み込みする (IntersectionObserver で無限スクロール)。
+ * 修正5 以降は画面上部に `SearchResultsHeader` (戻る + ラベル + フィルター)
+ * を常時表示し、詳細検索パネル開閉と適用条件の自動保存をここから行う。
  */
 export default async function SearchPage({ searchParams }: Props) {
   const sp = await searchParams;
@@ -100,31 +101,15 @@ export default async function SearchPage({ searchParams }: Props) {
       date_to: dateTo || undefined,
       sort,
     };
-    // ラベル生成: 主要な条件を上から拾って 1 行に並べる
-    const labelParts: string[] = [];
-    if (query) labelParts.push(`「${query}」`);
-    if (genres.length) labelParts.push(`#${genres.join(" #")}`);
-    if (actresses.length) labelParts.push(actresses.join(", "));
-    if (seriesList.length) labelParts.push(`シリーズ: ${seriesList.join(", ")}`);
-    if (directors.length) labelParts.push(`監督: ${directors.join(", ")}`);
-    if (makers.length) labelParts.push(`メーカー: ${makers.join(", ")}`);
-    if (labels.length) labelParts.push(`レーベル: ${labels.join(", ")}`);
-    if (dateFrom || dateTo) {
-      labelParts.push(`配信日: ${dateFrom || "…"} 〜 ${dateTo || "…"}`);
-    }
-    if (sort) {
-      const sortLabel: Record<SortKey, string> = {
-        new: "新着順",
-        popular: "人気順",
-        rating: "評価順",
-        views: "視聴回数順",
-        bookmarks: "ブックマーク数順",
-      };
-      labelParts.push(sortLabel[sort]);
-    }
-    const heading = labelParts.length > 0
-      ? `詳細検索: ${labelParts.join(" / ")}`
-      : "詳細検索";
+    // サブヘッダーラベル: 主要な条件を上から拾って 1 個だけ採用する。
+    let headerLabel = "詳細検索";
+    if (query) headerLabel = `「${query}」`;
+    else if (genres.length) headerLabel = `#${genres[0]}`;
+    else if (actresses.length) headerLabel = actresses.join(", ");
+    else if (seriesList.length) headerLabel = `シリーズ: ${seriesList[0]}`;
+    else if (directors.length) headerLabel = `監督: ${directors[0]}`;
+    else if (makers.length) headerLabel = `メーカー: ${makers[0]}`;
+    else if (labels.length) headerLabel = `レーベル: ${labels[0]}`;
     // playlistKey は input から導出 (string 化で安定するキーを作る)
     const playlistKey = `search-adv-${JSON.stringify({
       q: input.q,
@@ -143,7 +128,8 @@ export default async function SearchPage({ searchParams }: Props) {
         source={{ kind: "advanced", input }}
         playlistKey={playlistKey}
         playlistTitle="詳細検索"
-        headingPrefix={heading}
+        headingPrefix={headerLabel}
+        headerSlot={<SearchResultsHeader label={headerLabel} keyword={query} />}
       />
     );
   }
@@ -158,23 +144,27 @@ export default async function SearchPage({ searchParams }: Props) {
     else if (labelName) { field = "label"; value = labelName; prefix = "レーベル"; }
     else { field = "series"; value = seriesName; prefix = "シリーズ"; }
 
+    const headerLabel = `${prefix}「${value}」`;
     return (
       <SearchInfiniteGrid
         source={{ kind: "exact", field, value }}
         playlistKey={`search-${field}-${value}`}
         playlistTitle={`${prefix}「${value}」`}
         headingPrefix={`${prefix}「${value}」の作品`}
+        headerSlot={<SearchResultsHeader label={headerLabel} keyword="" />}
       />
     );
   }
 
   if (genreTag) {
+    const headerLabel = `#${genreTag}`;
     return (
       <SearchInfiniteGrid
         source={{ kind: "genre", genre: genreTag }}
         playlistKey={`search-genre-${genreTag}`}
         playlistTitle={`#${genreTag}`}
         headingPrefix={`#${genreTag} の動画`}
+        headerSlot={<SearchResultsHeader label={headerLabel} keyword="" />}
       />
     );
   }
@@ -182,18 +172,21 @@ export default async function SearchPage({ searchParams }: Props) {
   if (!query) {
     return (
       <main style={styles.main}>
+        <SearchResultsHeader label="検索" keyword="" />
         <p style={styles.empty}>検索ワードを入力してください</p>
         <style>{pageCSS}</style>
       </main>
     );
   }
 
+  const headerLabel = `「${query}」`;
   return (
     <SearchInfiniteGrid
       source={{ kind: "keyword", query }}
       playlistKey={`search-q-${query}`}
       playlistTitle={`「${query}」の検索結果`}
       headingPrefix={`"${query}" の検索結果`}
+      headerSlot={<SearchResultsHeader label={headerLabel} keyword={query} />}
     />
   );
 }

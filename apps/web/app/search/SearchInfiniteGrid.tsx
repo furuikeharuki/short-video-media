@@ -32,8 +32,15 @@ type Props = {
   playlistKey: string;
   /** プレイリストの UI 表示用タイトル。 */
   playlistTitle: string;
-  /** 検索条件のラベル (例: 「監督「苺原」の作品」「#プロ女優 の動画」)。 */
+  /** 検索条件のラベル (例: 「監督「苺原」の作品」「#プロ女優 の動画」)。
+   *  headerSlot が指定されている場合は古い グレーベル表記 (.search-meta) を出さず、
+   *  headerSlot 側でタイトル表示を担保するシグネチャとして使う。 */
   headingPrefix: string;
+  /**
+   * 一覧の上部に表示する任意のスロット (修正5: 「戻る + キーワード + フィルター」サブヘッダー)。
+   * 採用されると .search-meta の見出し表記は出さない。
+   */
+  headerSlot?: React.ReactNode;
 };
 
 /** 画面幅に応じた列数 (search-grid の CSS と一致)。 */
@@ -103,6 +110,7 @@ export default function SearchInfiniteGrid({
   playlistKey,
   playlistTitle,
   headingPrefix,
+  headerSlot,
 }: Props) {
   const [items, setItems] = useState<MovieCard[]>([]);
   const [nextOffset, setNextOffset] = useState<number | null>(0);
@@ -187,7 +195,7 @@ export default function SearchInfiniteGrid({
   if (isInitialLoading) {
     return (
       <main className="search-main">
-        <p className="search-meta">{headingPrefix}</p>
+        {headerSlot ?? <p className="search-meta">{headingPrefix}</p>}
         <div className="search-initial-loading" role="status" aria-live="polite">
           <span className="search-spinner" aria-hidden="true" />
           <span className="search-load-label">読み込み中…</span>
@@ -200,7 +208,7 @@ export default function SearchInfiniteGrid({
   if (items.length === 0) {
     return (
       <main className="search-main">
-        <p className="search-meta">{headingPrefix}</p>
+        {headerSlot ?? <p className="search-meta">{headingPrefix}</p>}
         <p className="search-empty">該当する作品が見つかりませんでした</p>
         <style>{pageCSS}</style>
       </main>
@@ -209,7 +217,7 @@ export default function SearchInfiniteGrid({
 
   return (
     <main className="search-main">
-      <p className="search-meta">{headingPrefix}</p>
+      {headerSlot ?? <p className="search-meta">{headingPrefix}</p>}
       <div className="search-grid">
         {items.map((item, index) => (
           <MovieCardThumb

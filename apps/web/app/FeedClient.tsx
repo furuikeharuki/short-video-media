@@ -130,6 +130,7 @@ function readFilters(sp: URLSearchParams): {
     ng_words: arr("ng_words"),
     date_from: (sp.get("date_from") ?? "").trim() || undefined,
     date_to: (sp.get("date_to") ?? "").trim() || undefined,
+    sort: (sp.get("sort") ?? "").trim() || undefined,
   };
   const hasAny =
     genres.length > 0 ||
@@ -141,7 +142,8 @@ function readFilters(sp: URLSearchParams): {
     (advanced.labels?.length ?? 0) > 0 ||
     (advanced.ng_words?.length ?? 0) > 0 ||
     !!advanced.date_from ||
-    !!advanced.date_to;
+    !!advanced.date_to ||
+    !!advanced.sort;
   return { genres, advanced, hasAny };
 }
 
@@ -158,6 +160,7 @@ function filterSignature(genres: string[], advanced: FeedAdvancedParams): string
     n: [...(advanced.ng_words ?? [])].sort(),
     df: advanced.date_from ?? "",
     dt: advanced.date_to ?? "",
+    s: advanced.sort ?? "",
   };
   return JSON.stringify(norm);
 }
@@ -406,7 +409,8 @@ export default function FeedClient() {
       (advanced.labels?.length ?? 0) > 0 ||
       (advanced.ng_words?.length ?? 0) > 0 ||
       !!advanced.date_from ||
-      !!advanced.date_to;
+      !!advanced.date_to ||
+      !!advanced.sort;
     isFetchingMoreRef.current = true;
     try {
       let resItems: MovieCard[];

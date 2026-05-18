@@ -369,11 +369,15 @@ async def get_advanced_movie_ids(
     date_from: date | None = None,
     date_to: date | None = None,
     ng_words: list[str] | None = None,
+    sort: SortKey | None = None,
 ) -> list[str]:
     """詳細検索条件にマッチする movie_id を全件列挙して返す。
 
-    フィード (ショート動画) の shuffle 源として使う。ソート順は shuffle されるため
-    ステートメントのソート・スタビリティ以外は不要なので id ASC だけ使う。
+    フィード (ショート動画) の順番決めのソースとして使う。
+
+    sort が None (未指定) のときは呼び出し側で shuffle される前提で id ASC だけを使う。
+    sort が指定されたときは advanced_search_movies と同じ ORDER BY で並べた ID を返すと、
+    呼び出し側で shuffle せずにその順番でフィードを作れる。
     """
     conditions = _build_advanced_conditions(
         q=q,
@@ -387,11 +391,71 @@ async def get_advanced_movie_ids(
         date_to=date_to,
         ng_words=ng_words or [],
     )
-    stmt = (
-        select(Movie.id)
-        .where(*conditions)
-        .order_by(Movie.id.asc())
-    )
+
+    if sort is None:
+        stmt = (
+            select(Movie.id)
+            .where(*conditions)
+            .order_by(Movie.id.asc())
+        )
+        result = await db.execute(stmt)
+        return [str(r[0]) for r in result.all()]
+
+    # sort 指定あり: advanced_search_movies と同じ ORDER BY ロジックを id 取得にも適用
+    stmt = select(Movie.id).where(*conditions)
+
+    if sort == "new":
+        stmt = stmt.order_by(
+            Movie.primary_date.desc().nullslast(), Movie.id.asc()
+        )
+    elif sort == "popular":
+        stmt = stmt.order_by(
+            Movie.review_count.desc().nullslast(),
+            Movie.primary_date.desc().nullslast(),
+            Movie.id.asc(),
+        )
+    elif sort == "rating":
+        stmt = stmt.order_by(
+            Movie.review_average.desc().nullslast(),
+            Movie.review_count.desc().nullslast(),
+            Movie.id.asc(),
+        )
+    elif sort == "views":
+        views_sub = (
+            select(
+                Event.slug.label("slug"),
+                func.count(Event.id).label("view_count"),
+            )
+            .where(Event.event_type == "view")
+            .group_by(Event.slug)
+            .subquery()
+        )
+        stmt = stmt.outerjoin(views_sub, views_sub.c.slug == Movie.slug).order_by(
+            func.coalesce(views_sub.c.view_count, 0).desc(),
+            Movie.primary_date.desc().nullslast(),
+            Movie.id.asc(),
+        )
+    elif sort == "bookmarks":
+        bookmarks_sub = (
+            select(
+                Bookmark.movie_id.label("movie_id"),
+                func.count().label("bm_count"),
+            )
+            .group_by(Bookmark.movie_id)
+            .subquery()
+        )
+        stmt = stmt.outerjoin(
+            bookmarks_sub, bookmarks_sub.c.movie_id == Movie.id
+        ).order_by(
+            func.coalesce(bookmarks_sub.c.bm_count, 0).desc(),
+            Movie.primary_date.desc().nullslast(),
+            Movie.id.asc(),
+        )
+    else:
+        stmt = stmt.order_by(
+            Movie.primary_date.desc().nullslast(), Movie.id.asc()
+        )
+
     result = await db.execute(stmt)
     return [str(r[0]) for r in result.all()]
 

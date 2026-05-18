@@ -2,6 +2,7 @@ import hashlib
 import json
 import random
 from datetime import date
+from typing import Literal
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -14,6 +15,9 @@ from app.repositories.movie_repository import (
 from app.repositories.search_repository import get_advanced_movie_ids
 from app.schemas.feed import FeedResponse
 from app.schemas.movie import MovieCard, PriceList
+
+
+SortKey = Literal["new", "popular", "rating", "views", "bookmarks"]
 
 SHUFFLE_CACHE_TTL = 3600
 MOVIES_CACHE_TTL  = 1800
@@ -97,8 +101,13 @@ async def _get_advanced_shuffled_ids(
     ng_words: list[str],
     date_from: date | None,
     date_to: date | None,
+    sort: SortKey | None = None,
 ) -> list[str]:
-    """詳細検索条件にマッチする movie_id を shuffle して返す (redis にキャッシュ)。"""
+    """詳細検索条件にマッチする movie_id を返す (redis キャッシュ)。
+
+    sort 未指定: 从来通り seed で shuffle して返す。
+    sort 指定あり: shuffle せず、指定されたソート順 (検索結果と同じ ORDER BY)で返す。
+    """
     adv_dict = {
         "q": q or "",
         "genres": sorted(genres),
@@ -110,6 +119,7 @@ async def _get_advanced_shuffled_ids(
         "ng_words": sorted(ng_words),
         "date_from": date_from.isoformat() if date_from else "",
         "date_to": date_to.isoformat() if date_to else "",
+        "sort": sort or "",
     }
     redis = get_redis()
     key = _adv_cache_key(seed, adv_dict)
@@ -131,9 +141,13 @@ async def _get_advanced_shuffled_ids(
         ng_words=ng_words or None,
         date_from=date_from,
         date_to=date_to,
+        sort=sort,
     )
-    rng = random.Random(seed)
-    rng.shuffle(ids)
+    # sort 指定があるときは DB 側の ORDER BY をそのまま使う (= shuffle しない)。
+    # 未指定のときだけ 従来通り seed で shuffle したランダム順フィードにする。
+    if sort is None:
+        rng = random.Random(seed)
+        rng.shuffle(ids)
 
     if redis is not None:
         await redis.set(key, json.dumps(ids), ex=SHUFFLE_CACHE_TTL)
@@ -220,6 +234,7 @@ async def get_feed_paginated(
     ng_words: list[str] | None = None,
     date_from: date | None = None,
     date_to: date | None = None,
+    sort: SortKey | None = None,
 ) -> FeedResponse:
     genres_norm = genres or []
     actresses_norm = actresses or []
@@ -240,6 +255,10 @@ async def get_feed_paginated(
         date_from=date_from,
         date_to=date_to,
     )
+    # sort が指定されたときも advanced 経路に乗せる (ORDER BY を DB 側で適用したいため)。
+    # genres ジャンルだけ指定 + sort 指定のケースも advanced 経路に完全一致 AND で乗せればいい。
+    if sort is not None:
+        advanced = True
 
     # advanced 経路: 必ず seed (= shuffle) が必要。seed 無しなら 0 で固定し、安定した順序にする。
     if advanced:
@@ -258,6 +277,7 @@ async def get_feed_paginated(
             ng_words=ng_words_norm,
             date_from=date_from,
             date_to=date_to,
+            sort=sort,
         )
         total = len(shuffled_ids)
         page_ids = shuffled_ids[offset: offset + limit]

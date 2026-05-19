@@ -24,10 +24,6 @@ type Props = {
   resetOnMount?: boolean;
 };
 
-/**
- * sessionStorage に広告の「入り済み」状態を保存/読み込みするキー。
- * context を含めることで、同一ゾーンをページとモーダルで使い分けても衝突しない。
- */
 function makeStorageKey(zone: AdZoneKey, context: string) {
   return `ad_slot_filled_${zone}_${context}`;
 }
@@ -46,55 +42,6 @@ function writeWasFilled(zone: AdZoneKey, context: string): void {
   } catch { /* ignore */ }
 }
 
-/**
- * ExoClick 広告枠を 1 つ描画するクライアントコンポーネント。
- *
- * 公式タグ:
- *   <ins class="..." data-zoneid="..."></ins>
- *   <script>(AdProvider=window.AdProvider||[]).push({serve:{}})</script>
- *
- * 設計ポイント:
- *
- * 1. <ins> は内側の <AdIns> に key を当てて分離する。
- *    再生成 (key bump) すると React は <ins> の DOM を作り直すため、
- *    ad-provider.js は「新しい未処理 <ins>」として再 serve できる。
- *
- * 2. **viewport に入ってから serve する**。
- *    オフスクリーンの枠を即 serve すると、ExoClick は viewport 外の枠を
- *    no-fill 扱いにしやすく、結果として「ホームをスクロールしているうちに
- *    広告がだんだん消える」症状を引き起こす。IntersectionObserver で
- *    最初に画面内に入ったタイミングを待ってから初回 serve する。
- *
- * 3. **空のまま終わった枠も DOM 上は残し、display:none で完全に消さない**。
- *    一度畳むと戻れなくなり「何回か表示しているうちに消える」症状になる。
- *    no-fill 判定後は枠を最小高さで保持し、次に viewport に再進入したり
- *    タブが復帰した時に key を bump してもう一度 serve を試す。
- *
- * 4. **複数枠が同居するページで provider を巻き添えで殺さない**。
- *    ad-provider.js のリセットは「ホーム復帰直後の最初の 1 回」のみ。
- *    クールダウンを AdScriptLoader 側に持たせ、複数 AdSlot から同時に
- *    要求が来ても 1 回しか効かないようにしてある。
- *
- * 5. ナビゲーション復帰 (popstate / pageshow / visibilitychange) を検知して、
- *    creative が入っていない (またはそもそも今までフィルされなかった) 枠を
- *    key bump で作り直し、合わせて provider を 1 度だけリセット要求する。
- *
- * 6. **広告表示済み状態を sessionStorage で永続化**。
- *    Next.js App Router でホーム (force-dynamic Server Component) に戻ると
- *    コンポーネント自体がアンマウント→再マウントされ、React state がリセット
- *    されてしまう。sessionStorage で復元することで「前回既表示」を記憶する。
- *
- * 7. **context prop でゾーン×コンテキストごとにキーを分離**。
- *    同一ゾーン (native 等) を詳細ページとモーダルで同時に使う場合、
- *    sessionStorage キーが衝突して状態が混在する。context="modal" / "page" で
- *    それぞれ独立したキーを持つ。
- *
- * 8. **resetOnMount=true でモーダル open 時に provider をリセット**。
- *    Parallel Routes のモーダルは背後のページ DOM が生きたまま <ins> が追加される。
- *    ad-provider.js の初期スキャンは既に終わっているため、新しい <ins> を
- *    取りこぼすことがある。resetOnMount=true を渡すことで mount 時に
- *    resetAndServeAd を 1 度だけ呼び、未処理 <ins> を拾い直す。
- */
 export default function AdSlot({
   zone,
   className,
@@ -117,29 +64,76 @@ export default function AdSlot({
 
   const enabled = cfg.enabled;
 
-  // --- 復帰処理: クライアント初回レンダリング時に sessionStorage から状態を復元 ---
+  /**
+   * クライアント初回レンダリング時の初期化。
+   *
+   * ポイント: sessionStorage に "1" がある = 「かつてこのセッション内で広告が入った」
+   * という事実だけを意味する。これを hasContent=true に映するのはあくまで「予約高さを持つコンテナを
+   * CLS させずに維持する」ため。実際に creative が入っているかは別問題。
+   *
+   * この mount 時に <ins> は必ず空 (DOM 初期化直後) なので、
+   * resetAndServeAd を呼んで provider に再スキャンさせる必要がある。
+   * ただし複数 AdSlot が並行する場合は reset を 1 回に抑えたいため、
+   * 別の useEffect (下記) で処理し、LayoutEffect は高さの復元のみ担う。
+   */
   useLayoutEffect(() => {
     if (!enabled) return;
     const wasFilled = readWasFilled(zone, context);
     if (wasFilled) {
-      hasContentRef.current = true;
+      // hasContent=true にはするが、hasContentRef は false のままにする。
+      // → requestBump が「前回入ったけど今回はまだ空」を正しく検知できる。
       setHasContent(true);
+      // hasContentRef.current は false のまま: viewport 進入時に bump させる
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [zone, context, enabled]);
 
-  // --- resetOnMount: モーダル等で mount 直後に provider をリセット ---
-  // IntersectionObserver が viewport 進入を検知する前でも、
-  // provider を再スキャンさせることで新 <ins> を確実に拾わせる。
+  /**
+   * mount 直後に creative の実在を確認し、入っていなければ resetAndServeAd を呼ぶ。
+   *
+   * 「wasFilled が記録されている = creative が必ず入っている」わけではない。
+   * ナビゲーション復帰の場合、Next.js App Router は force-dynamic ページを再レンダリングし、
+   * AdSlot がアンマウント→再マウントされる。<ins> は常に空の DOM から始まる。
+   * このタイミングで provider をリセットしないと、ExoClick は新しい <ins> を拾いたくれない。
+   *
+   * 個別の 「reset」 と 「resetOnMount」 の違い:
+   *   - resetOnMount: モーダル用。常に mount 時に reset。
+   *   - ここのロジック: 通常ページ用。wasFilled かつ creative が空のときにのみ reset。
+   */
   useEffect(() => {
     if (!enabled) return;
-    if (!resetOnMount) return;
-    // 少しだけ遅延して <ins> が DOM に描画されてから呼ぶ
+
+    if (resetOnMount) {
+      // モーダル: mount 時に必ず reset
+      const t = window.setTimeout(() => {
+        resetAndServeAd(cfg.provider);
+      }, 100);
+      return () => window.clearTimeout(t);
+    }
+
+    // 通常ページ: wasFilled が記録されている場合は、creative が本当に入っているか確認する。
+    // 确認方法: 少し待ってから <ins> 内に creative DOM があるかをチェック。
+    // あれば hasContentRef=true にして bump を抑制、なければ resetAndServeAd で拾い直す。
+    const wasFilled = readWasFilled(zone, context);
+    if (!wasFilled) return;
+
     const t = window.setTimeout(() => {
-      resetAndServeAd(cfg.provider);
-    }, 100);
+      // <ins> の子要素を確認 (IntersectionObserver が発火する前の時間帯)
+      const insEl = document.querySelector(
+        `.ad-slot-${zone} ins[data-zoneid]`
+      );
+      const hasCreative = !!insEl?.querySelector(
+        "iframe, img, video, a, picture, canvas"
+      );
+      if (hasCreative) {
+        // creative あり: hasContentRef=true にして bump を抑制
+        hasContentRef.current = true;
+      } else {
+        // creative なし: provider をリセットして拾い直す
+        resetAndServeAd(cfg.provider);
+      }
+    }, 300);
     return () => window.clearTimeout(t);
-  // mount 時のみ。enabled/resetOnMount が変わることは想定しない。
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 

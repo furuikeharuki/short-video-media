@@ -35,10 +35,18 @@ const css = `
     align-items: center;
     justify-content: center;
   }
+  /* モバイル: 画面幅を最大限活用する。
+     左右の余白を最小限に留めて広告を大きく見せる。 */
   .feed-ad-slide .ad-slot {
     width: 100% !important;
-    max-width: 480px;
-    padding: 0 16px;
+    max-width: 100%;
+    padding: 0 8px;
     box-sizing: border-box;
+  }
+  @media (min-width: 768px) {
+    .feed-ad-slide .ad-slot {
+      max-width: 480px;
+      padding: 0 16px;
+    }
   }
 `;

@@ -135,10 +135,10 @@ export default function AdSlot({
       {label && hasContent && (
         <span
           style={{
-            fontSize: 10,
-            color: "rgba(255,255,255,0.35)",
+            fontSize: 12,           /* 10px → 12px に大きく */
+            color: "rgba(255,255,255,0.45)",
             letterSpacing: "0.08em",
-            marginBottom: 4,
+            marginBottom: 6,
             alignSelf: "center",
           }}
         >
@@ -265,9 +265,6 @@ function AdIns({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // <ins> は CSS幅 100% のみ指定。
-  // data-width は渡さない— ExoClick native は自身でコンテナ幅に内側でフィットする。
-  // バナーなど reservedWidth があるゾーンは固定幅をそのまま渡す。
   const widthVal = cfg.reservedWidth != null ? `${cfg.reservedWidth}px` : "100%";
 
   const insStyle: React.CSSProperties = {

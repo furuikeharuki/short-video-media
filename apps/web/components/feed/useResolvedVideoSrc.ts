@@ -13,7 +13,10 @@ import { invalidateSampleUrl, resolveMp4Url } from "@/lib/api/resolve-mp4";
  *   2. なければ resolve-mp4 を呼んで取得する。
  *   3. <video> が onError を発火したら force=true で resolve-mp4 を呼び直す。
  *      DMM のトークンが期限切れになった場合のリトライ。
- *      1 回失敗したら諦めてサムネに落とす (videoSrc=null)。
+ *   4. force リトライは指数バックオフで最大 MAX_FORCE_RETRIES 回まで試す。
+ *   5. それでも失敗したら exhausted (サムネ表示)。
+ *   6. ただし、その後そのカードが再び可視になったとき (enabled=false→true) は
+ *      リトライカウンタをリセットして再挑戦する。
  *
  * 状態:
  *   - videoSrc: <video src> に渡す URL (null ならサムネ表示)
@@ -47,6 +50,12 @@ interface Result {
   handleError: () => void;
 }
 
+// 1 カードあたり force リトライを何回まで試すか。
+// exhausted 状態を極力減らすため、複数回試行する。
+const MAX_FORCE_RETRIES = 3;
+// force リトライ間の待ち時間 (指数バックオフ)。500ms → 1000ms → 2000ms。
+const FORCE_RETRY_BACKOFF_MS = [500, 1000, 2000];
+
 export function useResolvedVideoSrc({
   slug,
   cachedSrc,
@@ -59,26 +68,37 @@ export function useResolvedVideoSrc({
       : { phase: "resolving", src: null },
   );
 
-  // 1 つのカードにつき force リトライは 1 回まで。
-  const forceRetriedRef = useRef(false);
+  // 1 つのカードにつき force リトライをこれまで何回試したか。
+  // 上限 (MAX_FORCE_RETRIES) を超えたら exhausted に落とす。
+  const forceRetryCountRef = useRef(0);
   // 同じカードに対して同時に API を叩かない。
   const inFlightRef = useRef<AbortController | null>(null);
+  // バックオフのタイマー ID (中断用)。
+  const backoffTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // 直前の enabled 値 (false→true への遷移を検出するため)。
+  const prevEnabledRef = useRef(enabled);
 
-  // isActive=true になった or cachedSrc が空のときに resolve を起動する。
-  // cachedSrc が変わったら状態をリセット (slug 変化時もここで拾える)。
+  const clearBackoff = useCallback(() => {
+    if (backoffTimerRef.current != null) {
+      clearTimeout(backoffTimerRef.current);
+      backoffTimerRef.current = null;
+    }
+  }, []);
+
+  // slug / cachedSrc が変わったらリセット。
   useEffect(() => {
-    // slug / cachedSrc が変わったので試行回数をリセット
-    forceRetriedRef.current = false;
+    forceRetryCountRef.current = 0;
     if (inFlightRef.current) {
       inFlightRef.current.abort();
       inFlightRef.current = null;
     }
+    clearBackoff();
     if (cachedSrc) {
       setState({ phase: "initial", src: cachedSrc });
     } else {
       setState({ phase: "resolving", src: null });
     }
-  }, [slug, cachedSrc]);
+  }, [slug, cachedSrc, clearBackoff]);
 
   // cachedSrc が無い & enabled のときだけ初回 resolve を発火。
   // 表示中でない (enabled=false) スライドまで API を叩くと無駄なので避ける。
@@ -113,26 +133,9 @@ export function useResolvedVideoSrc({
     };
   }, [enabled, cachedSrc, slug, state.phase]);
 
-  // <video> がエラーになったときのリトライ。
-  // 1 回だけ force=true で resolve を呼び直し、それでもダメならサムネに落とす。
-  //
-  // 加えて、キャッシュされた sample_movie_url を DB から NULL に戻すよう API に
-  // 依頼する (fire-and-forget)。古い _mhb_w.mp4 パターンの URL が DB に残っている
-  // ために ORB / 404 で毎回 force resolve が走る状態を「自然治癒」させるため。
-  const handleError = useCallback(() => {
-    // 失敗した URL が DB キャッシュ由来のもの (optimistic 表示中) なら、
-    // その URL を DB から掃除しておく。resolver 経由で取った URL が失敗した
-    // ケース (state.phase === "ready" で src が FRESH) も「その URL は使えない」
-    // というシグナルとして同じく叩いておく。サーバー側では rate limiter 未設定だが
-    // 重複呼び出しは安全 (次回アクセスで resolver が再取得するだけ)。
-    void invalidateSampleUrl(slug);
-
-    if (forceRetriedRef.current) {
-      setState({ phase: "exhausted", src: null });
-      return;
-    }
-    forceRetriedRef.current = true;
-
+  // 単発の force resolve を発火するヘルパー。
+  // resolveMp4Url を呼び、成功なら ready / 失敗なら次のリトライ or exhausted。
+  const runForceResolve = useCallback(() => {
     if (inFlightRef.current) {
       inFlightRef.current.abort();
     }
@@ -145,6 +148,40 @@ export function useResolvedVideoSrc({
         if (controller.signal.aborted) return;
         if (res?.mp4_url) {
           setState({ phase: "ready", src: res.mp4_url });
+          return;
+        }
+        // null 応答だった: 次のリトライを試すかどうか
+        if (forceRetryCountRef.current < MAX_FORCE_RETRIES) {
+          const backoffIdx = Math.min(
+            forceRetryCountRef.current - 1,
+            FORCE_RETRY_BACKOFF_MS.length - 1,
+          );
+          const wait = FORCE_RETRY_BACKOFF_MS[Math.max(0, backoffIdx)];
+          clearBackoff();
+          backoffTimerRef.current = setTimeout(() => {
+            backoffTimerRef.current = null;
+            forceRetryCountRef.current += 1;
+            runForceResolve();
+          }, wait);
+        } else {
+          setState({ phase: "exhausted", src: null });
+        }
+      })
+      .catch(() => {
+        if (controller.signal.aborted) return;
+        // ネットワークエラー等も同様にリトライ扱い
+        if (forceRetryCountRef.current < MAX_FORCE_RETRIES) {
+          const backoffIdx = Math.min(
+            forceRetryCountRef.current - 1,
+            FORCE_RETRY_BACKOFF_MS.length - 1,
+          );
+          const wait = FORCE_RETRY_BACKOFF_MS[Math.max(0, backoffIdx)];
+          clearBackoff();
+          backoffTimerRef.current = setTimeout(() => {
+            backoffTimerRef.current = null;
+            forceRetryCountRef.current += 1;
+            runForceResolve();
+          }, wait);
         } else {
           setState({ phase: "exhausted", src: null });
         }
@@ -154,14 +191,50 @@ export function useResolvedVideoSrc({
           inFlightRef.current = null;
         }
       });
-  }, [slug]);
+  }, [slug, clearBackoff]);
 
-  // アンマウント時に飛んでいるリクエストをキャンセル。
+  // <video> がエラーになったときのリトライ。
+  // force リトライを最大 MAX_FORCE_RETRIES 回まで指数バックオフで試す。
+  // それでもダメならサムネに落とす。
+  //
+  // 加えて、キャッシュされた sample_movie_url を DB から NULL に戻すよう API に
+  // 依頼する (fire-and-forget)。古い _mhb_w.mp4 パターンの URL が DB に残っている
+  // ために ORB / 404 で毎回 force resolve が走る状態を「自然治癒」させるため。
+  const handleError = useCallback(() => {
+    void invalidateSampleUrl(slug);
+
+    if (forceRetryCountRef.current >= MAX_FORCE_RETRIES) {
+      setState({ phase: "exhausted", src: null });
+      return;
+    }
+    forceRetryCountRef.current += 1;
+    runForceResolve();
+  }, [slug, runForceResolve]);
+
+  // enabled が false → true に切り替わったときの自動再試行。
+  // スワイプで一度離れたカードに戻ってきたケースで、exhausted 状態のままなら
+  // もう一度だけ force を試して復帰を狙う (トークン期限切れなどがタイミング依存のため)。
+  useEffect(() => {
+    const becameEnabled = !prevEnabledRef.current && enabled;
+    prevEnabledRef.current = enabled;
+    if (!becameEnabled) return;
+    if (state.phase !== "exhausted") return;
+
+    // カウンタをリセットして再挑戦
+    forceRetryCountRef.current = 1;
+    runForceResolve();
+  }, [enabled, state.phase, runForceResolve]);
+
+  // アンマウント時に飛んでいるリクエスト / バックオフタイマーをキャンセル。
   useEffect(() => {
     return () => {
       if (inFlightRef.current) {
         inFlightRef.current.abort();
         inFlightRef.current = null;
+      }
+      if (backoffTimerRef.current != null) {
+        clearTimeout(backoffTimerRef.current);
+        backoffTimerRef.current = null;
       }
     };
   }, []);

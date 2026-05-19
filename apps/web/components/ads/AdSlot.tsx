@@ -11,6 +11,11 @@ type Props = {
   label?: string | null;
   context?: string;
   resetOnMount?: boolean;
+  /**
+   * native ゾーン用: <ins> に渡す幅 (px)。
+   * 未指定ならコンテナの実幅を JS で計測して渡す。
+   */
+  nativeWidth?: number;
 };
 
 function makeStorageKey(zone: AdZoneKey, context: string) {
@@ -38,12 +43,16 @@ export default function AdSlot({
   label = "広告",
   context = "page",
   resetOnMount = false,
+  nativeWidth,
 }: Props) {
   const cfg = AD_ZONES[zone];
+  const wrapperRef = useRef<HTMLElement | null>(null);
 
   const [insKey, setInsKey] = useState(0);
   const [hasContent, setHasContent] = useState(false);
   const [emptyGen, setEmptyGen] = useState(false);
+  // native 広告に渡す実際の幅 (px)
+  const [resolvedWidth, setResolvedWidth] = useState<number | null>(nativeWidth ?? null);
 
   const hasContentRef = useRef(false);
   const lastBumpAtRef = useRef(0);
@@ -52,6 +61,16 @@ export default function AdSlot({
   const hasEnteredViewportRef = useRef(false);
 
   const enabled = cfg.enabled;
+  const isNative = zone === "native";
+
+  // native ゾーン: nativeWidth 未指定ならコンテナ幅を計測して設定
+  useLayoutEffect(() => {
+    if (!isNative || nativeWidth != null) return;
+    const el = wrapperRef.current;
+    if (!el) return;
+    const w = el.getBoundingClientRect().width;
+    if (w > 0) setResolvedWidth(Math.floor(w));
+  }, [isNative, nativeWidth]);
 
   useLayoutEffect(() => {
     if (!enabled) return;
@@ -61,7 +80,6 @@ export default function AdSlot({
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [zone, context, enabled]);
 
-  // mount 直後に必ず resetAndServeAd を呼ぶ
   useEffect(() => {
     if (!enabled) return;
     const t = window.setTimeout(() => {
@@ -113,7 +131,6 @@ export default function AdSlot({
     flexDirection: "column",
     alignItems: "center",
     justifyContent: "center",
-    /* ★ はみ出し防止: 親の幅に必ず収める */
     width: "100%",
     maxWidth: "100%",
     overflow: "hidden",
@@ -130,6 +147,7 @@ export default function AdSlot({
 
   return (
     <aside
+      ref={wrapperRef as React.RefObject<HTMLElement>}
       className={`ad-slot ad-slot-${zone}${className ? ` ${className}` : ""}`}
       style={wrapperStyle}
       aria-label={label ?? undefined}
@@ -151,6 +169,8 @@ export default function AdSlot({
       <AdIns
         key={insKey}
         cfg={cfg}
+        isNative={isNative}
+        resolvedWidth={resolvedWidth}
         servedThisGenRef={servedThisGenRef}
         hasEnteredViewportRef={hasEnteredViewportRef}
         onContent={() => {
@@ -172,6 +192,8 @@ export default function AdSlot({
 
 function AdIns({
   cfg,
+  isNative,
+  resolvedWidth,
   servedThisGenRef,
   hasEnteredViewportRef,
   onContent,
@@ -179,6 +201,8 @@ function AdIns({
   onBecameVisibleAgain,
 }: {
   cfg: (typeof AD_ZONES)[AdZoneKey];
+  isNative: boolean;
+  resolvedWidth: number | null;
   servedThisGenRef: React.MutableRefObject<boolean>;
   hasEnteredViewportRef: React.MutableRefObject<boolean>;
   onContent: () => void;
@@ -268,14 +292,21 @@ function AdIns({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // native 広告: <ins> の幅をコンテナ幅に抾わせ、はみ出しをクリップ
+  // reservedWidth がある場合 (バナー等) は固定幅をそのまま渡す
+  const widthVal = isNative
+    ? (resolvedWidth != null ? `${resolvedWidth}px` : "100%")
+    : cfg.reservedWidth != null
+      ? `${cfg.reservedWidth}px`
+      : "100%";
+
   const insStyle: React.CSSProperties = {
-    display: "block",           /* ★ inline-block → block に変更 */
+    display: "block",
     background: "transparent",
-    /* ★ 固定幅の <ins> でも親を突き破らないようにする */
     maxWidth: "100%",
     overflow: "hidden",
     boxSizing: "border-box",
-    ...(cfg.reservedWidth != null ? { width: `${cfg.reservedWidth}px` } : {}),
+    width: widthVal,
   };
 
   return (
@@ -283,6 +314,11 @@ function AdIns({
       ref={insRef as React.RefObject<HTMLModElement>}
       className={cfg.insClass}
       data-zoneid={cfg.zoneId}
+      // native は 幅を data-width 属性にも渡す。
+      // ExoClick の native プロバイダは これを見てグリッド幅を決める。
+      {...(isNative && resolvedWidth != null
+        ? { "data-width": String(resolvedWidth) }
+        : {})}
       style={insStyle}
     />
   );

@@ -1,5 +1,7 @@
 "use client";
 
+import { useRef } from "react";
+
 import type { MovieCard } from "@/lib/api/feed";
 
 interface Props {
@@ -12,6 +14,68 @@ interface Props {
   onDetail: (e: React.MouseEvent | React.TouchEvent) => void;
 }
 
+// touchstart からの移動距離がこの値 (px) を超えたら「スワイプ」とみなしてタップ扱いにしない。
+// 縦スクロール (フィードのスワイプ) と横スワイプを両方拾うため Math.hypot で評価する。
+const TAP_MOVE_THRESHOLD_PX = 10;
+// touchstart からの経過時間がこの値 (ms) を超えても、移動距離次第ではタップ扱いを諦める。
+// ユーザーが指を置いてから長時間 (長押し / 迷い) はタップ判定の信頼性が下がるため。
+const TAP_DURATION_THRESHOLD_MS = 500;
+
+/**
+ * フィード右側のアクションボタン群で、スワイプ操作を誤ってタップ判定しないようにする hook。
+ *
+ * 問題:
+ *   - これまでは onTouchEnd={handler} で常にタップ扱いになっていたため、
+ *     ユーザーが「ボタンの上を指でなぞって縦スクロール」した結果指を離した瞬間に
+ *     ボタンが発火してしまい、意図せずブックマーク / ミュート / 詳細モーダルが開く現象があった。
+ *
+ * 解決:
+ *   - touchstart の座標と時刻を記録。
+ *   - touchend の時点で「移動距離が閾値以下」かつ「経過時間が閾値以下」のときだけ handler を発火。
+ *   - スワイプ判定のときは onTouchEnd で preventDefault しないので click も走らないが、
+ *     念のため touchend で stopPropagation のみ実施。
+ */
+function useTapGuard(handler: (e: React.TouchEvent) => void) {
+  const startRef = useRef<{ x: number; y: number; t: number } | null>(null);
+
+  const onTouchStart = (e: React.TouchEvent) => {
+    // フィード側に touch イベントが伝わって縦スクロールが起きなくなるのを避けるため、
+    // stopPropagation はしない。座標だけ覚えておく。
+    const touch = e.touches[0];
+    if (!touch) return;
+    startRef.current = {
+      x: touch.clientX,
+      y: touch.clientY,
+      t: Date.now(),
+    };
+  };
+
+  const onTouchEnd = (e: React.TouchEvent) => {
+    const start = startRef.current;
+    startRef.current = null;
+    if (!start) return;
+    const touch = e.changedTouches[0];
+    if (!touch) return;
+    const dx = touch.clientX - start.x;
+    const dy = touch.clientY - start.y;
+    const distance = Math.hypot(dx, dy);
+    const elapsed = Date.now() - start.t;
+    if (
+      distance > TAP_MOVE_THRESHOLD_PX ||
+      elapsed > TAP_DURATION_THRESHOLD_MS
+    ) {
+      // スワイプ / 長押し相当 → タップ扱いしない。フィード本体側のスクロール処理に任せる。
+      return;
+    }
+    // 純粋なタップ。click の二重発火を抑えつつ handler を発火。
+    e.stopPropagation();
+    e.preventDefault();
+    handler(e);
+  };
+
+  return { onTouchStart, onTouchEnd };
+}
+
 export default function FeedItemSideActions({
   item,
   isMuted,
@@ -21,16 +85,51 @@ export default function FeedItemSideActions({
   onShare,
   onDetail,
 }: Props) {
+  const muteTouch = useTapGuard(onToggleMute);
+  const bookmarkTouch = useTapGuard(onToggleBookmark);
+  const shareTouch = useTapGuard(onShare);
+  const detailTouch = useTapGuard(onDetail);
+  // 購入リンク用: <a> のデフォルト navigation を タップのときだけ走らせる。
+  // スワイプと判定したら preventDefault して遷移を抑える。
+  const buyStartRef = useRef<{ x: number; y: number; t: number } | null>(null);
+  const buyOnTouchStart = (e: React.TouchEvent) => {
+    const touch = e.touches[0];
+    if (!touch) return;
+    buyStartRef.current = { x: touch.clientX, y: touch.clientY, t: Date.now() };
+  };
+  const buyOnTouchEnd = (e: React.TouchEvent) => {
+    const start = buyStartRef.current;
+    buyStartRef.current = null;
+    if (!start) return;
+    const touch = e.changedTouches[0];
+    if (!touch) return;
+    const distance = Math.hypot(
+      touch.clientX - start.x,
+      touch.clientY - start.y,
+    );
+    const elapsed = Date.now() - start.t;
+    if (
+      distance > TAP_MOVE_THRESHOLD_PX ||
+      elapsed > TAP_DURATION_THRESHOLD_MS
+    ) {
+      // スワイプと判定 → navigation を抑止。フィード本体のスクロールに任せる。
+      e.preventDefault();
+    }
+    // タップのケースは preventDefault しない → <a> のデフォルト click が走る。
+  };
+
   return (
     <div
       className="side-actions"
       onClick={(e) => e.stopPropagation()}
-      onTouchStart={(e) => e.stopPropagation()}
+      // 親 div では touchstart の伝播を止めない。スワイプを拾えるようにするため。
+      // (各ボタンの useTapGuard 側で touchstart 位置を記録して判定する)
     >
       <button
         className="side-btn"
         aria-label={isMuted ? "音声ON" : "ミュート"}
-        onTouchEnd={onToggleMute}
+        onTouchStart={muteTouch.onTouchStart}
+        onTouchEnd={muteTouch.onTouchEnd}
         onClick={onToggleMute}
       >
         {isMuted ? (
@@ -52,12 +151,8 @@ export default function FeedItemSideActions({
       <button
         className={`side-btn${isBookmarked ? " side-btn--active" : ""}`}
         aria-label="ブックマーク"
-        onTouchEnd={(e) => {
-          e.stopPropagation();
-          // touchend → click の二重発火を防止
-          e.preventDefault();
-          onToggleBookmark(e);
-        }}
+        onTouchStart={bookmarkTouch.onTouchStart}
+        onTouchEnd={bookmarkTouch.onTouchEnd}
         onClick={(e) => {
           e.stopPropagation();
           onToggleBookmark(e);
@@ -77,11 +172,8 @@ export default function FeedItemSideActions({
       <button
         className="side-btn"
         aria-label="共有"
-        onTouchEnd={(e) => {
-          e.stopPropagation();
-          e.preventDefault(); // clickの二重発火を防ぐ
-          onShare(e);
-        }}
+        onTouchStart={shareTouch.onTouchStart}
+        onTouchEnd={shareTouch.onTouchEnd}
         onClick={onShare}
       >
         <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -97,7 +189,8 @@ export default function FeedItemSideActions({
       <button
         className="side-btn"
         aria-label="詳細を見る"
-        onTouchEnd={onDetail}
+        onTouchStart={detailTouch.onTouchStart}
+        onTouchEnd={detailTouch.onTouchEnd}
         onClick={onDetail}
       >
         <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -115,6 +208,8 @@ export default function FeedItemSideActions({
         className="side-btn side-btn--buy"
         aria-label="購入する"
         onClick={(e) => e.stopPropagation()}
+        onTouchStart={buyOnTouchStart}
+        onTouchEnd={buyOnTouchEnd}
       >
         <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
           <circle cx="9" cy="21" r="1"/>

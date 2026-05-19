@@ -13,14 +13,6 @@ interface Props {
   videoRef: RefObject<HTMLVideoElement>;
   thumbnailUrl: string;
   thumbnailAlt: string;
-  /**
-   * <video poster> を表示するかどうか。
-   * cachedSrc (= sample_movie_url) があり resolve API を叩かない場合は false にする。
-   * resolve 不要なケースでも poster を渡してしまうと、<video> マウント直後の数十〜数百ms
-   * (loadedmetadata → loadeddata の間) に poster 画像が見えてサムネのチラつきが発生するため、
-   * 「初回再生かつ resolve 必要」のときだけ poster を出すようにする。
-   */
-  showPoster: boolean;
   onLoadStart: () => void;
   onLoadedMetadata: () => void;
   onLoadedData: () => void;
@@ -46,7 +38,6 @@ export default function FeedItemVideo({
   videoRef,
   thumbnailUrl,
   thumbnailAlt,
-  showPoster,
   onLoadStart,
   onLoadedMetadata,
   onLoadedData,
@@ -101,12 +92,13 @@ export default function FeedItemVideo({
       <video
         ref={videoRef}
         src={src}
-        // poster を指定しておくと、<video> が loadeddata に到達するまで
-        // ブラウザがネイティブにサムネ画像を表示してくれる。
-        // resolve 必要 (cachedSrc 無し → thumbnail-bg 経由) のときだけ poster を出して、
-        // thumbnail-bg → <video> マウント時の黒画面+スピナーを避ける。
-        // 一方で cachedSrc 即時再生のときは poster を出すと逆にサムネが一瞬チラつくため undefined にする。
-        poster={showPoster && thumbnailUrl ? thumbnailUrl : undefined}
+        // 注: poster は意図的に指定しない。
+        // <video poster> は loadeddata に到達した後もブラウザ実装によっては表示が残り、
+        // isAdjacent (隣接スライドで preload 済) の <video> でスワイプ中央到達時に
+        // poster (= サムネ画像) が一瞬見えるチラつきの原因になっていた。
+        // resolve 必要時のサムネ表示は <FeedItem> の thumbnail-bg 経路 (showVideo=false の間)
+        // で実現する。<video> 自体は opacity:0 でマウント → loadeddata で opacity:1 にし、
+        // それまでは黒画面 (.video-bg の background:#000) を見せる。
         muted
         loop
         playsInline

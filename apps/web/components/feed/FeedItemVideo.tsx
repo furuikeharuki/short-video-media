@@ -92,6 +92,11 @@ export default function FeedItemVideo({
       <video
         ref={videoRef}
         src={src}
+        // poster を指定しておくと、<video> が loadeddata に到達するまで
+        // ブラウザがネイティブにサムネ画像を表示してくれる。
+        // これにより resolving (thumbnail-bg) → <video> マウント時の
+        // 「黒画面+スピナー」が出ず、サムネ+スピナーのまま自然に再生に遷移する。
+        poster={thumbnailUrl || undefined}
         muted
         loop
         playsInline

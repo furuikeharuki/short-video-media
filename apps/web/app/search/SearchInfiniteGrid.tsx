@@ -3,7 +3,7 @@
 import { Fragment, useCallback, useEffect, useRef, useState } from "react";
 import MovieCardThumb from "@/components/home/MovieCardThumb";
 import AdSlot from "@/components/ads/AdSlot";
-import { AD_LIST_INTERVAL, isAdZoneEnabled } from "@/lib/ads/config";
+import { AD_FEED_INTERVAL, isAdZoneEnabled } from "@/lib/ads/config";
 import type { MovieCard } from "@/lib/api/feed";
 import { getFeed } from "@/lib/api/feed";
 import {
@@ -86,26 +86,22 @@ async function fetchPage(
   };
 }
 
-/** フィード内広告カード—ネイティブ広告を横1列全幅で表示する */
-function FeedNativeAd({ index }: { index: number }) {
-  const nativeEnabled = isAdZoneEnabled("native");
-  const bannerEnabled = isAdZoneEnabled("mobileBanner300x250");
-
-  if (nativeEnabled) {
-    return (
-      <div className="search-grid-ad">
-        <AdSlot zone="native" context={`search-feed-${index}`} label="広告" />
-      </div>
-    );
-  }
-  if (bannerEnabled) {
-    return (
-      <div className="search-grid-ad">
-        <AdSlot zone="mobileBanner300x250" context={`search-banner-${index}`} />
-      </div>
-    );
-  }
-  return null;
+/**
+ * フィード内に差し込むネイティブ広告カード。
+ * feedNative ゾーン（zoneid: 5930078）专用。
+ * グリッド内に grid-column: 1/-1 で全幅展開。
+ */
+function FeedNativeAd({ adIndex }: { adIndex: number }) {
+  if (!isAdZoneEnabled("feedNative")) return null;
+  return (
+    <div className="search-grid-ad">
+      <AdSlot
+        zone="feedNative"
+        context={`feed-${adIndex}`}
+        label="広告"
+      />
+    </div>
+  );
 }
 
 export default function SearchInfiniteGrid({
@@ -173,9 +169,7 @@ export default function SearchInfiniteGrid({
         if (!cancelled) setIsInitialLoading(false);
       }
     })();
-    return () => {
-      cancelled = true;
-    };
+    return () => { cancelled = true; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sourceKey, enforceStatus]);
 
@@ -184,9 +178,7 @@ export default function SearchInfiniteGrid({
     if (!el) return;
     const io = new IntersectionObserver(
       (entries) => {
-        if (entries.some((e) => e.isIntersecting)) {
-          void fetchMore();
-        }
+        if (entries.some((e) => e.isIntersecting)) void fetchMore();
       },
       { rootMargin: "400px 0px" },
     );
@@ -217,28 +209,23 @@ export default function SearchInfiniteGrid({
     );
   }
 
-  // 広告の表示間隔: nativeが有効なら AD_LIST_INTERVAL、なければバナーもチェック
-  const adEnabled = isAdZoneEnabled("native") || isAdZoneEnabled("mobileBanner300x250");
-  const adInterval = AD_LIST_INTERVAL > 0 ? AD_LIST_INTERVAL : 0;
-  // 広告のカウンター（context区別用）
-  let adCount = 0;
+  const feedInterval = AD_FEED_INTERVAL; // デフォルト 10、envで上書き可
+  const feedEnabled = isAdZoneEnabled("feedNative") && feedInterval > 0;
+  let adIndex = 0; // context 区別用カウンター
 
   return (
     <main className="search-main">
       {headerSlot ?? <p className="search-meta">{headingPrefix}</p>}
       <div className="search-grid">
         {items.map((item, index) => {
+          // index > 0 かつ feedInterval の倍数のときに広告を振る
           const showAdBefore =
-            adEnabled &&
-            adInterval > 0 &&
-            index > 0 &&
-            index % adInterval === 0;
-          const currentAdCount = showAdBefore ? adCount++ : adCount;
+            feedEnabled && index > 0 && index % feedInterval === 0;
+          const currentAdIndex = showAdBefore ? adIndex++ : adIndex;
+
           return (
             <Fragment key={item.id}>
-              {showAdBefore && (
-                <FeedNativeAd index={currentAdCount} />
-              )}
+              {showAdBefore && <FeedNativeAd adIndex={currentAdIndex} />}
               <MovieCardThumb
                 movie={item}
                 aspect="portrait"
@@ -306,20 +293,27 @@ const pageCSS = `
     padding: 8px;
   }
   .search-grid > .mct { width: 100%; min-width: 0; }
+
+  /* 広告コンテナ: グリッド内全幅で占有 */
   .search-grid-ad {
     grid-column: 1 / -1;
-    display: flex;
-    justify-content: center;
-    padding: 8px 0;
     width: 100%;
     max-width: 100%;
     overflow: hidden;
     box-sizing: border-box;
+    padding: 4px 0;
   }
   .search-grid-ad .ad-slot {
     width: 100% !important;
     max-width: 100% !important;
   }
+  .search-grid-ad .ad-slot ins,
+  .search-grid-ad .ad-slot iframe,
+  .search-grid-ad .ad-slot img {
+    max-width: 100% !important;
+    box-sizing: border-box !important;
+  }
+
   @media (min-width: 640px) {
     .search-grid { grid-template-columns: repeat(5, minmax(0, 1fr)); }
   }

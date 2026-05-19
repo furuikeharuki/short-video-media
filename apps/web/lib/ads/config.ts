@@ -22,6 +22,7 @@ const masterEnabled = parseBool(process.env.NEXT_PUBLIC_ADS_ENABLED);
 
 export type AdZoneKey =
   | "native"
+  | "feedNative"
   | "mobileBanner300x250"
   | "mobileBanner300x100"
   | "fullpageInterstitial";
@@ -42,13 +43,26 @@ export type AdZoneConfig = {
 };
 
 export const AD_ZONES: Record<AdZoneKey, AdZoneConfig> = {
+  /** 詳細ページ・女優ページ末尾に置く native 広告 */
   native: {
     zoneId: process.env.NEXT_PUBLIC_EXOCLICK_NATIVE_ZONE_ID ?? "5929928",
     provider: "magsrv",
     insClass: "eas6a97888e20",
     enabled:
       masterEnabled && parseBool(process.env.NEXT_PUBLIC_AD_NATIVE_ENABLED),
-    // ネイティブはレスポンシブ。予約高さは内容次第なのでやや大きめ。
+    reservedHeight: 260,
+    reservedWidth: null,
+  },
+  /**
+   * 検索・ジャンル一覧のグリッド内に AD_FEED_INTERVAL 件ごとに差し込む native 広告。
+   * zone ID: 5930078 (フィード内ネイティブ専用)
+   */
+  feedNative: {
+    zoneId: process.env.NEXT_PUBLIC_EXOCLICK_FEED_NATIVE_ZONE_ID ?? "5930078",
+    provider: "magsrv",
+    insClass: "eas6a97888e20",
+    enabled:
+      masterEnabled && parseBool(process.env.NEXT_PUBLIC_AD_FEED_NATIVE_ENABLED),
     reservedHeight: 260,
     reservedWidth: null,
   },
@@ -98,7 +112,11 @@ export function isAdZoneEnabled(key: AdZoneKey): boolean {
   return AD_ZONES[key].enabled;
 }
 
-/** フィード内に広告を挿入する間隔 (件)。0 以下なら挿入しない。 */
+/**
+ * フィード内広告の挿入間隔 (件)。
+ * 環境変数 NEXT_PUBLIC_AD_FEED_INTERVAL で上書き可。
+ * 0 以下なら挿入しない。
+ */
 export const AD_FEED_INTERVAL = parseIntOr(
   process.env.NEXT_PUBLIC_AD_FEED_INTERVAL,
   10,

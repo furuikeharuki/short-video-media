@@ -20,10 +20,15 @@ name: Sync Catalog (DMM ItemList)
 #   - RESOLVER_API_KEY        : resolver Bearer 認証用 API キー (resolve ステップ用)
 
 on:
-  schedule:
-    # 日中のみ 2 時間ごと (JST 10/12/14/16/18 = UTC 01/03/05/07/09)
-    # 深夜帯 (JST 0-9時) はサービスのピークタイムなので走らせない。
-    - cron: "0 1,3,5,7,9 * * *"
+  # ⚠️ 2026-05-19: Railway Postgres の Public Network egress が異常に大きくなり
+  # (2 日で 1.2 TB / $61 課金) 一時停止。原因は GitHub Actions から Public DATABASE_URL
+  # 経由で接続する際、SELECT/RETURNING の応答が全部 egress カウントされるため。
+  # Postgres を Railway 外 (Supabase/Neon) へ移行するか、Railway 内ワーカー化するまで
+  # 定期実行は止める。手動 (workflow_dispatch) は引き続き利用可能。
+  # schedule:
+  #   # 日中のみ 2 時間ごと (JST 10/12/14/16/18 = UTC 01/03/05/07/09)
+  #   # 深夜帯 (JST 0-9時) はサービスのピークタイムなので走らせない。
+  #   - cron: "0 1,3,5,7,9 * * *"
   workflow_dispatch:
     inputs:
       hits:

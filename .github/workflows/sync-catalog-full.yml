@@ -21,10 +21,12 @@ name: Sync Catalog (Full / Bootstrap)
 #   - DATABASE_URL            : 本番 Postgres への接続文字列 (Railway Public URL)
 
 on:
-  schedule:
-    # 毎月 1 日 01:00 UTC = 毎月 1 日 10:00 JST
-    # アダルトサイトは夜中にアクセスが集中するため、日中の低トラフィック帯に実行する
-    - cron: "0 1 1 * *"
+  # ⚠️ 2026-05-19: Railway Postgres の Public Network egress が異常に大きくなり一時停止。
+  # 詳細は sync-catalog.yml のコメント参照。手動実行は引き続き可能。
+  # schedule:
+  #   # 毎月 1 日 01:00 UTC = 毎月 1 日 10:00 JST
+  #   # アダルトサイトは夜中にアクセスが集中するため、日中の低トラフィック帯に実行する
+  #   - cron: "0 1 1 * *"
   workflow_dispatch:
     inputs:
       start_date:

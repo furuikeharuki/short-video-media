@@ -102,6 +102,12 @@ export function useResolvedVideoSrc({
 
   // cachedSrc が無い & enabled のときだけ初回 resolve を発火。
   // 表示中でない (enabled=false) スライドまで API を叩くと無駄なので避ける。
+  //
+  // PR #95 以降: resolveMp4Url の中身は signal を fetch に伝搬しないため、
+  // ここで cleanup に abort しても fetch は走り続ける。ただし、abort されると
+  // 返り値が null になるため、null = abort ケースは exhausted に落とさず
+  // resolving のままにして effect の再起動でリトライさせる。
+  // （一気スクロール → 中央到達 で resolving のまま stuck しないように）
   useEffect(() => {
     if (!enabled) return;
     if (cachedSrc) return; // optimistic ヒット中は何もしない
@@ -112,7 +118,12 @@ export function useResolvedVideoSrc({
     inFlightRef.current = controller;
     void resolveMp4Url(slug, { signal: controller.signal })
       .then((res) => {
-        if (controller.signal.aborted) return;
+        if (controller.signal.aborted) {
+          // abort された → それ以上は何もしない。
+          // resolving のままなので、もしこのコンポーネントが再び enabled に
+          // なれば effect が再発火して fetch のキャッシュを拾う。
+          return;
+        }
         if (res?.mp4_url) {
           setState({ phase: "ready", src: res.mp4_url });
         } else {

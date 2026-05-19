@@ -23,6 +23,13 @@ export type ResolveMp4Response = {
  * useResolvedVideoSrc) が同時に要求しても、API リクエストは 1 本にまとめる。
  * 解決済みの Promise もキャッシュして、二重リクエストを避ける。
  * force=true のリトライはキャッシュをバイパスし、成功したらキャッシュを上書きする。
+ *
+ * 重要 (PR #95): 内部の fetch には signal を渡さない。呼び出し元の signal は
+ * 「Promise を await するか即座に null を返すか」の判定にのみ使う。
+ * そうしないと、先に fetch を発火したコンポーネントがスクロールで abort されたときに、
+ * 同じ slug を必要とする他のコンポーネント (例: 中央に到達した useResolvedVideoSrc)
+ * まで巻き込まれて null が返ってきてしまう。fetch 自体は常に完走させて、
+ * クライアント側と API 側キャッシュを確実に温める。
  */
 const resolveCache = new Map<string, Promise<ResolveMp4Response | null>>();
 
@@ -32,14 +39,14 @@ export async function resolveMp4Url(
 ): Promise<ResolveMp4Response | null> {
   if (!slug) return null;
 
+  // 呼び出し元の signal が既に abort されていれば即座に null。
+  // (ただし fetch はそれとは独立に走り続ける)
+  if (options.signal?.aborted) return null;
+
   // force=false のケース、既にキャッシュにあればそれを返す (新規 API を叩かない)。
-  // signal が abort されていたらその限りではなく null を返す。
   if (!options.force) {
     const cached = resolveCache.get(slug);
-    if (cached) {
-      if (options.signal?.aborted) return null;
-      return cached;
-    }
+    if (cached) return waitWithSignal(cached, options.signal);
   }
 
   const params = new URLSearchParams();
@@ -49,6 +56,7 @@ export async function resolveMp4Url(
     query ? `?${query}` : ""
   }`;
 
+  // 内部 fetch には signal を渡さない。呼び出し元の abort は waitWithSignal で処理する。
   const promise: Promise<ResolveMp4Response | null> = (async () => {
     try {
       const res = await fetch(url, {
@@ -56,7 +64,6 @@ export async function resolveMp4Url(
         // クライアントから直接叩くため Next.js のキャッシュは無効。
         // API 側で DB キャッシュを持っているのでここでキャッシュする必要はない。
         cache: "no-store",
-        signal: options.signal,
       });
       if (!res.ok) {
         // 404 / 502 / 504 はサムネフォールバック (UX 上は同じ扱い)
@@ -68,7 +75,7 @@ export async function resolveMp4Url(
       }
       return data;
     } catch {
-      // ネットワークエラー / Abort
+      // ネットワークエラー
       return null;
     }
   })();
@@ -82,7 +89,30 @@ export async function resolveMp4Url(
     }
   });
 
-  return promise;
+  return waitWithSignal(promise, options.signal);
+}
+
+/**
+ * 共有した Promise を await しつつ、呼び出し元の signal が abort されたら
+ * 即座に null を返す (Promise 自体は abort されず走り続ける)。
+ */
+function waitWithSignal<T>(
+  promise: Promise<T | null>,
+  signal: AbortSignal | undefined,
+): Promise<T | null> {
+  if (!signal) return promise;
+  if (signal.aborted) return Promise.resolve(null);
+  return new Promise<T | null>((resolve) => {
+    const onAbort = () => {
+      signal.removeEventListener("abort", onAbort);
+      resolve(null);
+    };
+    signal.addEventListener("abort", onAbort, { once: true });
+    promise.then((value) => {
+      signal.removeEventListener("abort", onAbort);
+      resolve(value);
+    });
+  });
 }
 
 /**

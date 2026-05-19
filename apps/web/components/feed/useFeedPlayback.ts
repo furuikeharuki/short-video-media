@@ -342,6 +342,19 @@ export function useFeedPlayback({ slug, title, isActive, videoSrc, onOpenModal, 
     setIsMuted(globalIsMuted);
     // 同期で muted 属性を反映してから play を呼ぶ
     video.muted = globalIsMuted;
+    // 隣接スライド (isActive=false) で起きた onError は PR #91 以降無視しているため、
+    // <video> が MediaError 状態のまま中央にスワイプしてくるケースがある。
+    // MediaError 中の <video> は play() を呼んでも reject されるだけで再生できないため、
+    // ここで video.load() を呼んで src を同じ URL で再ロードさせ、MediaError をリセットする。
+    // load() は networkState=NETWORK_LOADING をキックするので　1 度ロード済みの bytes は
+    // HTTP キャッシュ (Range リクエストの 206 レスポンス) から再利用される。
+    if (video.error !== null) {
+      try {
+        video.load();
+      } catch {
+        /* load() 例外は握り潰し */
+      }
+    }
     playVideo(video, false);
   }, [isActive, videoSrc, playVideo]);
 

@@ -40,10 +40,12 @@ import { invalidateSampleUrl, resolveMp4Url } from "@/lib/api/resolve-mp4";
 // PREFETCH_AHEAD=2 = 「次の次」 (隣接スライドは中央±1 なので +2 が次に中央になるスライド)。
 const PREFETCH_AHEAD = 2;
 
-// スクロール停止デバウンス: resolve 経路 (sample_movie_url を持たない slug) だけに適用。
-// usePrefetchResolveMp4 と同じく 400ms。sample_movie_url を既に持っている slot は
-// API を叩かないので、即時 slot 化する (= スワイプ即応性は維持)。
-const RESOLVE_DEBOUNCE_MS = 400;
+// スクロール停止デバウンス。cachedSrc 有無に関わらず適用する。
+// - cachedSrc 有 (sample_movie_url 持ち): 隠し <video> で事前バイト取得を始めるが、
+//   スクロール中は中央の <video> の帯域を奪わないようにデバウンスしてから slot 化する。
+// - cachedSrc 無 (resolve 必要): resolver VPS にキューイングしないよう同じくデバウンス。
+// usePrefetchResolveMp4 と同じ 400ms。
+const PREFETCH_DEBOUNCE_MS = 400;
 
 interface PrefetchSlot {
   /** key 用。MovieCard.id をそのまま使う */
@@ -88,37 +90,38 @@ export function usePrefetchVideoBytes(
       slugToId.set(item.slug, item.id);
     }
 
-    // sample_movie_url 持ちは即時に slot 化、持たないものは後で resolve
-    const immediateSlots: PrefetchSlot[] = [];
-    const toResolve: MovieCard[] = [];
-    for (const item of targets) {
-      if (item.sample_movie_url) {
-        immediateSlots.push({
-          id: item.id,
-          slug: item.slug,
-          src: item.sample_movie_url,
-        });
-      } else {
-        toResolve.push(item);
-      }
-    }
+    // スクロール中は cachedSrc 有無に関わらず slots を一旦空にする。
+    // これにより隠し <video> がアンマウントされ、中央の <video> への帯域集中を保てる。
+    // スクロールが PREFETCH_DEBOUNCE_MS の間止まってから slot 化を再開する。
+    setSlots([]);
 
-    // 一旦 sample_movie_url 持ちだけで slots を更新
-    setSlots(immediateSlots);
-
-    // 対象から外れた進行中 resolve を abort
-    const targetSlugs = new Set(toResolve.map((it) => it.slug));
+    // 進行中の resolve はすべて一旦 abort。スクロール停止したときに改めて起動する。
     for (const [slug, controller] of inFlight.entries()) {
-      if (!targetSlugs.has(slug)) {
-        controller.abort();
-        inFlight.delete(slug);
-      }
+      controller.abort();
+      inFlight.delete(slug);
     }
 
-    // sample_movie_url を持たないスライドは resolve してから slot に追加。
-    // ただし 20 枚一気スクロール時に大量の resolve を resolver VPS にキューイングしないよう、
-    // currentIndex が RESOLVE_DEBOUNCE_MS の間変わらなかったタイミングでようやく発火する。
+    // currentIndex が PREFETCH_DEBOUNCE_MS の間変わらなかったら slot 化 + resolve 発火。
+    // - cachedSrc 有: すぐ slot 化され、隠し <video> がマウントしてバイト先読み開始
+    // - cachedSrc 無: resolveMp4Url を呼んで取得し、成功したら slot に追加
     const timer = setTimeout(() => {
+      const debouncedSlots: PrefetchSlot[] = [];
+      const toResolve: MovieCard[] = [];
+      for (const item of targets) {
+        if (item.sample_movie_url) {
+          debouncedSlots.push({
+            id: item.id,
+            slug: item.slug,
+            src: item.sample_movie_url,
+          });
+        } else {
+          toResolve.push(item);
+        }
+      }
+      if (debouncedSlots.length > 0) {
+        setSlots(debouncedSlots);
+      }
+
       for (const item of toResolve) {
         if (inFlight.has(item.slug)) continue;
         const controller = new AbortController();
@@ -141,7 +144,7 @@ export function usePrefetchVideoBytes(
             }
           });
       }
-    }, RESOLVE_DEBOUNCE_MS);
+    }, PREFETCH_DEBOUNCE_MS);
 
     return () => {
       clearTimeout(timer);

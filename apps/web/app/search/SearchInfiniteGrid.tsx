@@ -15,14 +15,6 @@ import {
 } from "@/lib/api/search";
 import { useSavedFilterStatus } from "@/components/SavedFilterContext";
 
-/**
- * 検索結果ページ用の無限スクロールグリッド。
- *
- * 検索クエリの種類 (キーワード / 完全一致フィールド / ジャンル) に応じて
- * 適切な API を offset+limit でページングして呼び出し、ホーム画面のセクション
- * もっと見る画面 (ListClient) と同じく IntersectionObserver で順次読み足す。
- */
-
 type SourceKeyword = { kind: "keyword"; query: string };
 type SourceExact = { kind: "exact"; field: ExactField; value: string };
 type SourceGenre = { kind: "genre"; genre: string };
@@ -31,29 +23,18 @@ type Source = SourceKeyword | SourceExact | SourceGenre | SourceAdvanced;
 
 type Props = {
   source: Source;
-  /** プレイリストのキー前綴 (検索の種類で一意になる)。 */
   playlistKey: string;
-  /** プレイリストの UI 表示用タイトル。 */
   playlistTitle: string;
-  /** 検索条件のラベル (例: 「監督「苺原」の作品」「#プロ女優 の動画」)。
-   *  headerSlot が指定されている場合は古い グレーベル表記 (.search-meta) を出さず、
-   *  headerSlot 側でタイトル表示を担保するシグネチャとして使う。 */
   headingPrefix: string;
-  /**
-   * 一覧の上部に表示する任意のスロット (修正5: 「戻る + キーワード + フィルター」サブヘッダー)。
-   * 採用されると .search-meta の見出し表記は出さない。
-   */
   headerSlot?: React.ReactNode;
 };
 
-/** 画面幅に応じた列数 (search-grid の CSS と一致)。 */
 function columnsForWidth(w: number): number {
   if (w >= 1024) return 7;
   if (w >= 640) return 5;
   return 3;
 }
 
-/** 列の倍数で揃える 1 ページあたりの件数。 */
 function batchSize(columns: number): number {
   if (columns === 3) return 21;
   if (columns === 5) return 20;
@@ -62,11 +43,9 @@ function batchSize(columns: number): number {
 
 type Page = {
   items: MovieCard[];
-  /** 次ページの offset (null なら末尾)。 */
   nextOffset: number | null;
 };
 
-/** ソース種別に応じて 1 ページ取得する。 */
 async function fetchPage(
   source: Source,
   offset: number,
@@ -100,12 +79,33 @@ async function fetchPage(
       nextOffset: Number.isNaN(nextOffset as number) ? null : nextOffset,
     };
   }
-  // advanced
   const res = await advancedSearch(source.input, offset, limit);
   return {
     items: res.items,
     nextOffset: res.next_cursor !== null ? parseInt(res.next_cursor, 10) : null,
   };
+}
+
+/** フィード内広告カード—ネイティブ広告を横1列全幅で表示する */
+function FeedNativeAd({ index }: { index: number }) {
+  const nativeEnabled = isAdZoneEnabled("native");
+  const bannerEnabled = isAdZoneEnabled("mobileBanner300x250");
+
+  if (nativeEnabled) {
+    return (
+      <div className="search-grid-ad">
+        <AdSlot zone="native" context={`search-feed-${index}`} label="広告" />
+      </div>
+    );
+  }
+  if (bannerEnabled) {
+    return (
+      <div className="search-grid-ad">
+        <AdSlot zone="mobileBanner300x250" context={`search-banner-${index}`} />
+      </div>
+    );
+  }
+  return null;
 }
 
 export default function SearchInfiniteGrid({
@@ -115,11 +115,6 @@ export default function SearchInfiniteGrid({
   headingPrefix,
   headerSlot,
 }: Props) {
-  // SavedFilterEnforcer が /search 上で保存済みフィルターを URL に注入し終わるまでは
-  // "pending"。この間 SSR が推測した source は、ユーザーの保存済みフィルターを
-  // 反映していない可能性がある (とくに 詳細経路以外: keyword / exact / genre)。
-  // ready になった時点で URL が書き換わり、再マウントされるので
-  // pending の間は スピナーだけ見せてフィルター違反作品のフラッシュを防ぐ。
   const enforceStatus = useSavedFilterStatus();
   const [items, setItems] = useState<MovieCard[]>([]);
   const [nextOffset, setNextOffset] = useState<number | null>(0);
@@ -127,12 +122,8 @@ export default function SearchInfiniteGrid({
   const [isInitialLoading, setIsInitialLoading] = useState(true);
   const fetchingRef = useRef(false);
   const sentinelRef = useRef<HTMLDivElement | null>(null);
-  // 列数は初期マウント時に 1 回だけ確定させる
-  // (ブレイクポイント跨ぎで途中から取得件数が混在するとグリッドが崩れる)
   const columnsRef = useRef<number | null>(null);
 
-  // ソースが変わったら state をリセットする
-  // (検索ページ自体は遷移ごとに別マウントになるはずだが念のため)
   const sourceKey = JSON.stringify(source);
 
   const fetchMore = useCallback(async () => {
@@ -159,9 +150,6 @@ export default function SearchInfiniteGrid({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sourceKey, nextOffset]);
 
-  // 初回マウント: 列数を確定して 1 ページ目を取る。
-  // SavedFilterEnforcer が pending の間は SSR の source を使った fetch を走らせず、
-  // ready になって URL が確定したところで初回ページを取る。
   useEffect(() => {
     if (enforceStatus === "pending") {
       setIsInitialLoading(true);
@@ -191,7 +179,6 @@ export default function SearchInfiniteGrid({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sourceKey, enforceStatus]);
 
-  // 末尾の sentinel が見えたら次を取る。
   useEffect(() => {
     const el = sentinelRef.current;
     if (!el) return;
@@ -230,23 +217,27 @@ export default function SearchInfiniteGrid({
     );
   }
 
+  // 広告の表示間隔: nativeが有効なら AD_LIST_INTERVAL、なければバナーもチェック
+  const adEnabled = isAdZoneEnabled("native") || isAdZoneEnabled("mobileBanner300x250");
+  const adInterval = AD_LIST_INTERVAL > 0 ? AD_LIST_INTERVAL : 0;
+  // 広告のカウンター（context区別用）
+  let adCount = 0;
+
   return (
     <main className="search-main">
       {headerSlot ?? <p className="search-meta">{headingPrefix}</p>}
       <div className="search-grid">
         {items.map((item, index) => {
-          // AD_LIST_INTERVAL ごとに 300x250 バナーを 1 行全幅で挟む。
           const showAdBefore =
-            isAdZoneEnabled("mobileBanner300x250") &&
-            AD_LIST_INTERVAL > 0 &&
+            adEnabled &&
+            adInterval > 0 &&
             index > 0 &&
-            index % AD_LIST_INTERVAL === 0;
+            index % adInterval === 0;
+          const currentAdCount = showAdBefore ? adCount++ : adCount;
           return (
             <Fragment key={item.id}>
               {showAdBefore && (
-                <div className="search-grid-ad">
-                  <AdSlot zone="mobileBanner300x250" />
-                </div>
+                <FeedNativeAd index={currentAdCount} />
               )}
               <MovieCardThumb
                 movie={item}
@@ -319,7 +310,15 @@ const pageCSS = `
     grid-column: 1 / -1;
     display: flex;
     justify-content: center;
-    padding: 4px 0;
+    padding: 8px 0;
+    width: 100%;
+    max-width: 100%;
+    overflow: hidden;
+    box-sizing: border-box;
+  }
+  .search-grid-ad .ad-slot {
+    width: 100% !important;
+    max-width: 100% !important;
   }
   @media (min-width: 640px) {
     .search-grid { grid-template-columns: repeat(5, minmax(0, 1fr)); }

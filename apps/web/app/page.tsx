@@ -4,6 +4,7 @@ import HorizontalCardRow from "@/components/home/HorizontalCardRow";
 import MovieCardThumb from "@/components/home/MovieCardThumb";
 import PullToRefresh from "@/components/home/PullToRefresh";
 import AdSlot from "@/components/ads/AdSlot";
+import { isAdZoneEnabled } from "@/lib/ads/config";
 
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
@@ -20,8 +21,6 @@ const RANKING_KEYS = new Set([
   "ranking_monthly",
 ]);
 
-/** 「もっと見る」のリンク先を section key (とジャンル名) から組み立てる。
- *  ジャンルは既存の /search?genre=... を再利用、それ以外は /list/<key> に飛ばす。 */
 function buildMoreHref(section: { key: string; genre: string | null }): string {
   if (section.genre) {
     return `/search?genre=${encodeURIComponent(section.genre)}`;
@@ -54,9 +53,14 @@ export default async function Page() {
     );
   }
 
-  // セクション間の軽い区切りに 300x100 バナーを挟む頻度。
-  // 視聴体験を壊さないよう 3 セクションごとに 1 枚にする。
+  // native有効ならセクション間に native、なければ与えられたバナーを使う
+  const nativeEnabled = isAdZoneEnabled("native");
+  const bannerEnabled = isAdZoneEnabled("mobileBanner300x100");
+  const showSectionAd = nativeEnabled || bannerEnabled;
+  // セクション間広告の間隔（3セクションに1枚）
   const SECTION_AD_EVERY = 3;
+  // native 広告の context カウンター
+  let nativeAdCount = 0;
 
   return (
     <PullToRefresh className="home-main">
@@ -67,15 +71,17 @@ export default async function Page() {
           href: buildMoreHref(section),
         };
         const playlistKey = `home_${section.key}`;
-        // /feed 側で 20 件以降を取り直すための出所情報。
-        // ジャンル系は key='genre' + genre名 で送り、それ以外はそのセクションkeyを送る。
         const playlistSource = section.genre
           ? { kind: "section" as const, key: "genre", genre: section.genre }
           : { kind: "section" as const, key: section.key };
 
         const showAdAfter =
+          showSectionAd &&
           sectionIndex < sections.length - 1 &&
           (sectionIndex + 1) % SECTION_AD_EVERY === 0;
+
+        // native の場合は context で母体公告を区別する
+        const currentNativeCount = showAdAfter && nativeEnabled ? nativeAdCount++ : nativeAdCount;
 
         return (
           <div key={section.key}>
@@ -89,7 +95,6 @@ export default async function Page() {
                   key={m.id}
                   movie={m}
                   aspect="portrait"
-                  // ランキングセクションでも順位バッジは 100 位まで。
                   rank={isRanking && i < 100 ? i + 1 : undefined}
                   playlist={{
                     key: playlistKey,
@@ -103,7 +108,15 @@ export default async function Page() {
             </HorizontalCardRow>
             {showAdAfter && (
               <div className="home-section-ad">
-                <AdSlot zone="mobileBanner300x100" />
+                {nativeEnabled ? (
+                  <AdSlot
+                    zone="native"
+                    context={`home-section-${currentNativeCount}`}
+                    label="広告"
+                  />
+                ) : (
+                  <AdSlot zone="mobileBanner300x100" />
+                )}
               </div>
             )}
           </div>
@@ -134,9 +147,17 @@ const pageStyles = `
   }
   .home-footer-spacer { height: 24px; }
   .home-section-ad {
-    padding: 12px 8px;
+    padding: 8px 0;
     display: flex;
     justify-content: center;
+    width: 100%;
+    max-width: 100%;
+    overflow: hidden;
+    box-sizing: border-box;
+  }
+  .home-section-ad .ad-slot {
+    width: 100% !important;
+    max-width: 100% !important;
   }
   .home-empty, .home-error {
     padding: 80px 20px;

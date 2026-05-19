@@ -46,24 +46,51 @@ async def get_ranking(
     if period not in VALID_PERIODS:
         raise ValueError(f"period must be one of {VALID_PERIODS}")
 
+    cards: list[MovieCard] = []
+    seen_ids: set[str] = set()
+
     ranked = await aggregate_view_ranking(
         db, period=period, limit=limit, offset=offset
     )
     slugs = [s for s, _ in ranked if s]
-
     if slugs:
         movies = await get_movies_by_slugs_ordered(db, slugs)
-        if movies:
-            return [_to_card(m) for m in movies]
+        for m in movies:
+            if m.id in seen_ids:
+                continue
+            cards.append(_to_card(m))
+            seen_ids.add(m.id)
 
-    # フォールバック: イベントデータ不足のとき
-    movies = await get_fallback_ranking_movies(
+    if len(cards) >= limit:
+        return cards[:limit]
+
+    # 期間内 view イベントだけでは limit に満たないときは、期間ごとに
+    # 異なる窓幅 (_FALLBACK_WINDOW_DAYS) のフォールバックで穴埋めする。
+    # こうすると view イベントが少なくて daily/weekly/monthly の上位が
+    # 同じになるケースでも、フォールバック側の窓 (7/30/90日) の差で
+    # 自然に並びが分かれる。
+    #
+    # フォールバック側に渡す offset:
+    #   - イベント由来で 1 件でも取れている場合は 0 から取り直し、
+    #     重複は seen_ids で除外する (ページ送り中の二重表示を防ぐ)。
+    #   - イベント由来がゼロのときは元の offset を渡してフォールバック
+    #     単独のページ送りに切り替わる (従来挙動と同じ)。
+    need = limit - len(cards)
+    fallback = await get_fallback_ranking_movies(
         db,
-        limit=limit,
+        # 重複除去で枯れるリスクを下げるため少し多めに取得。
+        limit=need * 2,
         window_days=_FALLBACK_WINDOW_DAYS[period],
-        offset=offset,
+        offset=0 if cards else offset,
     )
-    return [_to_card(m) for m in movies]
+    for m in fallback:
+        if len(cards) >= limit:
+            break
+        if m.id in seen_ids:
+            continue
+        cards.append(_to_card(m))
+        seen_ids.add(m.id)
+    return cards[:limit]
 
 
 async def get_popular_all_time(

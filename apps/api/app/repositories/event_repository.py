@@ -76,7 +76,11 @@ async def aggregate_view_ranking(
     """
     since = _since(period)
     stmt = (
-        select(Event.slug, func.count(Event.id).label("c"))
+        select(
+            Event.slug,
+            func.count(Event.id).label("c"),
+            func.max(Event.created_at).label("last_seen"),
+        )
         .join(Movie, Movie.slug == Event.slug)
         .where(
             Event.event_type == "view",
@@ -85,10 +89,11 @@ async def aggregate_view_ranking(
             Movie.is_visible.is_(True),
         )
         .group_by(Event.slug)
-        # 二次キーに slug を与えてソートを安定化させる。
-        # (count の tie でページごとに順序が変わってしまうと、
-        #  クライアント側で重複・欠落が起きるため)
-        .order_by(desc("c"), Event.slug)
+        # 二次キーは「期間内で最後に見られた時刻」の降順。
+        # ・count の tie で daily/weekly/monthly が完全に同じ並びになるのを防ぐ
+        #   (各期間で「最後に見られた時刻」の分布が違うため自然に差が出る)。
+        # ・三次キーに slug を入れてページネーション順序を安定させる。
+        .order_by(desc("c"), desc("last_seen"), Event.slug)
         .offset(offset)
         .limit(limit)
     )

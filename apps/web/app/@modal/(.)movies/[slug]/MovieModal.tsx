@@ -6,6 +6,7 @@ import { useEffect, useRef } from "react";
 import AffiliateLink from "@/components/analytics/affiliate-link";
 import DetailViewTracker from "@/components/analytics/detail-view-tracker";
 import ActressLink from "@/components/ActressLink";
+import AdSlot from "@/components/ads/AdSlot";
 import type { MovieDetail } from "@/lib/api/movies";
 
 const NA = "----";
@@ -170,6 +171,10 @@ export default function MovieModal({ movie }: { movie: MovieDetail }) {
                 slug={movie.slug}
                 title={movie.title}
               />
+            </div>
+
+            <div style={adBottomStyle}>
+              <AdSlot zone="native" />
             </div>
           </div>
         </div>
@@ -375,6 +380,10 @@ const ctaStyle: React.CSSProperties = {
   display: "flex",
   flexDirection: "column",
   gap: "12px",
+};
+
+const adBottomStyle: React.CSSProperties = {
+  marginTop: "24px",
 };
 
 const modalCSS = `

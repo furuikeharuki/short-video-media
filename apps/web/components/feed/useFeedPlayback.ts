@@ -88,6 +88,10 @@ export function useFeedPlayback({ slug, title, isActive, videoSrc, onOpenModal, 
   // ループ再生や force リトライなどで loadstart が再発火したときにサムネが一瞬見えてしまうのを防ぐ。
   // videoSrc が変わったとき (= 新しい作品に切り替わったとき) はリセット。
   const hasPlayedRef             = useRef(false);
+  // スピナー表示を一定時間遅らせるためのタイマー ID。
+  // waiting/stalled が短時間で解消する (= playing がすぐ来る) ようなケースで
+  // スピナーがチラッと見えてしまうのを防ぐ。setSpinnerVisible(false) でクリアされる。
+  const spinnerShowTimerRef      = useRef<ReturnType<typeof setTimeout> | null>(null);
   const isMutedRef               = useRef(globalIsMuted);
   const tapTimerRef              = useRef<ReturnType<typeof setTimeout> | null>(null);
   const tapCountRef              = useRef(0);
@@ -161,10 +165,31 @@ export function useFeedPlayback({ slug, title, isActive, videoSrc, onOpenModal, 
   // ローディングスピナーの表示・非表示を切り替える。
   // - 初回ロード中: サムネイル + スピナーを重ねて表示
   // - 再生中のバッファ不足 (waiting/stalled): スピナーのみ表示
+  //
+  // visible=true のときは即座に表示せず、SPINNER_SHOW_DELAY_MS だけ遅延させる。
+  // これにより「200ms 以内に解決する一瞬の waiting」ではスピナーが見えず、
+  // 本当に長引いたときだけスピナーが出る。
+  // visible=false のときはタイマーをキャンセルし、即座に非表示。
+  const SPINNER_SHOW_DELAY_MS = 250;
   const setSpinnerVisible = useCallback((visible: boolean) => {
     const el = spinnerRef.current;
     if (!el) return;
-    el.style.display = visible ? "flex" : "none";
+    if (visible) {
+      // すでに表示要求が走っている / すでに表示済みなら何もしない
+      if (spinnerShowTimerRef.current != null) return;
+      if (el.style.display === "flex") return;
+      spinnerShowTimerRef.current = setTimeout(() => {
+        spinnerShowTimerRef.current = null;
+        const cur = spinnerRef.current;
+        if (cur) cur.style.display = "flex";
+      }, SPINNER_SHOW_DELAY_MS);
+    } else {
+      if (spinnerShowTimerRef.current != null) {
+        clearTimeout(spinnerShowTimerRef.current);
+        spinnerShowTimerRef.current = null;
+      }
+      el.style.display = "none";
+    }
   }, []);
 
   const showOverlay = useCallback((type: "play" | "pause") => {
@@ -324,6 +349,16 @@ export function useFeedPlayback({ slug, title, isActive, videoSrc, onOpenModal, 
   useEffect(() => {
     hasPlayedRef.current = false;
   }, [videoSrc]);
+
+  // アンマウント時にスピナー遅延タイマーをクリーンアップ。
+  useEffect(() => {
+    return () => {
+      if (spinnerShowTimerRef.current != null) {
+        clearTimeout(spinnerShowTimerRef.current);
+        spinnerShowTimerRef.current = null;
+      }
+    };
+  }, []);
 
   // isActive=false に切り替わったタイミングで video を停止・リセット。
   //

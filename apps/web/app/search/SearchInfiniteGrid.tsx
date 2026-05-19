@@ -86,13 +86,44 @@ async function fetchPage(
   };
 }
 
-/**
- * フィード内に差し込むネイティブ広告カード。
- * feedNative ゾーン（zoneid: 5930078）专用。
- * グリッド内に grid-column: 1/-1 で全幅展開。
- */
+/** デバッグ表示: feedNative の enabled 状態と間隔を画面に出す */
+function FeedAdDebugBanner() {
+  const enabled = isAdZoneEnabled("feedNative");
+  const interval = AD_FEED_INTERVAL;
+  return (
+    <div style={{
+      gridColumn: "1 / -1",
+      background: enabled ? "rgba(0,200,100,0.15)" : "rgba(255,50,50,0.15)",
+      border: `1px solid ${enabled ? "#0c6" : "#f44"}`,
+      borderRadius: "6px",
+      padding: "8px 12px",
+      fontSize: "11px",
+      color: enabled ? "#0f9" : "#f88",
+      fontFamily: "monospace",
+    }}>
+      feedNative: <strong>{enabled ? "ON ✅" : "OFF ❌"}</strong>
+      &nbsp;|&nbsp; interval: <strong>{interval}</strong>
+      &nbsp;|&nbsp; zone: <strong>5930078</strong>
+      &nbsp;|&nbsp; env: NEXT_PUBLIC_AD_FEED_NATIVE_ENABLED
+    </div>
+  );
+}
+
 function FeedNativeAd({ adIndex }: { adIndex: number }) {
-  if (!isAdZoneEnabled("feedNative")) return null;
+  if (!isAdZoneEnabled("feedNative")) {
+    // enabled=false でもデバッグ枠は出す（どこに差し込まれるか確認用）
+    return (
+      <div className="search-grid-ad" style={{ opacity: 0.6 }}>
+        <div style={{
+          width: "100%", padding: "12px", textAlign: "center",
+          background: "rgba(255,50,50,0.1)", border: "1px dashed #f44",
+          borderRadius: "6px", fontSize: "11px", color: "#f88", fontFamily: "monospace",
+        }}>
+          [AD SLOT #{adIndex}] feedNative=OFF &mdash; NEXT_PUBLIC_AD_FEED_NATIVE_ENABLED=true を設定してください
+        </div>
+      </div>
+    );
+  }
   return (
     <div className="search-grid-ad">
       <AdSlot
@@ -209,18 +240,19 @@ export default function SearchInfiniteGrid({
     );
   }
 
-  const feedInterval = AD_FEED_INTERVAL; // デフォルト 10、envで上書き可
-  const feedEnabled = isAdZoneEnabled("feedNative") && feedInterval > 0;
-  let adIndex = 0; // context 区別用カウンター
+  const feedInterval = AD_FEED_INTERVAL;
+  // enabled に関わらず差し込む位置を表示（デバッグ）
+  let adIndex = 0;
 
   return (
     <main className="search-main">
       {headerSlot ?? <p className="search-meta">{headingPrefix}</p>}
       <div className="search-grid">
+        {/* 最初にデバッグバナー */}
+        <FeedAdDebugBanner />
         {items.map((item, index) => {
-          // index > 0 かつ feedInterval の倍数のときに広告を振る
           const showAdBefore =
-            feedEnabled && index > 0 && index % feedInterval === 0;
+            feedInterval > 0 && index > 0 && index % feedInterval === 0;
           const currentAdIndex = showAdBefore ? adIndex++ : adIndex;
 
           return (
@@ -242,12 +274,7 @@ export default function SearchInfiniteGrid({
         })}
       </div>
       {nextOffset !== null && (
-        <div
-          ref={sentinelRef}
-          className="search-load-more"
-          role="status"
-          aria-live="polite"
-        >
+        <div ref={sentinelRef} className="search-load-more" role="status" aria-live="polite">
           <span className="search-spinner" aria-hidden="true" />
           <span className="search-load-label">
             {isLoadingMore ? "読み込み中…" : "さらに読み込みます"}
@@ -293,8 +320,6 @@ const pageCSS = `
     padding: 8px;
   }
   .search-grid > .mct { width: 100%; min-width: 0; }
-
-  /* 広告コンテナ: グリッド内全幅で占有 */
   .search-grid-ad {
     grid-column: 1 / -1;
     width: 100%;
@@ -313,7 +338,6 @@ const pageCSS = `
     max-width: 100% !important;
     box-sizing: border-box !important;
   }
-
   @media (min-width: 640px) {
     .search-grid { grid-template-columns: repeat(5, minmax(0, 1fr)); }
   }

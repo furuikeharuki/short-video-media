@@ -34,7 +34,7 @@ export default function FullpageInterstitial() {
       /* ignore */
     }
     firedRef.current = true;
-    void serveAd(cfg.provider);
+    serveAd(cfg.provider);
   }, [enabled, cfg.provider]);
 
   if (!enabled) return null;

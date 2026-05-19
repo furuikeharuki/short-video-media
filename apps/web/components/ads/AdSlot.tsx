@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { AD_ZONES, isAdZoneEnabled, type AdZoneKey } from "@/lib/ads/config";
 import { serveAd } from "./AdScriptLoader";
 
@@ -17,10 +17,12 @@ type Props = {
 /**
  * ExoClick 広告枠を 1 つ描画するクライアントコンポーネント。
  *
- * - `enabled` が false の zone は何も描画しない (DOM ごと出さない)。
- * - mount 後に provider script のロードを保証し、`AdProvider.push({serve:{}})`
- *   を呼んで該当 zone を slot に詰める。
- * - CLS 抑止のため `reservedHeight` / `reservedWidth` の最小サイズを確保する。
+ * 公式タグ:
+ *   <ins class="..." data-zoneid="..."></ins>
+ *   <script>(AdProvider=window.AdProvider||[]).push({serve:{}})</script>
+ *
+ * 上のパターン (ins を DOM に出した直後に同期 push) を踏襲し、script ロードを待たない。
+ * StrictMode の二重実行や、同 ins が既に iframe を持つケースでは push しない。
  */
 export default function AdSlot({
   zone,
@@ -30,14 +32,44 @@ export default function AdSlot({
 }: Props) {
   const cfg = AD_ZONES[zone];
   const insRef = useRef<HTMLModElement | null>(null);
+  const servedRef = useRef(false);
+  const [hasContent, setHasContent] = useState(false);
 
   useEffect(() => {
     if (!cfg.enabled) return;
-    // 同一 ins が再 mount される / strict mode の二重実行に備えて、
-    // 既に内部 iframe を持っているなら push しない。
     const el = insRef.current;
-    if (el && el.querySelector("iframe")) return;
-    void serveAd(cfg.provider);
+    if (!el) return;
+
+    // 既に iframe が入っている (HMR / 再 mount) ならスキップ。
+    if (el.querySelector("iframe")) {
+      setHasContent(true);
+      return;
+    }
+
+    // 同一 mount 内で二重 serve しないようガード (StrictMode 対策)。
+    if (servedRef.current) return;
+    servedRef.current = true;
+
+    serveAd(cfg.provider);
+
+    // 広告挿入を観測して、ラベル等の見せ方を調整する。
+    const observer = new MutationObserver(() => {
+      if (el.querySelector("iframe, ins > *, img")) {
+        setHasContent(true);
+        observer.disconnect();
+      }
+    });
+    observer.observe(el, { childList: true, subtree: true });
+
+    // 一定時間 (約 5 秒) 経っても何も入らなければ諦めて監視解除。
+    const timer = window.setTimeout(() => {
+      observer.disconnect();
+    }, 5000);
+
+    return () => {
+      observer.disconnect();
+      window.clearTimeout(timer);
+    };
   }, [cfg.enabled, cfg.provider]);
 
   if (!isAdZoneEnabled(zone)) return null;
@@ -66,7 +98,7 @@ export default function AdSlot({
       aria-label={label ?? undefined}
       role="complementary"
     >
-      {label && (
+      {label && hasContent && (
         <span
           style={{
             fontSize: 10,

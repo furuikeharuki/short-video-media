@@ -6,8 +6,11 @@
  *  - pemsrv: fullpage interstitial 用 (`https://a.pemsrv.com/ad-provider.js`)
  *
  * どちらも `window.AdProvider` という同名 (但しスクリプト的には別物) のグローバル配列を
- * 共有する設計のため、同じスクリプトの重複ロードは避ける。`AdProvider.push({serve:{}})`
- * 自体は各広告枠の mount 後に AdSlot 側から呼ぶ。
+ * 共有する設計のため、同じスクリプトの重複ロードは避ける。
+ *
+ * 公式タグは <ins> の直後に同期 push する設計のため、スクリプトのロード完了を待たずに
+ * push する。ad-provider.js は AdProvider が配列のうちはキューを溜め、ロード後に
+ * 自身の `push` 実装に差し替えて未処理 ins を走査する。
  */
 
 declare global {
@@ -23,14 +26,9 @@ const SRC: Record<Provider, string> = {
   pemsrv: "https://a.pemsrv.com/ad-provider.js",
 };
 
-const loadState: Record<Provider, "idle" | "loading" | "loaded" | "error"> = {
-  magsrv: "idle",
-  pemsrv: "idle",
-};
-
-const waiters: Record<Provider, Array<() => void>> = {
-  magsrv: [],
-  pemsrv: [],
+const scriptInjected: Record<Provider, boolean> = {
+  magsrv: false,
+  pemsrv: false,
 };
 
 function ensureGlobal(): void {
@@ -41,64 +39,41 @@ function ensureGlobal(): void {
 }
 
 /**
- * provider 用 ad-provider.js を 1 回だけロードし、ロード完了で resolve する。
- * 既にロード済みなら即 resolve。
+ * provider 用 ad-provider.js を 1 回だけ <head> に挿入する。
+ * 公式タグ同様 async でロードし、完了を待たない。
  */
-export function loadAdProvider(provider: Provider): Promise<void> {
-  if (typeof window === "undefined") return Promise.resolve();
-  ensureGlobal();
-
-  if (loadState[provider] === "loaded") return Promise.resolve();
-  if (loadState[provider] === "error") return Promise.reject(new Error("ad provider load failed"));
-
-  return new Promise<void>((resolve, reject) => {
-    waiters[provider].push(() => resolve());
-
-    if (loadState[provider] === "loading") return;
-    loadState[provider] = "loading";
-
-    const existing = document.querySelector<HTMLScriptElement>(
-      `script[data-ad-provider="${provider}"]`,
-    );
-    if (existing) {
-      // 何らかの理由で他経路から挿入済み。ロード済みとみなす。
-      loadState[provider] = "loaded";
-      const list = waiters[provider].splice(0);
-      list.forEach((fn) => fn());
-      resolve();
-      return;
-    }
-
-    const s = document.createElement("script");
-    s.async = true;
-    s.type = "application/javascript";
-    s.src = SRC[provider];
-    s.dataset.adProvider = provider;
-    s.onload = () => {
-      loadState[provider] = "loaded";
-      const list = waiters[provider].splice(0);
-      list.forEach((fn) => fn());
-    };
-    s.onerror = () => {
-      loadState[provider] = "error";
-      const _list = waiters[provider].splice(0);
-      reject(new Error("ad provider load failed"));
-    };
-    document.head.appendChild(s);
-  });
+function ensureProviderScript(provider: Provider): void {
+  if (typeof window === "undefined") return;
+  if (scriptInjected[provider]) return;
+  const existing = document.querySelector<HTMLScriptElement>(
+    `script[data-ad-provider="${provider}"]`,
+  );
+  if (existing) {
+    scriptInjected[provider] = true;
+    return;
+  }
+  const s = document.createElement("script");
+  s.async = true;
+  s.type = "application/javascript";
+  s.src = SRC[provider];
+  s.dataset.adProvider = provider;
+  document.head.appendChild(s);
+  scriptInjected[provider] = true;
 }
 
 /**
- * `AdProvider.push({ serve: {} })` を安全に呼ぶ。
- * provider script のロード完了を待ってから push する。
+ * `AdProvider.push({ serve: {} })` を公式タグ準拠で同期的に呼ぶ。
+ *
+ * 呼び出し元は <ins> を DOM に描画したあとの useEffect 内でこれを叩く。
+ * script のロード完了は待たない (待つと配列キュー差し替え後の挙動と噛み合わない)。
  */
-export async function serveAd(provider: Provider): Promise<void> {
+export function serveAd(provider: Provider): void {
   if (typeof window === "undefined") return;
+  ensureGlobal();
+  ensureProviderScript(provider);
   try {
-    await loadAdProvider(provider);
-    ensureGlobal();
     window.AdProvider!.push({ serve: {} });
   } catch {
-    // ロード失敗時は何もしない (広告ブロッカー等)
+    /* ロード失敗時等は何もしない (広告ブロッカー対策) */
   }
 }

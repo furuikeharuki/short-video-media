@@ -43,6 +43,11 @@ type Props = {
  * 5. ナビゲーション復帰 (popstate / pageshow / visibilitychange) を検知して、
  *    creative が入っていない (またはそもそも今までフィルされなかった) 枠を
  *    key bump で作り直し、合わせて provider を 1 度だけリセット要求する。
+ *
+ * 6. **hasContent は state と ref の両方で管理する**。
+ *    useEffect 内のイベントリスナーは登録時点の state 値をクロージャーに
+ *    閉じ込めるため、広告表示後に popstate / pageshow が来ると古い false を
+ *    読んで誤って bump → 広告が消える。ref 経由で常に最新値を参照する。
  */
 export default function AdSlot({
   zone,
@@ -59,6 +64,11 @@ export default function AdSlot({
   const [hasContent, setHasContent] = useState(false);
   // 現世代が no-fill で諦め済みか (display:none にはしない、最小高さで残す)。
   const [emptyGen, setEmptyGen] = useState(false);
+
+  // hasContent の ref 版。useEffect クロージャーから最新値を安全に読むために使う。
+  // state だけだと登録時点の値がクロージャーに閉じ込められ、広告表示後も false
+  // のまま読まれて誤 bump が発生する (= ホームに戻ると広告が消える)。
+  const hasContentRef = useRef(false);
 
   // 直近の世代 bump 時刻 (クールダウン用)。
   const lastBumpAtRef = useRef(0);
@@ -84,10 +94,13 @@ export default function AdSlot({
    * これは「ホームに戻った直後」など、ad-provider.js が後発 <ins> を
    * 取りこぼしている疑いが強い時にだけ使う。AdScriptLoader 側のクールダウンが
    * あるため、複数枠から同時に呼んでも 1 回しか効かない。
+   *
+   * ※ hasContent は ref 経由で読む。state をクロージャーで閉じ込めると
+   *   広告表示後も古い false を参照して誤 bump してしまう。
    */
   const requestBump = (withProviderReset: boolean) => {
     if (!enabled) return;
-    if (hasContent) return;
+    if (hasContentRef.current) return;   // ← ref で最新値を参照
     if (bumpScheduledRef.current) return;
     const now = Date.now();
     if (now - lastBumpAtRef.current < 2000) return;
@@ -125,7 +138,7 @@ export default function AdSlot({
       window.removeEventListener("pageshow", onPageShow);
       document.removeEventListener("visibilitychange", onVisibility);
     };
-    // hasContent / 各 ref はクロージャ越しに最新を読むため依存に入れない。
+    // hasContentRef は ref なので依存不要。requestBump も enabled のみ依存。
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [enabled]);
 
@@ -178,6 +191,7 @@ export default function AdSlot({
         servedThisGenRef={servedThisGenRef}
         hasEnteredViewportRef={hasEnteredViewportRef}
         onContent={() => {
+          hasContentRef.current = true;   // ← ref も同時に更新
           setHasContent(true);
           setEmptyGen(false);
         }}

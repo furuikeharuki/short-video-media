@@ -9,32 +9,40 @@ type Props = {
   className?: string;
   style?: React.CSSProperties;
   label?: string | null;
+  /**
+   * 同一ゾーンが複数コンテキスト (ページ / モーダル) で使われるとき、
+   * sessionStorage キーを分離するための識別子。
+   * 例: <AdSlot zone="native" context="modal" />
+   * デフォルトは "page"。
+   */
+  context?: string;
+  /**
+   * モーダルなど「mount された瞬間に provider をリセットして新しい <ins> を
+   * 確実に拾わせたい」ときに true にする。
+   * true の場合、mount 時に resetAndServeAd を 1 度だけ呼ぶ。
+   */
+  resetOnMount?: boolean;
 };
 
 /**
  * sessionStorage に広告の「入り済み」状態を保存/読み込みするキー。
- *
- * Next.js App Router では force-dynamic の Server Component への戻りなどで
- * コンポーネントがアンマウント→再マウントされる。React state はリセットされるため、
- * sessionStorage で「その枠にかつて広告が入ったことがある」を記憶する。
- *
- * セッション内のみ有効。タブを閉じたりリロードするとリセットされる (sessionStorage の仕様通り)。
+ * context を含めることで、同一ゾーンをページとモーダルで使い分けても衝突しない。
  */
-function makeStorageKey(zone: AdZoneKey) {
-  return `ad_slot_filled_${zone}`;
+function makeStorageKey(zone: AdZoneKey, context: string) {
+  return `ad_slot_filled_${zone}_${context}`;
 }
 
-function readWasFilled(zone: AdZoneKey): boolean {
+function readWasFilled(zone: AdZoneKey, context: string): boolean {
   try {
-    return sessionStorage.getItem(makeStorageKey(zone)) === "1";
+    return sessionStorage.getItem(makeStorageKey(zone, context)) === "1";
   } catch {
     return false;
   }
 }
 
-function writeWasFilled(zone: AdZoneKey): void {
+function writeWasFilled(zone: AdZoneKey, context: string): void {
   try {
-    sessionStorage.setItem(makeStorageKey(zone), "1");
+    sessionStorage.setItem(makeStorageKey(zone, context), "1");
   } catch { /* ignore */ }
 }
 
@@ -74,86 +82,70 @@ function writeWasFilled(zone: AdZoneKey): void {
  * 6. **広告表示済み状態を sessionStorage で永続化**。
  *    Next.js App Router でホーム (force-dynamic Server Component) に戻ると
  *    コンポーネント自体がアンマウント→再マウントされ、React state がリセット
- *    されてしまう。hasContent=false に戻るため bump 判定がトリガーされ広告が
- *    消える。sessionStorage で復元することで「前回已表示」を記憶する。
+ *    されてしまう。sessionStorage で復元することで「前回既表示」を記憶する。
+ *
+ * 7. **context prop でゾーン×コンテキストごとにキーを分離**。
+ *    同一ゾーン (native 等) を詳細ページとモーダルで同時に使う場合、
+ *    sessionStorage キーが衝突して状態が混在する。context="modal" / "page" で
+ *    それぞれ独立したキーを持つ。
+ *
+ * 8. **resetOnMount=true でモーダル open 時に provider をリセット**。
+ *    Parallel Routes のモーダルは背後のページ DOM が生きたまま <ins> が追加される。
+ *    ad-provider.js の初期スキャンは既に終わっているため、新しい <ins> を
+ *    取りこぼすことがある。resetOnMount=true を渡すことで mount 時に
+ *    resetAndServeAd を 1 度だけ呼び、未処理 <ins> を拾い直す。
  */
 export default function AdSlot({
   zone,
   className,
   style,
   label = "広告",
+  context = "page",
+  resetOnMount = false,
 }: Props) {
   const cfg = AD_ZONES[zone];
 
-  // 内側 <ins> を作り直すための世代 key。
-  // 戻る/復帰/再可視化時に bump して新しい <ins> を mount する。
   const [insKey, setInsKey] = useState(0);
-
-  // 現世代の <ins> に creative が入ったか。
-  // 初期値: sessionStorage から復元する (Server Component 再レンダリング後の再マウント対策)。
-  // SSR 時は sessionStorage にアクセスできないため false 始まりにし、
-  // useLayoutEffect でクライアント側初回レンダリング後に復元する。
   const [hasContent, setHasContent] = useState(false);
-
-  // 現世代が no-fill で諦め済みか (display:none にはしない、最小高さで残す)。
   const [emptyGen, setEmptyGen] = useState(false);
 
-  // hasContent の ref 版。useEffect クロージャーから最新値を安全に読むために使う。
-  // state だけだと登録時点の値がクロージャーに閉じ込められ、広告表示後も false のまま読まれて
-  // 誤 bump が発生する。
   const hasContentRef = useRef(false);
-
-  // 直近の世代 bump 時刻 (クールダウン用)。
   const lastBumpAtRef = useRef(0);
-  // 現世代の <ins> が既に serve 試行されたか (StrictMode 二重実行対策)。
   const servedThisGenRef = useRef(false);
-
-  // bump 要求中フラグ。短時間に複数イベントが来ても 1 回だけ bump する。
   const bumpScheduledRef = useRef(false);
-
-  // 既に viewport に入って 1 度でも serve したか。初回 serve は IntersectionObserver
-  // 経由で発火させ、それ以降の bump はイベント駆動。
   const hasEnteredViewportRef = useRef(false);
 
   const enabled = cfg.enabled;
 
   // --- 復帰処理: クライアント初回レンダリング時に sessionStorage から状態を復元 ---
-  //
-  // useLayoutEffect でやる理由: paint 前に state を確定することで、
-  // 「広告スペースが一瞬ゼロ高さで表示される」 CLS を抑制する。
-  // SSR では動かないので typeof window ガードは不要だが念のため残す。
   useLayoutEffect(() => {
     if (!enabled) return;
-    const wasFilled = readWasFilled(zone);
+    const wasFilled = readWasFilled(zone, context);
     if (wasFilled) {
-      // 前回広告表示済み。hasContent=true に戻して
-      // 予約高さのコンテナを維持し、requestBump の誤発火を抑制する。
       hasContentRef.current = true;
       setHasContent(true);
-      // 再マウント直後は <ins> がまだフレッシュなので、
-      // viewport 進入待ちから素直に serve する。
-      // provider リセットはしない: 他の AdSlot が平行して再マウントしており、
-      // ここで resetAndServeAd すると AdScriptLoader のクールダウンで
-      // "only serveAd" にダウングレードされる場合があるため。
-      // IntersectionObserver 内で serveAd を呼ぶのでここは何もしない。
     }
-  // zone/enabled 変化時に 1 度だけ実行。
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [zone, enabled]);
+  }, [zone, context, enabled]);
 
-  /**
-   * 世代 bump を要求する。
-   * - creative が既に入っているなら何もしない (張り替える必要がない)
-   * - 直近 2 秒以内に bump 済みなら何もしない
-   * - それ以外: 次フレームで insKey++ + emptyGen=false に戻す
-   *
-   * `withProviderReset=true` の場合は ad-provider.js を一度捨てて再注入する。
-   * ※ hasContent は ref 経由で読む。state をクロージャーで閉じ込めると
-   *   広告表示後も古い false を参照して誤 bump してしまう。
-   */
+  // --- resetOnMount: モーダル等で mount 直後に provider をリセット ---
+  // IntersectionObserver が viewport 進入を検知する前でも、
+  // provider を再スキャンさせることで新 <ins> を確実に拾わせる。
+  useEffect(() => {
+    if (!enabled) return;
+    if (!resetOnMount) return;
+    // 少しだけ遅延して <ins> が DOM に描画されてから呼ぶ
+    const t = window.setTimeout(() => {
+      resetAndServeAd(cfg.provider);
+    }, 100);
+    return () => window.clearTimeout(t);
+  // mount 時のみ。enabled/resetOnMount が変わることは想定しない。
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   const requestBump = (withProviderReset: boolean) => {
     if (!enabled) return;
-    if (hasContentRef.current) return;  // ref で最新値を参照
+    if (hasContentRef.current) return;
     if (bumpScheduledRef.current) return;
     const now = Date.now();
     if (now - lastBumpAtRef.current < 2000) return;
@@ -170,7 +162,6 @@ export default function AdSlot({
     });
   };
 
-  // ナビゲーション復帰系イベント。ホーム→/feed→ホームで戻ったときの拾い直しが目的。
   useEffect(() => {
     if (!enabled) return;
     const onPopState = () => requestBump(true);
@@ -238,7 +229,7 @@ export default function AdSlot({
         hasEnteredViewportRef={hasEnteredViewportRef}
         onContent={() => {
           hasContentRef.current = true;
-          writeWasFilled(zone);        // ← sessionStorage に永続化
+          writeWasFilled(zone, context);
           setHasContent(true);
           setEmptyGen(false);
         }}
@@ -253,9 +244,6 @@ export default function AdSlot({
   );
 }
 
-/**
- * 単一の <ins data-zoneid> を render するだけのサブコンポーネント。
- */
 function AdIns({
   cfg,
   servedThisGenRef,

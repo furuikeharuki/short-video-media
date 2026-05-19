@@ -53,8 +53,6 @@ export default function MovieModal({ movie }: { movie: MovieDetail }) {
   const price = movie.price_list?.sale_price ?? movie.price_list?.list_price ?? movie.price_min;
   const hasReview = movie.review_count > 0 && movie.review_average != null;
 
-  // 監督 / メーカー / レーベル / シリーズ をタップしたら検索結果一覧へ
-  // Next.js の <Link> ならインターセプトモーダルを脱出して検索ページへ遷移できる
   const fieldLink = (
     field: "director" | "maker" | "label" | "series",
     value: string,
@@ -68,8 +66,6 @@ export default function MovieModal({ movie }: { movie: MovieDetail }) {
     </Link>
   );
 
-  // 出演女優を女優詳細ページへリンク化
-  // ActressLink を使うことで sessionStorage に現在URLを記録し、女優ページの戻るで戻ってこれる
   const actressLinks = (names: string[]): React.ReactNode => (
     <>
       {names.map((n, i) => (
@@ -173,8 +169,14 @@ export default function MovieModal({ movie }: { movie: MovieDetail }) {
               />
             </div>
 
+            {/*
+              context="modal" でページの AdSlot (context="page") と
+              sessionStorage キーを分離し、状態が混在しないようにする。
+              resetOnMount=true でモーダル open 直後に provider をリセットし、
+              背後ページの DOM が生きたまま追加された新しい <ins> を確実に拾わせる。
+            */}
             <div style={adBottomStyle}>
-              <AdSlot zone="native" />
+              <AdSlot zone="native" context="modal" resetOnMount />
             </div>
           </div>
         </div>
@@ -195,7 +197,6 @@ const backdropStyle: React.CSSProperties = {
 
 const modalStyle: React.CSSProperties = {
   position: "fixed",
-  // ヘッダーの実高さにピッタリ描画させる
   top: "var(--header-h, 52px)" as unknown as string,
   left: 0,
   right: 0,

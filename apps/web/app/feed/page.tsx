@@ -1,15 +1,13 @@
 import type { Metadata } from "next";
 import FeedClient from "@/app/FeedClient";
-import ExoClickBanner, {
-  EXOCLICK_BANNER_HEIGHT,
-} from "@/components/ads/ExoClickBanner";
+import ExoClickBanner from "@/components/ads/ExoClickBanner";
 
 export const metadata: Metadata = {
   title: "ショートフィード",
   description: "AVをショート動画で試し見。気に入ったらFANZAでそのまま購入できるアダルト動画メディア。",
 };
 
-const FEED_BANNER_HEIGHT = EXOCLICK_BANNER_HEIGHT;
+const FEED_BANNER_HEIGHT = 100;
 
 export default function FeedPage() {
   const adsEnabled = process.env.NEXT_PUBLIC_ADS_ENABLED === "true";

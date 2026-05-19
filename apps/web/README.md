@@ -35,6 +35,33 @@ pnpm build
 - **計測**: `lib/analytics/analytics.ts` の `trackEvent()` を使う。GA4 + バックエンド `/api/v1/events` の二系統に同時送信される
 - **認証フロー**: Auth.js → callback で provider sub を取得 → API の `/auth/sign-in` に exchange JWT を渡して User JWT を取得 → cookie に保存
 
+## 広告 (ExoClick)
+
+ExoClick の 4 種類の zone を、独立した環境変数で ON/OFF できる形で実装している。
+全体スイッチ `NEXT_PUBLIC_ADS_ENABLED=true` と、各 zone 個別の `NEXT_PUBLIC_AD_*_ENABLED=true`
+の両方が真のときだけ DOM に出る。すべてデフォルト OFF。
+
+| zone                          | env (個別)                                            | 配置場所                                  | zoneid env                                              | デフォルト zoneid |
+|-------------------------------|--------------------------------------------------------|-------------------------------------------|---------------------------------------------------------|-------------------|
+| Native Recommendation         | `NEXT_PUBLIC_AD_NATIVE_ENABLED`                        | 作品詳細ページ下部 / 女優詳細ページ下部 | `NEXT_PUBLIC_EXOCLICK_NATIVE_ZONE_ID`                  | `5929928`         |
+| Mobile Banner 300×250         | `NEXT_PUBLIC_AD_MOBILE_BANNER_300X250_ENABLED`         | 一覧 / 検索結果に N 件ごと挟む            | `NEXT_PUBLIC_EXOCLICK_MOBILE_BANNER_300X250_ZONE_ID`   | `5929910`         |
+| Mobile Banner 300×100         | `NEXT_PUBLIC_AD_MOBILE_BANNER_300X100_ENABLED`         | ホームのセクション間 (3 セクションごと)   | `NEXT_PUBLIC_EXOCLICK_MOBILE_BANNER_300X100_ZONE_ID`   | `5929930`         |
+| Mobile Fullpage Interstitial  | `NEXT_PUBLIC_AD_FULLPAGE_INTERSTITIAL_ENABLED`         | 全ページ (A/B 用、セッション 1 回のみ)    | `NEXT_PUBLIC_EXOCLICK_FULLPAGE_INTERSTITIAL_ZONE_ID`   | `5929932`         |
+
+挿入頻度の調整:
+
+- `NEXT_PUBLIC_AD_LIST_INTERVAL` (デフォルト `6`): /list/[key] と /search 結果のグリッドで N 件ごとに 300×250 を 1 行全幅で挟む。
+- `NEXT_PUBLIC_AD_FEED_INTERVAL` (デフォルト `10`): 縦スクロール /feed 内のネイティブ広告カード用 (現状 UI/UX 保護のため未挿入の予約値)。
+
+実装ファイル:
+
+- `lib/ads/config.ts` — 環境変数の集約。
+- `components/ads/AdScriptLoader.ts` — `a.magsrv.com` / `a.pemsrv.com` の `ad-provider.js` を provider 単位で 1 回だけロード。
+- `components/ads/AdSlot.tsx` — 個別広告枠。`enabled` が false の zone は何も描画しない。CLS 抑止のため reservedHeight を確保。
+- `components/ads/FullpageInterstitial.tsx` — レイアウト最上位に置く 1 回起動の interstitial トリガー。`sessionStorage` で 1 セッション 1 回に制限。
+
+直近で revert したフィード上部固定広告は復活させていない。/feed の縦スワイプ動画体験は触らず、ホーム / 一覧 / 検索 / 詳細 / 女優ページのスクロール領域だけに広告を出す。
+
 ## デプロイ
 
 main への push で Vercel が自動デプロイ。プレビュー環境は PR ごとに自動生成。

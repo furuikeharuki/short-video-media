@@ -1,8 +1,10 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { Fragment, useCallback, useEffect, useRef, useState } from "react";
 import MovieCardThumb from "@/components/home/MovieCardThumb";
 import SimpleBackButton from "@/components/SimpleBackButton";
+import AdSlot from "@/components/ads/AdSlot";
+import { AD_LIST_INTERVAL, isAdZoneEnabled } from "@/lib/ads/config";
 import type { MovieCard } from "@/lib/api/feed";
 import { getHomeSection, type HomeSectionKey } from "@/lib/api/homeSection";
 
@@ -154,23 +156,38 @@ export default function ListClient({
         <div className="list-subheader-title" title={title}>{title}</div>
       </div>
       <div className="list-grid">
-        {items.map((item, index) => (
-          <MovieCardThumb
-            key={item.id}
-            movie={item}
-            aspect="portrait"
-            fluid
-            // ランキングセクションでも順位バッジは 100 位まで、101 件目以降はバッジなし。
-            rank={ranked && index < 100 ? index + 1 : undefined}
-            playlist={{
-              key: `list-${sectionKey}`,
-              title,
-              startIndex: index,
-              items,
-              source: { kind: "section", key: sectionKey },
-            }}
-          />
-        ))}
+        {items.map((item, index) => {
+          // AD_LIST_INTERVAL ごと (例: 6 件ごと) に 300x250 バナーを行として挟む。
+          // grid-column: 1 / -1 で 1 行全幅を占有させてレイアウトを崩さない。
+          const showAdBefore =
+            isAdZoneEnabled("mobileBanner300x250") &&
+            AD_LIST_INTERVAL > 0 &&
+            index > 0 &&
+            index % AD_LIST_INTERVAL === 0;
+          return (
+            <Fragment key={item.id}>
+              {showAdBefore && (
+                <div className="list-grid-ad">
+                  <AdSlot zone="mobileBanner300x250" />
+                </div>
+              )}
+              <MovieCardThumb
+                movie={item}
+                aspect="portrait"
+                fluid
+                // ランキングセクションでも順位バッジは 100 位まで、101 件目以降はバッジなし。
+                rank={ranked && index < 100 ? index + 1 : undefined}
+                playlist={{
+                  key: `list-${sectionKey}`,
+                  title,
+                  startIndex: index,
+                  items,
+                  source: { kind: "section", key: sectionKey },
+                }}
+              />
+            </Fragment>
+          );
+        })}
       </div>
       {/* 次ページ取得用 sentinel + ロード表示 */}
       {nextCursor && (
@@ -234,6 +251,12 @@ const pageCSS = `
     padding: 8px;
   }
   .list-grid > .mct { width: 100%; min-width: 0; }
+  .list-grid-ad {
+    grid-column: 1 / -1;
+    display: flex;
+    justify-content: center;
+    padding: 4px 0;
+  }
   @media (min-width: 640px) {
     .list-grid { grid-template-columns: repeat(5, minmax(0, 1fr)); }
   }

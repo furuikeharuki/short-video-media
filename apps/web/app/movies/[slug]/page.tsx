@@ -6,6 +6,7 @@ import AffiliateLink from "@/components/analytics/affiliate-link";
 import DetailViewTracker from "@/components/analytics/detail-view-tracker";
 import BackButton from "@/components/BackButton";
 import ActressLink from "@/components/ActressLink";
+import AdSlot from "@/components/ads/AdSlot";
 import { getMovieBySlug } from "@/lib/api/movies";
 
 const SITE_NAME = "AV Shorts";
@@ -201,6 +202,9 @@ export default async function MovieDetailPage({ params }: PageProps) {
             <div style={styles.ctaArea}>
               <AffiliateLink href={movie.affiliate_url} slug={movie.slug} title={movie.title} />
             </div>
+            <div style={styles.adBottom}>
+              <AdSlot zone="native" />
+            </div>
           </div>
         </main>
         <style>{pageCSS}</style>
@@ -284,6 +288,7 @@ const styles: Record<string, React.CSSProperties> = {
     marginBottom: '28px',
   },
   ctaArea: { display: 'flex', flexDirection: 'column' as const, gap: '12px' },
+  adBottom: { marginTop: '24px' },
 };
 
 const pageCSS = `

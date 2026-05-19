@@ -3,6 +3,7 @@ import { getHome } from "@/lib/api/home";
 import HorizontalCardRow from "@/components/home/HorizontalCardRow";
 import MovieCardThumb from "@/components/home/MovieCardThumb";
 import PullToRefresh from "@/components/home/PullToRefresh";
+import AdSlot from "@/components/ads/AdSlot";
 
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
@@ -53,9 +54,13 @@ export default async function Page() {
     );
   }
 
+  // セクション間の軽い区切りに 300x100 バナーを挟む頻度。
+  // 視聴体験を壊さないよう 3 セクションごとに 1 枚にする。
+  const SECTION_AD_EVERY = 3;
+
   return (
     <PullToRefresh className="home-main">
-      {sections.map((section) => {
+      {sections.map((section, sectionIndex) => {
         const isRanking = RANKING_KEYS.has(section.key);
         const action = {
           label: "もっと見る",
@@ -68,30 +73,40 @@ export default async function Page() {
           ? { kind: "section" as const, key: "genre", genre: section.genre }
           : { kind: "section" as const, key: section.key };
 
+        const showAdAfter =
+          sectionIndex < sections.length - 1 &&
+          (sectionIndex + 1) % SECTION_AD_EVERY === 0;
+
         return (
-          <HorizontalCardRow
-            key={section.key}
-            title={section.title}
-            subtitle={section.subtitle}
-            action={action}
-          >
-            {section.items.map((m, i) => (
-              <MovieCardThumb
-                key={m.id}
-                movie={m}
-                aspect="portrait"
-                // ランキングセクションでも順位バッジは 100 位まで。
-                rank={isRanking && i < 100 ? i + 1 : undefined}
-                playlist={{
-                  key: playlistKey,
-                  title: section.title,
-                  startIndex: i,
-                  items: section.items,
-                  source: playlistSource,
-                }}
-              />
-            ))}
-          </HorizontalCardRow>
+          <div key={section.key}>
+            <HorizontalCardRow
+              title={section.title}
+              subtitle={section.subtitle}
+              action={action}
+            >
+              {section.items.map((m, i) => (
+                <MovieCardThumb
+                  key={m.id}
+                  movie={m}
+                  aspect="portrait"
+                  // ランキングセクションでも順位バッジは 100 位まで。
+                  rank={isRanking && i < 100 ? i + 1 : undefined}
+                  playlist={{
+                    key: playlistKey,
+                    title: section.title,
+                    startIndex: i,
+                    items: section.items,
+                    source: playlistSource,
+                  }}
+                />
+              ))}
+            </HorizontalCardRow>
+            {showAdAfter && (
+              <div className="home-section-ad">
+                <AdSlot zone="mobileBanner300x100" />
+              </div>
+            )}
+          </div>
         );
       })}
 
@@ -118,6 +133,11 @@ const pageStyles = `
     color: #fff;
   }
   .home-footer-spacer { height: 24px; }
+  .home-section-ad {
+    padding: 12px 8px;
+    display: flex;
+    justify-content: center;
+  }
   .home-empty, .home-error {
     padding: 80px 20px;
     text-align: center;

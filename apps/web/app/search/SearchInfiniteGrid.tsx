@@ -1,7 +1,9 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { Fragment, useCallback, useEffect, useRef, useState } from "react";
 import MovieCardThumb from "@/components/home/MovieCardThumb";
+import AdSlot from "@/components/ads/AdSlot";
+import { AD_LIST_INTERVAL, isAdZoneEnabled } from "@/lib/ads/config";
 import type { MovieCard } from "@/lib/api/feed";
 import { getFeed } from "@/lib/api/feed";
 import {
@@ -232,20 +234,34 @@ export default function SearchInfiniteGrid({
     <main className="search-main">
       {headerSlot ?? <p className="search-meta">{headingPrefix}</p>}
       <div className="search-grid">
-        {items.map((item, index) => (
-          <MovieCardThumb
-            key={item.id}
-            movie={item}
-            aspect="portrait"
-            fluid
-            playlist={{
-              key: `${playlistKey}-${item.id}`,
-              title: playlistTitle,
-              startIndex: index,
-              items,
-            }}
-          />
-        ))}
+        {items.map((item, index) => {
+          // AD_LIST_INTERVAL ごとに 300x250 バナーを 1 行全幅で挟む。
+          const showAdBefore =
+            isAdZoneEnabled("mobileBanner300x250") &&
+            AD_LIST_INTERVAL > 0 &&
+            index > 0 &&
+            index % AD_LIST_INTERVAL === 0;
+          return (
+            <Fragment key={item.id}>
+              {showAdBefore && (
+                <div className="search-grid-ad">
+                  <AdSlot zone="mobileBanner300x250" />
+                </div>
+              )}
+              <MovieCardThumb
+                movie={item}
+                aspect="portrait"
+                fluid
+                playlist={{
+                  key: `${playlistKey}-${item.id}`,
+                  title: playlistTitle,
+                  startIndex: index,
+                  items,
+                }}
+              />
+            </Fragment>
+          );
+        })}
       </div>
       {nextOffset !== null && (
         <div
@@ -299,6 +315,12 @@ const pageCSS = `
     padding: 8px;
   }
   .search-grid > .mct { width: 100%; min-width: 0; }
+  .search-grid-ad {
+    grid-column: 1 / -1;
+    display: flex;
+    justify-content: center;
+    padding: 4px 0;
+  }
   @media (min-width: 640px) {
     .search-grid { grid-template-columns: repeat(5, minmax(0, 1fr)); }
   }

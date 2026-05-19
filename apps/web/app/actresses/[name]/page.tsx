@@ -3,6 +3,7 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 
 import ActressBackButton from "@/components/ActressBackButton";
+import AdSlot from "@/components/ads/AdSlot";
 import { getActressByName } from "@/lib/api/actresses";
 import HorizontalCardRow from "@/components/home/HorizontalCardRow";
 import MovieCardThumb from "@/components/home/MovieCardThumb";
@@ -282,6 +283,10 @@ export default async function ActressDetailPage({ params }: PageProps) {
             </div>
           </section>
         )}
+
+        <div style={{ margin: "16px 0 8px" }}>
+          <AdSlot zone="native" />
+        </div>
       </div>
       <style>{pageCSS}</style>
     </main>

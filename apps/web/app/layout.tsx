@@ -3,6 +3,7 @@ import Header from "@/components/Header";
 import BottomNav from "@/components/BottomNav";
 import SessionProvider from "@/components/SessionProvider";
 import SavedFilterEnforcer from "@/components/SavedFilterEnforcer";
+import FullpageInterstitial from "@/components/ads/FullpageInterstitial";
 import "./globals.css";
 
 const SITE_NAME = "AV Shorts";
@@ -102,6 +103,10 @@ export default function RootLayout({
             {children}
             {modal}
             <BottomNav />
+            {/* Mobile Fullpage Interstitial (ExoClick). NEXT_PUBLIC_AD_FULLPAGE_INTERSTITIAL_ENABLED
+                かつ全体スイッチが ON のときだけ動く。デフォルト OFF。
+                セッション中 1 回だけ provider に serve を依頼する。 */}
+            <FullpageInterstitial />
           </SavedFilterEnforcer>
         </SessionProvider>
       </body>

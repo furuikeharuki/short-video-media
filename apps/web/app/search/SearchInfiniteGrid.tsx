@@ -3,7 +3,7 @@
 import { Fragment, useCallback, useEffect, useRef, useState } from "react";
 import MovieCardThumb from "@/components/home/MovieCardThumb";
 import AdSlot from "@/components/ads/AdSlot";
-import { AD_FEED_INTERVAL, isAdZoneEnabled } from "@/lib/ads/config";
+import { AD_LIST_INTERVAL, isAdZoneEnabled } from "@/lib/ads/config";
 import type { MovieCard } from "@/lib/api/feed";
 import { getFeed } from "@/lib/api/feed";
 import {
@@ -86,43 +86,9 @@ async function fetchPage(
   };
 }
 
-/** デバッグ表示: feedNative の enabled 状態と間隔を画面に出す */
-function FeedAdDebugBanner() {
-  const enabled = isAdZoneEnabled("feedNative");
-  const interval = AD_FEED_INTERVAL;
-  return (
-    <div style={{
-      gridColumn: "1 / -1",
-      background: enabled ? "rgba(0,200,100,0.15)" : "rgba(255,50,50,0.15)",
-      border: `1px solid ${enabled ? "#0c6" : "#f44"}`,
-      borderRadius: "6px",
-      padding: "8px 12px",
-      fontSize: "11px",
-      color: enabled ? "#0f9" : "#f88",
-      fontFamily: "monospace",
-    }}>
-      feedNative: <strong>{enabled ? "ON ✅" : "OFF ❌"}</strong>
-      &nbsp;|&nbsp; interval: <strong>{interval}</strong>
-      &nbsp;|&nbsp; zone: <strong>5930078</strong>
-      &nbsp;|&nbsp; env: NEXT_PUBLIC_AD_FEED_NATIVE_ENABLED
-    </div>
-  );
-}
-
 function FeedNativeAd({ adIndex }: { adIndex: number }) {
   if (!isAdZoneEnabled("feedNative")) {
-    // enabled=false でもデバッグ枠は出す（どこに差し込まれるか確認用）
-    return (
-      <div className="search-grid-ad" style={{ opacity: 0.6 }}>
-        <div style={{
-          width: "100%", padding: "12px", textAlign: "center",
-          background: "rgba(255,50,50,0.1)", border: "1px dashed #f44",
-          borderRadius: "6px", fontSize: "11px", color: "#f88", fontFamily: "monospace",
-        }}>
-          [AD SLOT #{adIndex}] feedNative=OFF &mdash; NEXT_PUBLIC_AD_FEED_NATIVE_ENABLED=true を設定してください
-        </div>
-      </div>
-    );
+    return null;
   }
   return (
     <div className="search-grid-ad">
@@ -240,19 +206,16 @@ export default function SearchInfiniteGrid({
     );
   }
 
-  const feedInterval = AD_FEED_INTERVAL;
-  // enabled に関わらず差し込む位置を表示（デバッグ）
+  const listInterval = AD_LIST_INTERVAL;
   let adIndex = 0;
 
   return (
     <main className="search-main">
       {headerSlot ?? <p className="search-meta">{headingPrefix}</p>}
       <div className="search-grid">
-        {/* 最初にデバッグバナー */}
-        <FeedAdDebugBanner />
         {items.map((item, index) => {
           const showAdBefore =
-            feedInterval > 0 && index > 0 && index % feedInterval === 0;
+            listInterval > 0 && index > 0 && index % listInterval === 0;
           const currentAdIndex = showAdBefore ? adIndex++ : adIndex;
 
           return (

@@ -436,11 +436,20 @@ const styles = `
     width: 100%;
     overflow: hidden;
     touch-action: pan-y;
+    /* コンテンツが空 / 少ない場合でも、画面下の余白まで横スワイプを拾えるよう
+       常にビューポート相当の高さを確保する。
+       100dvh からヘッダー / ボトムナビ / タブバー (約 44px) を差し引く。 */
+    min-height: calc(
+      100dvh
+      - var(--header-h, 52px)
+      - var(--bottom-nav-h, 56px)
+      - 44px
+    );
   }
   .mypage-swipe-track {
     display: flex;
     width: 100%;
-    align-items: flex-start;
+    align-items: stretch;
     transition: transform 0.22s cubic-bezier(0.2, 0.7, 0.2, 1);
     will-change: transform;
   }
@@ -462,6 +471,14 @@ const styles = `
   .mypage-swipe-pane.is-dragging {
     max-height: none;
     overflow: visible;
+    /* 空状態やコンテンツが少ない場合でも、ペイン自体が画面下まで広がり
+       その範囲全体でスワイプを受け付けるようにする。 */
+    min-height: calc(
+      100dvh
+      - var(--header-h, 52px)
+      - var(--bottom-nav-h, 56px)
+      - 44px
+    );
   }
 
   .mypage-empty {

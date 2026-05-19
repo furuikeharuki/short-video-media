@@ -16,21 +16,35 @@ const RAPID_SETTLE_MS = 350;
 
 type FeedSlide =
   | { kind: "video"; movie: MovieCard; videoIndex: number }
-  | { kind: "ad"; adIndex: number };
+  | { kind: "ad"; adIndex: number; key: string };
 
-function buildSlides(movies: MovieCard[], interval: number, adEnabled: boolean): FeedSlide[] {
-  if (!adEnabled || interval <= 0) {
-    return movies.map((m, i) => ({ kind: "video", movie: m, videoIndex: i }));
-  }
-  const slides: FeedSlide[] = [];
-  let adIndex = 0;
-  movies.forEach((m, i) => {
-    slides.push({ kind: "video", movie: m, videoIndex: i });
-    if ((i + 1) % interval === 0 && i < movies.length - 1) {
-      slides.push({ kind: "ad", adIndex: adIndex++ });
+/**
+ * 新しく追加された movies だけを slides に追記する。
+ * 全再計算しないので広告位置がズれない。
+ */
+function appendSlides(
+  prev: FeedSlide[],
+  newMovies: MovieCard[],
+  interval: number,
+  adEnabled: boolean,
+): FeedSlide[] {
+  if (newMovies.length === 0) return prev;
+
+  // 既存の動画数・広告数を計算
+  let videoCount = prev.filter(s => s.kind === "video").length;
+  let adCount    = prev.filter(s => s.kind === "ad").length;
+
+  const added: FeedSlide[] = [];
+  for (const movie of newMovies) {
+    added.push({ kind: "video", movie, videoIndex: videoCount });
+    videoCount++;
+    // adEnabled かつ interval の倍数に達したら広告を挿入
+    if (adEnabled && interval > 0 && videoCount % interval === 0) {
+      added.push({ kind: "ad", adIndex: adCount, key: `ad-${adCount}` });
+      adCount++;
     }
-  });
-  return slides;
+  }
+  return [...prev, ...added];
 }
 
 interface Props {
@@ -58,6 +72,9 @@ export default function FeedViewer({
   const [windowSlides, setWindowSlides] = useState<FeedSlide[]>([]);
   const windowStartRef = useRef(0);
 
+  // 前回の items 長さを記憶して追記分だけ処理する
+  const prevItemsLenRef = useRef(0);
+
   const [isRapidSwiping, setIsRapidSwiping] = useState(false);
   const lastIndexChangeRef = useRef(0);
   const rapidSettleTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -73,7 +90,7 @@ export default function FeedViewer({
     isRapidSwiping,
   );
 
-  const [dragPx,         setDragPx]       = useState(0);
+  const [dragPx, setDragPx] = useState(0);
   const dragStartY       = useRef(0);
   const dragStartYForEnd = useRef(0);
   const dragStartTime    = useRef(0);
@@ -114,25 +131,33 @@ export default function FeedViewer({
 
   const didInitRef = useRef(false);
   useEffect(() => {
-    const newSlides = buildSlides(items, AD_FEED_INTERVAL, adEnabled);
-    setSlides(newSlides);
-    if (didInitRef.current) {
-      const clamped = Math.min(currentIdxRef.current, Math.max(0, newSlides.length - 1));
-      if (clamped !== currentIdxRef.current) {
-        currentIdxRef.current = clamped;
-        setCurrentIndex(clamped);
+    if (!didInitRef.current) {
+      // 初回マウント
+      didInitRef.current = true;
+      prevItemsLenRef.current = items.length;
+      const newSlides = appendSlides([], items, AD_FEED_INTERVAL, adEnabled);
+      setSlides(newSlides);
+      const startIdx = 0;
+      currentIdxRef.current = startIdx;
+      setCurrentIndex(startIdx);
+      updateWindow(startIdx, newSlides);
+      if (newSlides.length > 0 && items.length - startIdx <= 5) {
+        onNearEnd?.(startIdx);
       }
-      updateWindow(clamped, newSlides);
       return;
     }
-    didInitRef.current = true;
-    const startIdx = 0;
-    currentIdxRef.current = startIdx;
-    setCurrentIndex(startIdx);
-    updateWindow(startIdx, newSlides);
-    if (newSlides.length > 0 && newSlides.length - startIdx <= 5) {
-      onNearEnd?.(startIdx);
-    }
+    // 2回目以降: 追記分のみ追加
+    const prevLen = prevItemsLenRef.current;
+    if (items.length <= prevLen) return; // 変化なし
+    prevItemsLenRef.current = items.length;
+    const newMovies = items.slice(prevLen);
+    setSlides((prev) => {
+      const next = appendSlides(prev, newMovies, AD_FEED_INTERVAL, adEnabled);
+      // window も更新
+      const clamped = Math.min(currentIdxRef.current, next.length - 1);
+      updateWindow(clamped, next);
+      return next;
+    });
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [items]);
 
@@ -169,10 +194,9 @@ export default function FeedViewer({
     if (!el) return;
     const onTouchStart = (e: TouchEvent) => {
       if (modalOpenRef.current) return;
-      const y = e.touches[0].clientY;
       isDragging.current = true;
-      dragStartY.current = y;
-      dragStartYForEnd.current = y;
+      dragStartY.current = e.touches[0].clientY;
+      dragStartYForEnd.current = e.touches[0].clientY;
       dragStartTime.current = Date.now();
       setDragPx(0);
     };
@@ -180,14 +204,10 @@ export default function FeedViewer({
       if (modalOpenRef.current) return;
       e.preventDefault();
       if (!isDragging.current) return;
-      const dy   = e.touches[0].clientY - dragStartY.current;
+      const dy    = e.touches[0].clientY - dragStartY.current;
       const atEnd = currentIdxRef.current >= slides.length - 1;
       const atTop = currentIdxRef.current <= 0;
-      if ((dy > 0 && atTop) || (dy < 0 && atEnd)) {
-        setDragPx(dy * 0.35);
-      } else {
-        setDragPx(dy);
-      }
+      setDragPx((dy > 0 && atTop) || (dy < 0 && atEnd) ? dy * 0.35 : dy);
     };
     const onTouchEnd = (e: TouchEvent) => {
       if (modalOpenRef.current) { isDragging.current = false; return; }
@@ -196,9 +216,7 @@ export default function FeedViewer({
       setDragPx(0);
       const dy = e.changedTouches[0].clientY - dragStartYForEnd.current;
       const dt = Date.now() - dragStartTime.current;
-      if (Math.abs(dy) > 60 && dt < 1000) {
-        if (dy < 0) goNext(); else goPrev();
-      }
+      if (Math.abs(dy) > 60 && dt < 1000) { if (dy < 0) goNext(); else goPrev(); }
     };
     const onTouchCancel = () => { isDragging.current = false; setDragPx(0); };
     const onWheel = (e: WheelEvent) => {
@@ -223,8 +241,6 @@ export default function FeedViewer({
     };
   }, [goNext, goPrev, slides]);
 
-  const isDraggingState = dragPx !== 0;
-
   return (
     <div ref={containerRef} className="feed-container">
       {prefetchSlots.map((slot) => (
@@ -241,12 +257,12 @@ export default function FeedViewer({
         const offset   = absIndex - currentIndex;
         const isActive = offset === 0;
         const transform  = `translateY(calc(${offset * 100}% + ${dragPx}px))`;
-        const transition = isDraggingState ? "none" : "transform 0.35s cubic-bezier(0.25,1,0.5,1)";
+        const transition = dragPx !== 0 ? "none" : "transform 0.35s cubic-bezier(0.25,1,0.5,1)";
 
         if (slide.kind === "ad") {
           return (
             <div
-              key={`ad-${slide.adIndex}`}
+              key={slide.key}
               className="feed-slide"
               style={{ transform, transition, zIndex: isActive ? 2 : 1, pointerEvents: isActive ? "auto" : "none" }}
             >

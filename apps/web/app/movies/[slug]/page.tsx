@@ -83,9 +83,6 @@ export default async function MovieDetailPage({ params }: PageProps) {
       </Link>
     );
 
-    // 出演女優を女優詳細ページへリンク化
-    // ActressLink を使うことで、クリック時に現在の動画詳細URLをsessionStorageに保存し、
-    // 女優詳細ページの戻るボタンで確実にこの動画詳細ページに戻れるようにする。
     const actressLinks = (names: string[]): React.ReactNode => (
       <>
         {names.map((n, i) => (
@@ -100,14 +97,14 @@ export default async function MovieDetailPage({ params }: PageProps) {
     );
 
     const metaRows: { label: string; value: React.ReactNode }[] = [
-      { label: "出演",       value: movie.actresses.length > 0 ? actressLinks(movie.actresses) : NA },
-      { label: "シリーズ",   value: movie.series_name ? fieldLink("series", movie.series_name) : NA },
-      { label: "監督",       value: movie.director_name ? fieldLink("director", movie.director_name) : NA },
-      { label: "メーカー",   value: movie.maker_name ? fieldLink("maker", movie.maker_name) : NA },
-      { label: "レーベル",   value: movie.label_name ? fieldLink("label", movie.label_name) : NA },
-      { label: "収録時間",   value: movie.volume != null ? `${movie.volume}分` : NA },
-      { label: "配信開始日", value: formatDate(movie.delivery_date) },
-      { label: "商品発売日", value: formatDate(movie.release_date) },
+      { label: "出演",         value: movie.actresses.length > 0 ? actressLinks(movie.actresses) : NA },
+      { label: "シリーズ",     value: movie.series_name ? fieldLink("series", movie.series_name) : NA },
+      { label: "監督",         value: movie.director_name ? fieldLink("director", movie.director_name) : NA },
+      { label: "メーカー",     value: movie.maker_name ? fieldLink("maker", movie.maker_name) : NA },
+      { label: "レーベル",     value: movie.label_name ? fieldLink("label", movie.label_name) : NA },
+      { label: "収録時間",     value: movie.volume != null ? `${movie.volume}分` : NA },
+      { label: "配信開始日",   value: formatDate(movie.delivery_date) },
+      { label: "商品発売日",   value: formatDate(movie.release_date) },
       { label: "メーカー品番", value: movie.maker_product ?? NA },
     ];
 
@@ -144,66 +141,69 @@ export default async function MovieDetailPage({ params }: PageProps) {
         <main style={styles.main}>
           <DetailViewTracker slug={movie.slug} title={movie.title} />
 
-          <div style={styles.heroWrap}>
-            <img
-              src={imgSrc}
-              alt={`${movie.title} サムネイル`}
-              aria-hidden="true"
-              style={styles.heroBgBlur}
-            />
-            <img
-              src={imgSrc}
-              alt={`${movie.title}${movie.actresses.length > 0 ? ` - ${movie.actresses.join("・")}` : ""}`}
-              style={styles.heroImg}
-              width={720}
-              height={1280}
-              loading="eager"
-            />
-            <BackButton resumeFeedUnmuted />
-          </div>
-
-          <div style={styles.content}>
-            <div style={styles.genreList}>
-              {movie.genres.map((g) => (
-                <span key={g} style={styles.badge}>{g}</span>
-              ))}
+          {/* PC では中央カラムに収める */}
+          <div style={styles.pageInner}>
+            <div style={styles.heroWrap}>
+              <img
+                src={imgSrc}
+                alt={`${movie.title} サムネイル`}
+                aria-hidden="true"
+                style={styles.heroBgBlur}
+              />
+              <img
+                src={imgSrc}
+                alt={`${movie.title}${movie.actresses.length > 0 ? ` - ${movie.actresses.join("・")}` : ""}`}
+                style={styles.heroImg}
+                width={720}
+                height={1280}
+                loading="eager"
+              />
+              <BackButton resumeFeedUnmuted />
             </div>
-            <h1 style={styles.title}>{movie.title}</h1>
 
-            <div style={styles.scoreArea}>
-              {hasReview && (
-                <div style={styles.scoreItem}>
-                  <span style={styles.stars}>
-                    {"★".repeat(Math.round(movie.review_average!))}
-                    {"☆".repeat(5 - Math.round(movie.review_average!))}
-                  </span>
-                  <span style={styles.reviewNum}>
-                    {movie.review_average!.toFixed(1)} ({movie.review_count}件)
-                  </span>
-                </div>
+            <div style={styles.content}>
+              <div style={styles.genreList}>
+                {movie.genres.map((g) => (
+                  <span key={g} style={styles.badge}>{g}</span>
+                ))}
+              </div>
+              <h1 style={styles.title}>{movie.title}</h1>
+
+              <div style={styles.scoreArea}>
+                {hasReview && (
+                  <div style={styles.scoreItem}>
+                    <span style={styles.stars}>
+                      {"★".repeat(Math.round(movie.review_average!))}
+                      {"☆".repeat(5 - Math.round(movie.review_average!))}
+                    </span>
+                    <span style={styles.reviewNum}>
+                      {movie.review_average!.toFixed(1)} ({movie.review_count}件)
+                    </span>
+                  </div>
+                )}
+                {price != null && (
+                  <div style={styles.price}>¥{price.toLocaleString()}</div>
+                )}
+              </div>
+
+              <div style={styles.metaTable}>
+                {metaRows.map(({ label, value }) => (
+                  <div key={label} style={styles.metaRow}>
+                    <span style={styles.metaLabel}>{label}</span>
+                    <span style={styles.metaValue}>{value}</span>
+                  </div>
+                ))}
+              </div>
+
+              {movie.description && (
+                <p style={styles.description}>{movie.description}</p>
               )}
-              {price != null && (
-                <div style={styles.price}>¥{price.toLocaleString()}</div>
-              )}
-            </div>
-
-            <div style={styles.metaTable}>
-              {metaRows.map(({ label, value }) => (
-                <div key={label} style={styles.metaRow}>
-                  <span style={styles.metaLabel}>{label}</span>
-                  <span style={styles.metaValue}>{value}</span>
-                </div>
-              ))}
-            </div>
-
-            {movie.description && (
-              <p style={styles.description}>{movie.description}</p>
-            )}
-            <div style={styles.ctaArea}>
-              <AffiliateLink href={movie.affiliate_url} slug={movie.slug} title={movie.title} />
-            </div>
-            <div style={styles.adBottom}>
-              <AdSlot zone="native" />
+              <div style={styles.ctaArea}>
+                <AffiliateLink href={movie.affiliate_url} slug={movie.slug} title={movie.title} />
+              </div>
+              <div style={styles.adBottom}>
+                <AdSlot zone="native" />
+              </div>
             </div>
           </div>
         </main>
@@ -219,13 +219,22 @@ export default async function MovieDetailPage({ params }: PageProps) {
 const styles: Record<string, React.CSSProperties> = {
   main: {
     position: 'fixed' as const,
-    // ヘッダーの実高さにピッタリ描画させる
     top: 'var(--header-h, 52px)' as unknown as string,
     left: 0, right: 0, bottom: 0,
     overflowY: 'auto' as const,
+    overflowX: 'hidden' as const, // はみ出し防止
     background: '#0a0a0a',
     color: '#fff',
     fontFamily: "-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif",
+  },
+  // PC でコンテンツを中央カラムに収めるラッパー
+  pageInner: {
+    width: '100%',
+    maxWidth: '640px',
+    marginLeft: 'auto',
+    marginRight: 'auto',
+    boxSizing: 'border-box' as const,
+    overflowX: 'hidden' as const,
   },
   heroWrap: {
     position: 'relative', width: '100%', height: '55svh' as unknown as string,
@@ -247,6 +256,7 @@ const styles: Record<string, React.CSSProperties> = {
     paddingBottom: 'calc(env(safe-area-inset-bottom, 0px) + 24px)' as unknown as string,
     width: '100%',
     boxSizing: 'border-box' as const,
+    overflowX: 'hidden' as const,
   },
   genreList: { display: 'flex', flexWrap: 'wrap', gap: '6px', marginBottom: '14px' },
   badge: {
@@ -288,7 +298,14 @@ const styles: Record<string, React.CSSProperties> = {
     marginBottom: '28px',
   },
   ctaArea: { display: 'flex', flexDirection: 'column' as const, gap: '12px' },
-  adBottom: { marginTop: '24px' },
+  adBottom: {
+    marginTop: '24px',
+    // 広告コンテナ自体もはみ出し防止
+    width: '100%',
+    maxWidth: '100%',
+    overflow: 'hidden',
+    boxSizing: 'border-box' as const,
+  },
 };
 
 const pageCSS = `
@@ -297,6 +314,14 @@ const pageCSS = `
     background: #0a0a0a !important;
     overflow: visible !important;
     height: auto !important;
+  }
+  /* 広告の ins / iframe が親を突き破らないように封じる */
+  .ad-slot ins,
+  .ad-slot iframe,
+  .ad-slot img {
+    max-width: 100% !important;
+    width: 100% !important;
+    box-sizing: border-box !important;
   }
   .affiliate-btn {
     display: flex; align-items: center; justify-content: center;

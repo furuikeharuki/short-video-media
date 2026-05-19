@@ -1,6 +1,6 @@
 import logging
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from pydantic import BaseModel
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -46,13 +46,14 @@ class ResolveMp4Response(BaseModel):
 @router.get("/movies/{slug}/resolve-mp4", response_model=ResolveMp4Response)
 async def resolve_mp4(
     slug: str,
+    request: Request,
     force: bool = Query(
         False,
         description="True なら DB キャッシュを無視して resolver を呼んで更新する。"
         "web 側で <video> がエラーになったリトライ時に true を使う。",
     ),
     db: AsyncSession = Depends(get_db),
-) -> ResolveMp4Response:
+) -> ResolveMp4Response | Response:
     """作品スラグに対して、実際に再生可能な MP4 URL を返す。
 
     - force=false (デフォルト): DB の sample_movie_url を返す。空なら resolver を呼ぶ。
@@ -83,6 +84,14 @@ async def resolve_mp4(
         raise HTTPException(
             status_code=404, detail="content_id missing for this movie"
         )
+
+    # client が既に abort していれば (スクロールで対象外になる、prefetch キャンセル、タブを閉じた等)、
+    # resolver を起動せずに 499 で即返して resolver VPS のリソースを節約する。
+    # これをしないと、クライアントがキャンセルした prefetch でも Playwright 抽出が走って
+    # concurrency 枠を埋めるため、本当に見ているスライドの resolver がキューの末尾に回る。
+    # 499 = nginx 互換の「client closed request」。
+    if await request.is_disconnected():
+        return Response(status_code=499)
 
     # resolver を呼ぶ。エラーは resolver 側のステータスを透過させる。
     # force=true のときは resolver_client 側の短期キャッシュもスキップして

@@ -40,6 +40,11 @@ import { invalidateSampleUrl, resolveMp4Url } from "@/lib/api/resolve-mp4";
 // PREFETCH_AHEAD=2 = 「次の次」 (隣接スライドは中央±1 なので +2 が次に中央になるスライド)。
 const PREFETCH_AHEAD = 2;
 
+// スクロール停止デバウンス: resolve 経路 (sample_movie_url を持たない slug) だけに適用。
+// usePrefetchResolveMp4 と同じく 400ms。sample_movie_url を既に持っている slot は
+// API を叩かないので、即時 slot 化する (= スワイプ即応性は維持)。
+const RESOLVE_DEBOUNCE_MS = 400;
+
 interface PrefetchSlot {
   /** key 用。MovieCard.id をそのまま使う */
   id: string;
@@ -110,29 +115,37 @@ export function usePrefetchVideoBytes(
       }
     }
 
-    // sample_movie_url を持たないスライドは resolve してから slot に追加
-    for (const item of toResolve) {
-      if (inFlight.has(item.slug)) continue;
-      const controller = new AbortController();
-      inFlight.set(item.slug, controller);
-      void resolveMp4Url(item.slug, { signal: controller.signal })
-        .then((res) => {
-          if (controller.signal.aborted) return;
-          if (!res?.mp4_url) return;
-          setSlots((prev) => {
-            if (prev.some((s) => s.id === item.id)) return prev;
-            return [
-              ...prev,
-              { id: item.id, slug: item.slug, src: res.mp4_url },
-            ];
+    // sample_movie_url を持たないスライドは resolve してから slot に追加。
+    // ただし 20 枚一気スクロール時に大量の resolve を resolver VPS にキューイングしないよう、
+    // currentIndex が RESOLVE_DEBOUNCE_MS の間変わらなかったタイミングでようやく発火する。
+    const timer = setTimeout(() => {
+      for (const item of toResolve) {
+        if (inFlight.has(item.slug)) continue;
+        const controller = new AbortController();
+        inFlight.set(item.slug, controller);
+        void resolveMp4Url(item.slug, { signal: controller.signal })
+          .then((res) => {
+            if (controller.signal.aborted) return;
+            if (!res?.mp4_url) return;
+            setSlots((prev) => {
+              if (prev.some((s) => s.id === item.id)) return prev;
+              return [
+                ...prev,
+                { id: item.id, slug: item.slug, src: res.mp4_url },
+              ];
+            });
+          })
+          .finally(() => {
+            if (inFlight.get(item.slug) === controller) {
+              inFlight.delete(item.slug);
+            }
           });
-        })
-        .finally(() => {
-          if (inFlight.get(item.slug) === controller) {
-            inFlight.delete(item.slug);
-          }
-        });
-    }
+      }
+    }, RESOLVE_DEBOUNCE_MS);
+
+    return () => {
+      clearTimeout(timer);
+    };
   }, [items, currentIndex]);
 
   // アンマウント時に全 resolve を abort

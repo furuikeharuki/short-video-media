@@ -83,6 +83,11 @@ export function useFeedPlayback({ slug, title, isActive, videoSrc, onOpenModal, 
   const isActiveRef  = useRef(false);
 
   const isPlayingRef             = useRef(false);
+  // この <video> インスタンスで一度でも playing イベントが発火したかどうか。
+  // 「一度でも再生が始まったら、その後の loadstart でサムネ (shimmer) を出さない」ロジックに使う。
+  // ループ再生や force リトライなどで loadstart が再発火したときにサムネが一瞬見えてしまうのを防ぐ。
+  // videoSrc が変わったとき (= 新しい作品に切り替わったとき) はリセット。
+  const hasPlayedRef             = useRef(false);
   const isMutedRef               = useRef(globalIsMuted);
   const tapTimerRef              = useRef<ReturnType<typeof setTimeout> | null>(null);
   const tapCountRef              = useRef(0);
@@ -142,7 +147,13 @@ export function useFeedPlayback({ slug, title, isActive, videoSrc, onOpenModal, 
   // 消される (人間には見えない)。
   // 初回ロード遅延 (プリフェッチ未ヒットや低速回線) のケースは loadstart と
   // loadedmetadata の間に間隔があるため、サムネが表示されて黒画面を防ぐ。
+  //
+  // 一度でも playing イベントが発火した後 (hasPlayedRef=true) は、再生中の
+  // バッファ不足やループ再生 / force リトライなどで loadstart が再発火したとしても
+  // サムネを出さずスピナーのみ表示する (スピナーは waiting/stalled イベントで制御)。
+  // これにより「再生中にサムネが一瞬見える」チラつきを防ぐ。
   const setShimmerVisible = useCallback((visible: boolean) => {
+    if (visible && hasPlayedRef.current) return;
     const shimmer = shimmerRef.current;
     if (shimmer) shimmer.style.display = visible ? "block" : "none";
   }, []);
@@ -308,6 +319,12 @@ export function useFeedPlayback({ slug, title, isActive, videoSrc, onOpenModal, 
     playVideo(video, false);
   }, [isActive, videoSrc, playVideo]);
 
+  // videoSrc が変わったとき (新しい <video> と同じだが src だけ差し替わったときも含む) は
+  // hasPlayedRef を false にリセットして、初回ロード (loadstart) ではサムネを出せるようにする。
+  useEffect(() => {
+    hasPlayedRef.current = false;
+  }, [videoSrc]);
+
   // isActive=false に切り替わったタイミングで video を停止・リセット。
   //
   // 隣接スライド (isAdjacent) では <video> がマウントされたまま以下の状態になる:
@@ -428,6 +445,10 @@ export function useFeedPlayback({ slug, title, isActive, videoSrc, onOpenModal, 
       setSpinnerVisible(true);
     };
     const handlePlaying = () => {
+      hasPlayedRef.current = true;
+      // 万一、起動タイミングで shimmer が見えていたら明示的に消しておく。
+      const shimmer = shimmerRef.current;
+      if (shimmer) shimmer.style.display = "none";
       setSpinnerVisible(false);
     };
     const handleCanPlayThrough = () => {

@@ -34,9 +34,13 @@ interface Props {
 // (apps/api + apps/resolver) に置き換わったため、ここではシンプルに
 // resolve-mp4 を呼ぶだけになる。
 
-// ハードタイムアウト: <video> が loadedmetadata も error も発火しないまま
+// ハードタイムアウト: <video> が loadeddata も error も発火しないまま
 // これだけ経ったら、ネットワーク進行不能とみなして onError 相当のリトライを走らせる。
-const VIDEO_HARD_TIMEOUT_MS = 8000;
+// resolver の 抽出に 9 秒以上かかるケースもあるため、その後の動画ダウンロード
+// タイムも含めて 25 秒以上を見ておく。以前は 8 秒だったため、resolver が
+// 返した URL の MP4 ダウンロードが進行中にタイムアウトが発火して、force
+// リトライで src が切り替わり原ロードが canceled されるケースがあった。
+const VIDEO_HARD_TIMEOUT_MS = 25000;
 
 // 「プロ女優」(= sync_catalog で videoa フロアの作品全部に付与される擬似ジャンル)。
 // このジャンルが付いている作品は先頭 5 秒をスキップして再生する仕様。
@@ -129,9 +133,13 @@ export default function FeedItem({ item, isActive, isAdjacent = false, isFirst, 
     // no-op (以前は setShimmerVisible(true))
   }, []);
 
-  // loadedmetadata も現在は何もしない (もともと shimmer を消すためだけのハンドラだった)。
-  const handLoadedMetadataNoop = useCallback(() => {}, []);
-  const handleLoadedMetadata = handLoadedMetadataNoop;
+  // loadedmetadata が発火した時点で MP4 ヘッダーのダウンロードは進んでいるため、ネットワーク進行
+  // 不能とは見なさない。ハードタイムアウトはここで settle 扱いにして、以降 loadeddata
+  // までの間に force リトライが誤発しないようにする。
+  const handleLoadedMetadata = useCallback(() => {
+    videoSettledRef.current = true;
+    clearHardTimeout();
+  }, [clearHardTimeout]);
 
   const handleLoadedData = useCallback(() => {
     videoSettledRef.current = true;
@@ -143,15 +151,33 @@ export default function FeedItem({ item, isActive, isAdjacent = false, isFirst, 
     setShimmerVisible(false);
   }, [setVideoReady, setSpinnerVisible, setShimmerVisible, clearHardTimeout]);
 
+  // canplay も loadeddata と同様に settle 扱いにする。ブラウザによっては loadeddata よりも
+  // canplay が先に発火したり、逆に loadeddata だけ上がって canplay が遅れるケースがあるため、
+  // どちらでもハードタイムアウトを clear して force リトライの誤発を防ぐ。
+  const handleCanPlay = useCallback(() => {
+    videoSettledRef.current = true;
+    clearHardTimeout();
+    setVideoReady(true);
+    setSpinnerVisible(false);
+    setShimmerVisible(false);
+  }, [setVideoReady, setSpinnerVisible, setShimmerVisible, clearHardTimeout]);
+
   const handleVideoError = useCallback(() => {
     videoSettledRef.current = true;
     clearHardTimeout();
+    // 隣接スライド (isActive=false) の <video> が onError を出しても、そこで force リトライを
+    // 走らせると不要な resolver アクセスが多発し、本当に中央にきたときの負荷を上げてしまう。
+    // 中央にスワイプしてきたときに同じ src でロードが再試行されるので、そのタイミングのエラーで
+    // 初めて force リトライが走るようにする。
+    if (!isActive) {
+      return;
+    }
     // サムネ (shimmer) はここでは出さない。再生中の force リトライでは <video> の現フレームを
     // できるだけ保持し、スピナーのみ表示する (useFeedPlayback の waiting/stalled で補う)。
     // リトライも使い切って exhausted になった場合は、useResolvedVideoSrc が videoSrc=null を返し、
     // FeedItem 上位の thumbnail-bg 経路でサムネが表示されるため、ここで明示的にサムネを出す必要はない。
     handleError();
-  }, [handleError, clearHardTimeout]);
+  }, [handleError, clearHardTimeout, isActive]);
 
   // videoSrc が変わるたびにハードタイムアウトをセットし直す。
   // VIDEO_HARD_TIMEOUT_MS 以内に loadedmetadata / error が発火しないと
@@ -198,7 +224,7 @@ export default function FeedItem({ item, isActive, isAdjacent = false, isFirst, 
             onLoadStart={handleLoadStart}
             onLoadedMetadata={handleLoadedMetadata}
             onLoadedData={handleLoadedData}
-            onCanPlay={() => { setVideoReady(true); setSpinnerVisible(false); }}
+            onCanPlay={handleCanPlay}
             onError={handleVideoError}
             onTouchStart={handleTouchStart}
             onTouchEnd={handleTouchEnd}

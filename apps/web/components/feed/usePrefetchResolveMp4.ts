@@ -24,6 +24,10 @@ import { resolveMp4Url } from "@/lib/api/resolve-mp4";
  */
 
 const PREFETCH_AHEAD = 3;
+// スクロール停止デバウンス: currentIndex がこの期間変わらなかったら「スクロール停止」とみなして prefetch を起動する。
+// これを入れないと、20 枚一気スクロールしたときに 60 件以上の resolve リクエストが resolver VPS にキューイングして、
+// 実際に見ているスライドの resolve がキューの後ろに回されて遅くなる。
+const PREFETCH_DEBOUNCE_MS = 400;
 
 export function usePrefetchResolveMp4(
   items: MovieCard[],
@@ -35,39 +39,44 @@ export function usePrefetchResolveMp4(
   useEffect(() => {
     const inFlight = inFlightRef.current;
 
-    // 対象スライドの slug を集める。
-    const targetSlugs = new Set<string>();
+    // currentIndex が変わった瞬間、まずは対象外になった進行中 prefetch を abort してロードを減らす。
+    // (進行中のものはサーバー側の Playwright は止まらないが、クライアントのオープンソケットは閉じる)。
+    // その上で PREFETCH_DEBOUNCE_MS 待ってから新規 prefetch を出す。
+    const newTargetSlugs = new Set<string>();
     for (let offset = 1; offset <= PREFETCH_AHEAD; offset += 1) {
       const idx = currentIndex + offset;
       if (idx >= items.length) break;
       const item = items[idx];
       if (!item) continue;
-      if (item.sample_movie_url) continue; // optimistic ヒット予定なのでスキップ
+      if (item.sample_movie_url) continue;
       if (!item.slug) continue;
-      targetSlugs.add(item.slug);
+      newTargetSlugs.add(item.slug);
     }
-
-    // 対象から外れた prefetch は abort。
     for (const [slug, controller] of inFlight.entries()) {
-      if (!targetSlugs.has(slug)) {
+      if (!newTargetSlugs.has(slug)) {
         controller.abort();
         inFlight.delete(slug);
       }
     }
 
-    // 新規対象を発火 (既に飛んでいる slug は二重に叩かない)。
-    for (const slug of targetSlugs) {
-      if (inFlight.has(slug)) continue;
-      const controller = new AbortController();
-      inFlight.set(slug, controller);
-      // fire-and-forget。レスポンスは捨てる。
-      // resolveMp4Url は内部で例外を握り潰すので追加 catch は不要。
-      void resolveMp4Url(slug, { signal: controller.signal }).finally(() => {
-        if (inFlight.get(slug) === controller) {
-          inFlight.delete(slug);
-        }
-      });
-    }
+    // デバウンス: 一定時間 currentIndex が変らなければ、その時点で対象の prefetch を発火する。
+    // デバウンス中に currentIndex が進んだ場合 は setTimeout の cleanup でキャンセルされる。
+    const timer = setTimeout(() => {
+      for (const slug of newTargetSlugs) {
+        if (inFlight.has(slug)) continue;
+        const controller = new AbortController();
+        inFlight.set(slug, controller);
+        void resolveMp4Url(slug, { signal: controller.signal }).finally(() => {
+          if (inFlight.get(slug) === controller) {
+            inFlight.delete(slug);
+          }
+        });
+      }
+    }, PREFETCH_DEBOUNCE_MS);
+
+    return () => {
+      clearTimeout(timer);
+    };
   }, [items, currentIndex]);
 
   // アンマウント時に全 prefetch を abort。

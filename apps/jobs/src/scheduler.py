@@ -24,6 +24,8 @@ egress 大量課金 ($61/2日 など) を完全にゼロ化することが目的
   - DMM_LINK_AFFILIATE_ID     : 購入リンク用 af_id
   - RESOLVER_BASE_URL         : Xserver VPS resolver (http://162.43.24.128)
   - RESOLVER_API_KEY          : resolver Bearer Token
+  - RESOLVE_CONCURRENCY       : resolve_sample_urls の同時 HTTP リクエスト数 (デフォルト 32)
+                                resolver 側の RESOLVER_CONCURRENCY と揃えること
   - SCHEDULER_RUN_ON_START    : "true" なら起動直後に 1 回 sync を実行 (任意)
 """
 from __future__ import annotations
@@ -85,11 +87,29 @@ async def _run_sync_catalog() -> None:
         logger.error("[job] sync_catalog FAILED\n%s", traceback.format_exc())
 
 
+def _resolve_concurrency() -> int:
+    """RESOLVE_CONCURRENCY 環境変数を読む。デフォルト 32。
+
+    resolver 側 (Xserver VPS) の RESOLVER_CONCURRENCY と揃えること。
+    片方だけ大きくしても活かしきれない / 詰まる。
+    """
+    try:
+        v = int(os.getenv("RESOLVE_CONCURRENCY", "32"))
+        return max(1, v)
+    except ValueError:
+        logger.warning(
+            "invalid RESOLVE_CONCURRENCY=%r, falling back to 32",
+            os.getenv("RESOLVE_CONCURRENCY"),
+        )
+        return 32
+
+
 async def _run_resolve_sample_urls() -> None:
-    logger.info("[job] resolve_sample_urls start")
+    concurrency = _resolve_concurrency()
+    logger.info("[job] resolve_sample_urls start (concurrency=%d)", concurrency)
     try:
         await resolve_main(
-            concurrency=4,
+            concurrency=concurrency,
             limit=None,
             dry_run=False,
         )
@@ -181,9 +201,12 @@ async def _run_bootstrap() -> None:
 
     # 2. resolve_sample_urls (NULL を全件埋める)
     if not skip_resolve:
-        logger.info("[bootstrap] -- resolve_sample_urls --")
+        concurrency = _resolve_concurrency()
+        logger.info(
+            "[bootstrap] -- resolve_sample_urls (concurrency=%d) --", concurrency
+        )
         try:
-            await resolve_main(concurrency=4, limit=None, dry_run=False)
+            await resolve_main(concurrency=concurrency, limit=None, dry_run=False)
             logger.info("[bootstrap] resolve_sample_urls done")
         except Exception:
             logger.error(

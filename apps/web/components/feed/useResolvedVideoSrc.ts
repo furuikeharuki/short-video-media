@@ -28,7 +28,7 @@ type State =
   | { phase: "initial"; src: string | null }
   | { phase: "resolving"; src: null }
   | { phase: "ready"; src: string }
-  | { phase: "retrying"; src: null }
+  | { phase: "retrying"; src: string | null }
   | { phase: "exhausted"; src: null };
 
 interface Args {
@@ -141,7 +141,11 @@ export function useResolvedVideoSrc({
     }
     const controller = new AbortController();
     inFlightRef.current = controller;
-    setState({ phase: "retrying", src: null });
+    // リトライ中も現在の src を保持したまま phase だけ retrying に遷移させる。
+    // これにより FeedItem の showVideo 判定 (videoSrc !== null) が保たれ、<video> 要素が
+    // アンマウントされず thumbnail-bg (サムネ) にスイッチされるのを防ぐ。
+    // 新しい src が来たら setState で src が差し替わり、ブラウザがそのタイミングで新ロードを開始する。
+    setState((prev) => ({ phase: "retrying", src: prev.src }));
 
     void resolveMp4Url(slug, { force: true, signal: controller.signal })
       .then((res) => {

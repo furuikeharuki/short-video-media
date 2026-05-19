@@ -9,17 +9,7 @@ type Props = {
   className?: string;
   style?: React.CSSProperties;
   label?: string | null;
-  /**
-   * 同一ゾーンが複数コンテキスト (ページ / モーダル) で使われるとき、
-   * sessionStorage キーを分離するための識別子。
-   * 例: <AdSlot zone="native" context="modal" />
-   * デフォルトは "page"。
-   */
   context?: string;
-  /**
-   * モーダルなど「mount された瞬間に provider をリッセットして新しい <ins> を
-   * 確実に拾わせたい」ときに true にする。
-   */
   resetOnMount?: boolean;
 };
 
@@ -63,35 +53,21 @@ export default function AdSlot({
 
   const enabled = cfg.enabled;
 
-  // クライアント初回レンダリング時: sessionStorage から「予約高さ」のみ復元する。
-  // hasContentRef は false のまま→広告が実際に入るまで bump を許可する。
   useLayoutEffect(() => {
     if (!enabled) return;
     if (readWasFilled(zone, context)) {
       setHasContent(true);
-      // hasContentRef.current はあえて false のままにする。
-      // → mount 直後の resetAndServeAd 後に creative が入ったときに
-      //   onContent() → hasContentRef=true となり、次回以降の bump を正しく抑制できる。
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [zone, context, enabled]);
 
-  // mount 直後に必ず resetAndServeAd を呼ぶ。
-  // 理由:
-  //   - force-dynamic ページ間遷移では AdSlot がアンマウント→再マウントされる。
-  //   - <ins> は常に空の新屎 DOM から始まる。
-  //   - ad-provider.js の初期スキャンは既に完了しているため、
-  //     serveAd だけでは新しい <ins> を拾えない。
-  //   - RESET_COOLDOWN_MS=300ms なので、複数 AdSlot が同時に mount しても
-  //     window キーによるクールダウンで 1 回だけリセットされる。
+  // mount 直後に必ず resetAndServeAd を呼ぶ
   useEffect(() => {
     if (!enabled) return;
-    // 少し遅延して <ins> が DOM に描画されてから呼ぶ
     const t = window.setTimeout(() => {
       resetAndServeAd(cfg.provider);
     }, 80);
     return () => window.clearTimeout(t);
-  // mount 時のみ。
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -117,13 +93,8 @@ export default function AdSlot({
   useEffect(() => {
     if (!enabled) return;
     const onPopState = () => requestBump(true);
-    const onPageShow = (e: PageTransitionEvent) => {
-      void e.persisted;
-      requestBump(true);
-    };
-    const onVisibility = () => {
-      if (document.visibilityState === "visible") requestBump(false);
-    };
+    const onPageShow = (e: PageTransitionEvent) => { void e.persisted; requestBump(true); };
+    const onVisibility = () => { if (document.visibilityState === "visible") requestBump(false); };
     window.addEventListener("popstate", onPopState);
     window.addEventListener("pageshow", onPageShow);
     document.addEventListener("visibilitychange", onVisibility);
@@ -142,7 +113,10 @@ export default function AdSlot({
     flexDirection: "column",
     alignItems: "center",
     justifyContent: "center",
+    /* ★ はみ出し防止: 親の幅に必ず収める */
     width: "100%",
+    maxWidth: "100%",
+    overflow: "hidden",
     boxSizing: "border-box",
     background: "transparent",
     minHeight:
@@ -295,8 +269,12 @@ function AdIns({
   }, []);
 
   const insStyle: React.CSSProperties = {
-    display: "inline-block",
+    display: "block",           /* ★ inline-block → block に変更 */
     background: "transparent",
+    /* ★ 固定幅の <ins> でも親を突き破らないようにする */
+    maxWidth: "100%",
+    overflow: "hidden",
+    boxSizing: "border-box",
     ...(cfg.reservedWidth != null ? { width: `${cfg.reservedWidth}px` } : {}),
   };
 

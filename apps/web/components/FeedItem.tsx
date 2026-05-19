@@ -174,8 +174,7 @@ export default function FeedItem({ item, isActive, isAdjacent = false, isFirst, 
   // 隣接スライドの <video> は paused のままバッファだけ温まる。
   // スワイプで中央に来た瞬間、既存の <video> インスタンスへ play() するだけで
   // 済むので、新規マウント由来の黒画面+スピナーが入らない。
-  // モバイル Safari の同時接続上限 (~6) は WINDOW_SIZE=1 で 3 枚 + プリフェッチ 2 枚
-  // = 計 5 枚に収まる (PrefetchVideoBuffer 削除後はそれも不要)。
+  // モバイル Safari の同時接続上限 (約 4) は 中央 1 + 隣接 2 + currentIndex+2 の隠し先読み 1 = 計 4 で上限ギリギリ。
   const showVideo = (isActive || isAdjacent) && videoSrc !== null && !exhausted;
 
   return (

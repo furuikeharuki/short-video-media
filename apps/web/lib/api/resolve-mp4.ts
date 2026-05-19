@@ -17,11 +17,31 @@ export type ResolveMp4Response = {
   cached: boolean;
 };
 
+/**
+ * クライアント側メモリ内 in-flight デデュープキャッシュ。
+ * 同じ slug を複数のコンポーネント (usePrefetchResolveMp4 / usePrefetchVideoBytes /
+ * useResolvedVideoSrc) が同時に要求しても、API リクエストは 1 本にまとめる。
+ * 解決済みの Promise もキャッシュして、二重リクエストを避ける。
+ * force=true のリトライはキャッシュをバイパスし、成功したらキャッシュを上書きする。
+ */
+const resolveCache = new Map<string, Promise<ResolveMp4Response | null>>();
+
 export async function resolveMp4Url(
   slug: string,
   options: { force?: boolean; signal?: AbortSignal } = {},
 ): Promise<ResolveMp4Response | null> {
   if (!slug) return null;
+
+  // force=false のケース、既にキャッシュにあればそれを返す (新規 API を叩かない)。
+  // signal が abort されていたらその限りではなく null を返す。
+  if (!options.force) {
+    const cached = resolveCache.get(slug);
+    if (cached) {
+      if (options.signal?.aborted) return null;
+      return cached;
+    }
+  }
+
   const params = new URLSearchParams();
   if (options.force) params.set("force", "true");
   const query = params.toString();
@@ -29,27 +49,40 @@ export async function resolveMp4Url(
     query ? `?${query}` : ""
   }`;
 
-  try {
-    const res = await fetch(url, {
-      method: "GET",
-      // クライアントから直接叩くため Next.js のキャッシュは無効。
-      // API 側で DB キャッシュを持っているのでここでキャッシュする必要はない。
-      cache: "no-store",
-      signal: options.signal,
-    });
-    if (!res.ok) {
-      // 404 / 502 / 504 はサムネフォールバック (UX 上は同じ扱い)
+  const promise: Promise<ResolveMp4Response | null> = (async () => {
+    try {
+      const res = await fetch(url, {
+        method: "GET",
+        // クライアントから直接叩くため Next.js のキャッシュは無効。
+        // API 側で DB キャッシュを持っているのでここでキャッシュする必要はない。
+        cache: "no-store",
+        signal: options.signal,
+      });
+      if (!res.ok) {
+        // 404 / 502 / 504 はサムネフォールバック (UX 上は同じ扱い)
+        return null;
+      }
+      const data = (await res.json()) as ResolveMp4Response;
+      if (!data || typeof data.mp4_url !== "string" || !data.mp4_url) {
+        return null;
+      }
+      return data;
+    } catch {
+      // ネットワークエラー / Abort
       return null;
     }
-    const data = (await res.json()) as ResolveMp4Response;
-    if (!data || typeof data.mp4_url !== "string" || !data.mp4_url) {
-      return null;
+  })();
+
+  // キャッシュに登録 (force も同様に上書きして 新しい URL を以降の読み出しに中継)。
+  // 但し null (失敗) ケースはキャッシュしない (一時的なネットワークエラーのリトライを可能にする)。
+  resolveCache.set(slug, promise);
+  void promise.then((res) => {
+    if (res === null && resolveCache.get(slug) === promise) {
+      resolveCache.delete(slug);
     }
-    return data;
-  } catch {
-    // ネットワークエラー / Abort
-    return null;
-  }
+  });
+
+  return promise;
 }
 
 /**
@@ -60,6 +93,8 @@ export async function resolveMp4Url(
  */
 export async function invalidateSampleUrl(slug: string): Promise<void> {
   if (!slug) return;
+  // クライアント側メモリキャッシュも同時に無効化 (次回 resolveMp4Url で 新規 URL を取りに行く)。
+  resolveCache.delete(slug);
   const url = `${API_BASE_URL}/api/v1/movies/${encodeURIComponent(slug)}/sample-url`;
   try {
     await fetch(url, { method: "DELETE", cache: "no-store" });

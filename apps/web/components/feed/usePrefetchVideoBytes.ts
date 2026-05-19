@@ -8,23 +8,23 @@ import { invalidateSampleUrl, resolveMp4Url } from "@/lib/api/resolve-mp4";
 /**
  * 現在再生中のスライドより先 N 枚分の動画バイトを裏で preload しておく hook。
  *
- * 目的:
- *   - usePrefetchResolveMp4 は「MP4 URL を取得する API レスポンス」のキャッシュを
- *     温めるだけで、動画ファイル自体は取りに行かない。
- *   - スワイプ到達時の体感を更に速くするため、CDN から動画の先頭部分も先取りする。
+ * 背景:
+ *   - WINDOW_SIZE=1 (中央 + 隣接 2 枚) で isAdjacent の <video> が currentIndex±1 の
+ *     バイトを直接 preload するため、この hook は currentIndex+2 (= 「次の次」) だけを
+ *     対象にする。
  *
  * 仕組み:
- *   - 隠した <video preload="auto" muted playsinline> を画面外に N 個マウントする。
+ *   - 隠した <video preload="auto" muted playsinline> を画面外に 1 個マウントする。
  *   - ブラウザの動画パイプラインが Range で先頭バッファを取得し、メモリに保持する。
- *   - HTTP/2 多重化により、本物の <video> が再生開始するときも CDN との接続が
- *     温まっているため再生開始までの時間が短い。
+ *   - これでモバイル Safari の同時接続上限 (約 4) は
+ *     中央 1 + 隣接 2 + この先読み 1 = 計 4 で上限ギリギリ。
  *
  * 仕様:
- *   - currentIndex+1 〜 currentIndex+PREFETCH_AHEAD のスライドを対象。
- *   - sample_movie_url を持つスライドはそのまま、持たないスライドは resolveMp4Url で
- *     URL を取得してから preload。
+ *   - currentIndex + PREFETCH_AHEAD のスライド 1 枚を対象。
+ *   - URL 取得は resolveMp4Url のクライアントメモリキャッシュを使うため、
+ *     usePrefetchResolveMp4 が温めたキャッシュがあれば新規 API は叩かない。
+ *     (キャッシュがないケースは resolveMp4Url が API を叩いてキャッシュを温める。)
  *   - currentIndex 変化時にウィンドウを更新 (古い preload はアンマウント)。
- *   - 業界事例 (TikTok / Reels) では next 1-2 件が標準なので PREFETCH_AHEAD=2。
  *
  * 失敗ハンドリング (self-heal):
  *   - 隠し <video> が onError を発火した slug は failed set に記録し、
@@ -36,6 +36,8 @@ import { invalidateSampleUrl, resolveMp4Url } from "@/lib/api/resolve-mp4";
  *   - 各 slug への self-heal は 1 回までに制限 (無限ループ防止)。
  */
 
+// currentIndex + PREFETCH_AHEAD のスライドを1枚だけ preload する。
+// PREFETCH_AHEAD=2 = 「次の次」 (隣接スライドは中央±1 なので +2 が次に中央になるスライド)。
 const PREFETCH_AHEAD = 2;
 
 interface PrefetchSlot {
@@ -66,11 +68,11 @@ export function usePrefetchVideoBytes(
     const inFlight = inFlightRef.current;
     const slugToId = slugToIdRef.current;
 
-    // 対象スライドを集める
+    // 対象スライドを集める (currentIndex + PREFETCH_AHEAD の 1 枚だけ。
+    // currentIndex±1 は WINDOW_SIZE=1 の隣接スライド (isAdjacent) がすでに直接 preload している)。
     const targets: MovieCard[] = [];
-    for (let offset = 1; offset <= PREFETCH_AHEAD; offset += 1) {
-      const idx = currentIndex + offset;
-      if (idx >= items.length) break;
+    const idx = currentIndex + PREFETCH_AHEAD;
+    if (idx < items.length) {
       const item = items[idx];
       if (item && item.slug) targets.push(item);
     }

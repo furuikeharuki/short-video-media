@@ -309,7 +309,14 @@ export function useFeedPlayback({ slug, title, isActive, videoSrc, onOpenModal, 
   }, [isActive, videoSrc, playVideo]);
 
   // isActive=false に切り替わったタイミングで video を停止・リセット。
-  // <video> 要素自体はこの直後にアンマウントされるが、進捗 UI のリセットも兼ねる。
+  //
+  // 隣接スライド (isAdjacent) では <video> がマウントされたまま以下の状態になる:
+  //   - 初回マウント直後: opacity=0 (初期 style)、loadeddata で setVideoReady(true) が呼ばれて opacity=1 に
+  //   - 中央→隣接遷移 (さっきまで中央で再生していた): この effect で停止に戻す
+  //
+  // 黒画面 + スピナーの一瞬挟まりを防ぐため、ここで setVideoReady(false) / setSpinnerVisible(true) は
+  // 呼ばない (隣接スライドで opacity を 0 に戻すと、次に中央に来た瞬間 loadeddata/playing まで
+  // 黒画面が見えてしまう)。スピナーは明示的に非表示にし、中央遷移後は waiting イベントで再表示される。
   useEffect(() => {
     if (isActive) return;
     const video = videoRef.current;
@@ -322,14 +329,15 @@ export function useFeedPlayback({ slug, title, isActive, videoSrc, onOpenModal, 
       video.muted = globalIsMuted;
     }
     isPlayingRef.current = false;
-    setVideoReady(false);
     // shimmer は見せず、次回 loadstart まで非表示を維持。プリフェッチ済スライドで
     // スワイプした瞬間にサムネが一瞬見えるチラつきを避けるため。
     setShimmerVisible(false);
-    setSpinnerVisible(true);
+    // スピナーも隣接スライドでは非表示にしておく。中央に来た瞬間バッファ不足 (waiting)
+    // が起きたら下の useEffect で setSpinnerVisible(true) される。
+    setSpinnerVisible(false);
     setFastBadge(false);
     window.dispatchEvent(new CustomEvent("video-progress", { detail: { progress: 0 } }));
-  }, [isActive, setVideoReady, setShimmerVisible, setSpinnerVisible, setFastBadge, stopProgressLoop]);
+  }, [isActive, setShimmerVisible, setSpinnerVisible, setFastBadge, stopProgressLoop]);
 
   // プロ女優スキップの確定処理。
   // <video> がマウントされ duration が読めるようになったタイミングで、

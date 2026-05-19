@@ -378,12 +378,14 @@ export function useFeedPlayback({ slug, title, isActive, videoSrc, onOpenModal, 
   }, [isActive, setShimmerVisible, setSpinnerVisible, setFastBadge, stopProgressLoop]);
 
   // プロ女優スキップの確定処理。
-  // <video> がマウントされ duration が読めるようになったタイミングで、
-  // skipEffectiveRef / skipLowerBoundRef を確定させる。
+  //
+  // この effect は isActive に関わらず常に走る。隣接スライド (isAdjacent=true) で <video>
+  // がマウントされているときにも loadedmetadata で currentTime=5 にシークしておいて、
+  // スワイプで中央に来た瞬間即 5 秒地点のフレームが見えてから再生開始させるため。
+  // (isActive=false で使うのは handleLoadedMeta / handleSeeking まで、ended/timeUpdate は isActive のみ無意味。
+  //  ただしイベントリスナを貼るコストは軽いので、全て常にバインドして OK)
   // duration < MIN なら無効化 (短すぎる動画でホボ即終了するのを避ける)。
-  // また、loadedmetadata / timeupdate / seeking / ended で下限 5 秒に強制復帰させる。
   useEffect(() => {
-    if (!isActive) return;
     const video = videoRef.current;
     if (!video) return;
 
@@ -420,7 +422,9 @@ export function useFeedPlayback({ slug, title, isActive, videoSrc, onOpenModal, 
 
     const handleLoadedMeta = () => {
       evaluate();
-      // メタデータ確定直後、初回再生はまだ 0 から始まっている可能性が高いので飛ばす
+      // メタデータ確定直後、初回再生はまだ 0 から始まっている可能性が高いので飛ばす。
+      // これにより、isActive=false の隣接スライドでもプロ女優作品は 5 秒地点に
+      // シークされ、そのフレームがプレビューとして表示される。
       enforceLowerBound();
     };
     const handleTimeUpdate = () => enforceLowerBound();
@@ -429,6 +433,8 @@ export function useFeedPlayback({ slug, title, isActive, videoSrc, onOpenModal, 
     const handleEnded = () => {
       // 既存ループ仕様 (HTMLVideoElement の loop 属性は未使用、再生終端で何が起きるかは
       // ブラウザ依存) に合わせ、明示的に 5 秒に戻して再生再開する。
+      // isActive=false (隣接スライド) ではそもそも paused なので ended は退火しないが、念のためガード。
+      if (!isActiveRef.current) return;
       if (!skipEffectiveRef.current) return;
       const lower = skipLowerBoundRef.current;
       try { video.currentTime = lower > 0 ? lower : 0; } catch { /* ignore */ }
@@ -437,7 +443,10 @@ export function useFeedPlayback({ slug, title, isActive, videoSrc, onOpenModal, 
     };
 
     // 初期評価 (もう metadata が読めていれば即評価)
-    if (video.readyState >= 1) evaluate();
+    if (video.readyState >= 1) {
+      evaluate();
+      enforceLowerBound();
+    }
 
     video.addEventListener("loadedmetadata", handleLoadedMeta);
     video.addEventListener("timeupdate", handleTimeUpdate);
@@ -451,7 +460,7 @@ export function useFeedPlayback({ slug, title, isActive, videoSrc, onOpenModal, 
       video.removeEventListener("seeked", handleSeeked);
       video.removeEventListener("ended", handleEnded);
     };
-  }, [isActive, videoSrc, isProActress, playVideo]);
+  }, [videoSrc, isProActress, playVideo]);
 
   // 再生中の読み込み停滾 (waiting/stalled) と、出荷再開 (playing/canplaythrough) を検知して
   // スピナーの表示・非表示を切り替える。isActive 中のときだけビデオ要素が

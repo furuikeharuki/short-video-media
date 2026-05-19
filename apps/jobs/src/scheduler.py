@@ -34,7 +34,7 @@ import os
 import signal
 import sys
 import traceback
-from datetime import datetime
+from datetime import date, datetime
 from zoneinfo import ZoneInfo
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
@@ -112,6 +112,127 @@ async def _run_sync_actress_profiles() -> None:
 
 
 # ────────────────────────────────────────────────────────────────────
+# Bootstrap (起動直後の一括取得ジョブ)
+# ────────────────────────────────────────────────────────────────────
+
+
+async def _run_bootstrap() -> None:
+    """起動直後に一括取得を走らせる。
+
+    現状の DB データを補完するためのワンショットタスク。デフォルトパラメータで
+    「2008-2026 / videoa,videoc」を取得、その後 resolve / actress / goods を順番に
+    走らせる。現状、Worker は Railway Private Network で DB に接続しているため
+    これらの実行によって Public Network egress は発生しない。
+
+    環境変数:
+      - SCHEDULER_BOOTSTRAP=true            : このジョブを有効化
+      - BOOTSTRAP_START_YEAR=2008           : start year (含む)
+      - BOOTSTRAP_END_YEAR=2026             : end year (含む)
+      - BOOTSTRAP_FLOORS=videoa,videoc      : 動画フロア (コンマ区切り)
+      - BOOTSTRAP_GOODS_FLOORS=goods        : グッズフロア (空で goods をスキップ)
+      - BOOTSTRAP_SKIP_RESOLVE=false        : true で resolve をスキップ
+      - BOOTSTRAP_SKIP_ACTRESS=false        : true で actress をスキップ
+      - BOOTSTRAP_ACTRESS_ONLY_MISSING=true : actress を --only-missing で走らせる
+    """
+    start_year = int(os.getenv("BOOTSTRAP_START_YEAR", "2008"))
+    end_year = int(os.getenv("BOOTSTRAP_END_YEAR", "2026"))
+    video_floors = [
+        f.strip()
+        for f in os.getenv("BOOTSTRAP_FLOORS", "videoa,videoc").split(",")
+        if f.strip()
+    ]
+    goods_floors_env = os.getenv("BOOTSTRAP_GOODS_FLOORS", "goods")
+    goods_floors = [f.strip() for f in goods_floors_env.split(",") if f.strip()]
+    skip_resolve = os.getenv("BOOTSTRAP_SKIP_RESOLVE", "false").lower() == "true"
+    skip_actress = os.getenv("BOOTSTRAP_SKIP_ACTRESS", "false").lower() == "true"
+    actress_only_missing = (
+        os.getenv("BOOTSTRAP_ACTRESS_ONLY_MISSING", "true").lower() == "true"
+    )
+
+    logger.info(
+        "=" * 70 + "\n"
+        "[bootstrap] start: years=%d-%d video_floors=%s goods_floors=%s "
+        "skip_resolve=%s skip_actress=%s actress_only_missing=%s\n" + "=" * 70,
+        start_year, end_year, video_floors, goods_floors,
+        skip_resolve, skip_actress, actress_only_missing,
+    )
+
+    # 1. sync_catalog (videoa + videoc) full 一気取得
+    # 年単位でループし、sync_catalog 内部の月スライスに任せる。
+    # ログを見やすくし、一部年だけのリトライもやりやすくするため。
+    if video_floors:
+        for year in range(start_year, end_year + 1):
+            logger.info("[bootstrap] -- sync_catalog %d (full) --", year)
+            try:
+                await sync_main(
+                    mode="full",
+                    hits_per_floor=100,  # full モードでは使われないが必須引数
+                    floors_filter=video_floors,
+                    dry_run=False,
+                    start_date=date(year, 1, 1),
+                    end_date=date(year, 12, 31),
+                )
+                logger.info("[bootstrap] sync_catalog %d done", year)
+            except Exception:
+                logger.error(
+                    "[bootstrap] sync_catalog %d FAILED, continuing\n%s",
+                    year, traceback.format_exc(),
+                )
+
+    # 2. resolve_sample_urls (NULL を全件埋める)
+    if not skip_resolve:
+        logger.info("[bootstrap] -- resolve_sample_urls --")
+        try:
+            await resolve_main(concurrency=4, limit=None, dry_run=False)
+            logger.info("[bootstrap] resolve_sample_urls done")
+        except Exception:
+            logger.error(
+                "[bootstrap] resolve_sample_urls FAILED, continuing\n%s",
+                traceback.format_exc(),
+            )
+
+    # 3. sync_actress_profiles
+    if not skip_actress:
+        logger.info(
+            "[bootstrap] -- sync_actress_profiles (only_missing=%s) --",
+            actress_only_missing,
+        )
+        try:
+            await actress_main(
+                limit=None, only_missing=actress_only_missing, dry_run=False
+            )
+            logger.info("[bootstrap] sync_actress_profiles done")
+        except Exception:
+            logger.error(
+                "[bootstrap] sync_actress_profiles FAILED, continuing\n%s",
+                traceback.format_exc(),
+            )
+
+    # 4. sync_catalog (goods) full 取得
+    # goods は「DB に存在する女優名」でフィルタされるため、必ず actress 取得のあとに走らせる。
+    if goods_floors:
+        for year in range(start_year, end_year + 1):
+            logger.info("[bootstrap] -- sync_catalog goods %d --", year)
+            try:
+                await sync_main(
+                    mode="full",
+                    hits_per_floor=100,
+                    floors_filter=goods_floors,
+                    dry_run=False,
+                    start_date=date(year, 1, 1),
+                    end_date=date(year, 12, 31),
+                )
+                logger.info("[bootstrap] sync_catalog goods %d done", year)
+            except Exception:
+                logger.error(
+                    "[bootstrap] sync_catalog goods %d FAILED, continuing\n%s",
+                    year, traceback.format_exc(),
+                )
+
+    logger.info("=" * 70 + "\n[bootstrap] ALL DONE\n" + "=" * 70)
+
+
+# ────────────────────────────────────────────────────────────────────
 # Scheduler entrypoint
 # ────────────────────────────────────────────────────────────────────
 
@@ -144,20 +265,20 @@ async def _amain() -> None:
         coalesce=True,
     )
 
-    # resolve_sample_urls: 毎日 03:00 JST
+    # resolve_sample_urls: 毎日 11:00 JST (日中帯に移動、サービスピークを避ける)
     scheduler.add_job(
         _run_resolve_sample_urls,
-        CronTrigger(hour=3, minute=0, timezone=TZ),
+        CronTrigger(hour=11, minute=0, timezone=TZ),
         id="resolve_sample_urls",
         name="resolve_sample_urls",
         max_instances=1,
         coalesce=True,
     )
 
-    # sync_actress_profiles: 毎日 04:00 JST
+    # sync_actress_profiles: 毎日 13:00 JST (日中帯に移動)
     scheduler.add_job(
         _run_sync_actress_profiles,
-        CronTrigger(hour=4, minute=0, timezone=TZ),
+        CronTrigger(hour=13, minute=0, timezone=TZ),
         id="sync_actress_profiles",
         name="sync_actress_profiles (--only-missing)",
         max_instances=1,
@@ -173,6 +294,13 @@ async def _amain() -> None:
     if os.getenv("SCHEDULER_RUN_ON_START", "false").lower() == "true":
         logger.info("SCHEDULER_RUN_ON_START=true: kicking sync_catalog once")
         asyncio.create_task(_run_sync_catalog())
+
+    # 起動直後のブートストラップ (一括取り直しツール)
+    # デフォルトで 2008-2026 / videoa,videoc を full 取得 → resolve → actress → goods
+    # を順番に走らせる。完了したら環境変数を false に戻して redeploy すること。
+    if os.getenv("SCHEDULER_BOOTSTRAP", "false").lower() == "true":
+        logger.info("SCHEDULER_BOOTSTRAP=true: kicking bootstrap pipeline")
+        asyncio.create_task(_run_bootstrap())
 
     # SIGTERM / SIGINT で安全に shutdown
     stop_event = asyncio.Event()

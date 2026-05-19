@@ -106,7 +106,27 @@ GitHub Actions ではなく以下のいずれかで実行する:
 - もしくは `railway run --service jobs-worker python -m src.sync_catalog --hits 50` のように
   Railway CLI から one-shot 実行 (この場合も内部接続なので egress なし)
 
-## 7. もし問題発生時のロールバック
+## 7. 一括取り直し (ブートストラップ)
+
+「2008-2026 / videoa,videoc を full 取得 → resolve → actress → goods」を
+一括で走らせたいときは以下の手順:
+
+1. Railway Variables で以下を設定 (デフォルトで OK なら追加不要):
+   - `SCHEDULER_BOOTSTRAP=true`
+   - `BOOTSTRAP_START_YEAR=2008` (デフォルト 2008)
+   - `BOOTSTRAP_END_YEAR=2026` (デフォルト 2026)
+   - `BOOTSTRAP_FLOORS=videoa,videoc` (デフォルト)
+   - `BOOTSTRAP_GOODS_FLOORS=goods` (デフォルト、空にしたら goods をスキップ)
+   - `BOOTSTRAP_ACTRESS_ONLY_MISSING=true` (デフォルト、全女優更新なら false)
+2. 保存 → 自動 redeploy
+3. Logs で `[bootstrap] start: ...` が出ることを確認
+4. `[bootstrap] ALL DONE` が出るまで待つ (数時間見込み)
+5. **完了後に `SCHEDULER_BOOTSTRAP=false` に戻して redeploy** (ないと毎回起動でやり直しが走る)
+
+途中で中断したい場合は、Railway で worker を Restart すればジョブは止まる。
+ただし sync_catalog は UPSERT なので、中断しても不整合なデータは残らない (その年の途中まで取得された状態で止まるだけ)。
+
+## 8. もし問題発生時のロールバック
 
 - worker サービスを Railway 上で停止 (Settings → Danger Zone → Remove Service)
 - GitHub から `git revert <PR commit>` して旧 cron を復活させる (ただし egress 復活するので非推奨)

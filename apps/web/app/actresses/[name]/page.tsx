@@ -163,7 +163,7 @@ export default async function ActressDetailPage({ params }: PageProps) {
 
         {(stats.top_genres.length > 0 || stats.top_makers.length > 0) && (
           <section style={styles.section}>
-            <h2 style={styles.sectionTitle}>傾向</h2>
+            <h2 style={styles.sectionTitle}>側向</h2>
             {stats.top_genres.length > 0 && (
               <div style={styles.tagBlock}>
                 <span style={styles.tagBlockLabel}>よく出るジャンル</span>
@@ -284,7 +284,8 @@ export default async function ActressDetailPage({ params }: PageProps) {
           </section>
         )}
 
-        <div style={{ margin: "16px 0 8px" }}>
+        {/* 広告コンテナ */}
+        <div style={styles.adBottom}>
           <AdSlot zone="native" />
         </div>
       </div>
@@ -301,6 +302,7 @@ const styles: Record<string, React.CSSProperties> = {
     right: 0,
     bottom: 0,
     overflowY: "auto" as const,
+    overflowX: "hidden" as const,
     background: "#0a0a0a",
     color: "#fff",
     fontFamily: "-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif",
@@ -313,6 +315,9 @@ const styles: Record<string, React.CSSProperties> = {
   },
   body: {
     padding: "4px 16px 80px",
+    overflowX: "hidden" as const,
+    boxSizing: "border-box" as const,
+    width: "100%",
   },
   profileHeader: {
     display: "flex",
@@ -388,7 +393,6 @@ const styles: Record<string, React.CSSProperties> = {
     marginBottom: "28px",
   },
   hcrWrap: {
-    // HorizontalCardRow は自分で 16px padding を持つので、body の 16px padding を打ち消す。
     margin: "0 -16px 16px",
   },
   sectionTitle: {
@@ -514,11 +518,30 @@ const styles: Record<string, React.CSSProperties> = {
     fontWeight: 700,
     color: "#ff6b9a",
   },
+  adBottom: {
+    marginTop: "16px",
+    marginBottom: "8px",
+    width: "100%",
+    maxWidth: "100%",
+    overflow: "hidden",
+    boxSizing: "border-box" as const,
+  },
 };
 
 const pageCSS = `
   *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
   html, body { background: #0a0a0a !important; overflow: hidden !important; }
+
+  /* native広告内部要素を親幅に封じる */
+  .ad-slot { overflow: hidden !important; }
+  .ad-slot > * { max-width: 100% !important; overflow: hidden !important; }
+  .ad-slot ins,
+  .ad-slot iframe,
+  .ad-slot img {
+    max-width: 100% !important;
+    box-sizing: border-box !important;
+  }
+
   .goods-grid {
     display: grid;
     grid-template-columns: repeat(3, minmax(0, 1fr));

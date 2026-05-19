@@ -24,7 +24,6 @@ export default function MovieDetailContent({ movie }: Props) {
   const price = movie.price_list?.sale_price ?? movie.price_list?.list_price ?? movie.price_min;
   const hasReview = movie.review_count > 0 && movie.review_average != null;
 
-  // 監督 / メーカー / レーベル / シリーズ をタップしたら検索結果一覧へ (完全一致)
   const fieldLink = (
     field: "director" | "maker" | "label" | "series",
     value: string,
@@ -38,8 +37,6 @@ export default function MovieDetailContent({ movie }: Props) {
     </Link>
   );
 
-  // 出演女優を女優詳細ページへリンク化
-  // ActressLink を使うことで sessionStorage に現在URLを記録し、女優ページの戻るで戻ってこれる
   const actressLinks = (names: string[]): React.ReactNode => (
     <>
       {names.map((n, i) => (
@@ -128,7 +125,7 @@ export default function MovieDetailContent({ movie }: Props) {
       </div>
 
       <style>{`
-        .mdc-root { display: flex; flex-direction: column; width: 100%; }
+        .mdc-root { display: flex; flex-direction: column; width: 100%; overflow-x: hidden; }
         .mdc-hero {
           position: relative; width: 100%; height: 50svh;
           overflow: hidden; background: #111;
@@ -147,6 +144,9 @@ export default function MovieDetailContent({ movie }: Props) {
         }
         .mdc-body {
           padding: 20px 16px 24px;
+          overflow-x: hidden;
+          box-sizing: border-box;
+          width: 100%;
         }
         .mdc-genres { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 14px; }
         .mdc-badge {
@@ -190,7 +190,23 @@ export default function MovieDetailContent({ movie }: Props) {
           margin-bottom: 20px;
         }
         .mdc-cta { display: flex; flex-direction: column; gap: 12px; }
-        .mdc-ad-bottom { margin-top: 24px; }
+        .mdc-ad-bottom {
+          margin-top: 24px;
+          width: 100%;
+          max-width: 100%;
+          overflow: hidden;
+          box-sizing: border-box;
+        }
+
+        /* native広告内部要素を親幅に封じる */
+        .ad-slot { overflow: hidden !important; }
+        .ad-slot > * { max-width: 100% !important; overflow: hidden !important; }
+        .ad-slot ins,
+        .ad-slot iframe,
+        .ad-slot img {
+          max-width: 100% !important;
+          box-sizing: border-box !important;
+        }
 
         .affiliate-btn {
           display: flex; align-items: center; justify-content: center;

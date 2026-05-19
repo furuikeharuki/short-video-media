@@ -17,6 +17,13 @@ interface Props {
   onLoadedMetadata: () => void;
   onLoadedData: () => void;
   onCanPlay: () => void;
+  /**
+   * <video> がシークを完了したとき。
+   * プロ女優作品で loadedmetadata 後に currentTime=5 にシークした際、
+   * そのシーク先フレームがデコードされたところで opacity:1 にして
+   * 黒画面を最小限にするために使う。
+   */
+  onSeeked: () => void;
   onError?: (e: React.SyntheticEvent<HTMLVideoElement>) => void;
   onTouchStart: (e: React.TouchEvent) => void;
   onTouchEnd: (e: React.TouchEvent) => void;
@@ -42,6 +49,7 @@ export default function FeedItemVideo({
   onLoadedMetadata,
   onLoadedData,
   onCanPlay,
+  onSeeked,
   onError,
   onTouchStart,
   onTouchEnd,
@@ -107,6 +115,7 @@ export default function FeedItemVideo({
         onLoadedMetadata={onLoadedMetadata}
         onLoadedData={onLoadedData}
         onCanPlay={onCanPlay}
+        onSeeked={onSeeked}
         onError={onError}
         onContextMenu={(e) => e.preventDefault()}
         controlsList="nodownload noremoteplayback nofullscreen noplaybackrate"
@@ -114,7 +123,10 @@ export default function FeedItemVideo({
         disableRemotePlayback
         x-webkit-airplay="deny"
         className="feed-video"
-        style={{ opacity: 0, transition: "opacity 0.3s ease" }}
+        // opacity の transition は付けない。loadeddata / seeked でフレームが出た瞬間に
+        // setVideoReady(true) で opacity:1 に切り替えるため、フェードで遅らせると
+        // 黒画面の時間が長く見えてしまう。
+        style={{ opacity: 0 }}
       />
 
       <div className="overlay-wrap">

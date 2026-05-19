@@ -162,6 +162,19 @@ export default function FeedItem({ item, isActive, isAdjacent = false, isFirst, 
     setShimmerVisible(false);
   }, [setVideoReady, setSpinnerVisible, setShimmerVisible, clearHardTimeout]);
 
+  // seeked も 「その位置の 1 フレームがデコードされた」 を意味するため settle 扱い。
+  // 特にプロ女優作品は loadedmetadata 後に currentTime=5 にシークされるため、
+  // loadeddata (0 秒地点のフレーム) よりも seeked (5 秒地点のフレーム) の方が
+  // 意図したプレビュー画面として適切。そのタイミングで opacity:1 にして
+  // 黒画面を最小限にする。
+  const handleSeeked = useCallback(() => {
+    videoSettledRef.current = true;
+    clearHardTimeout();
+    setVideoReady(true);
+    setSpinnerVisible(false);
+    setShimmerVisible(false);
+  }, [setVideoReady, setSpinnerVisible, setShimmerVisible, clearHardTimeout]);
+
   const handleVideoError = useCallback(() => {
     videoSettledRef.current = true;
     clearHardTimeout();
@@ -225,6 +238,7 @@ export default function FeedItem({ item, isActive, isAdjacent = false, isFirst, 
             onLoadedMetadata={handleLoadedMetadata}
             onLoadedData={handleLoadedData}
             onCanPlay={handleCanPlay}
+            onSeeked={handleSeeked}
             onError={handleVideoError}
             onTouchStart={handleTouchStart}
             onTouchEnd={handleTouchEnd}

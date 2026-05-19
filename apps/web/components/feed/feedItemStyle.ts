@@ -4,7 +4,6 @@ export const itemStyle = `
     inset: 0;
     overflow: hidden;
     background: #000;
-    /* 長押しメニューをコンテナごと拒否 */
     -webkit-touch-callout: none;
     -webkit-user-select: none;
     user-select: none;
@@ -18,30 +17,20 @@ export const itemStyle = `
     object-position: center center;
     border-radius: 8px;
     box-sizing: border-box;
-    /* iOS/Android の長押しメニュー（保存・コピー・共有）を完全に抑止 */
     -webkit-touch-callout: none;
     -webkit-user-select: none;
     user-select: none;
     pointer-events: none;
   }
-  /* サムネイル (非アクティブスライド または動画ロード中) は
-     動画と同じサイズ・アスペクトで画面内に収まるよう contain させる。 */
   .thumbnail-bg {
     position: absolute;
     inset: 0;
     overflow: hidden;
     background: #000;
-    /* 長押しメニューをコンテナごと拒否 */
     -webkit-touch-callout: none;
     -webkit-user-select: none;
     user-select: none;
   }
-  /*
-    <video> の上に被せるサムネカバー。
-    showVideo=true (= <video> マウント済) で、まだ loadeddata / seeked 未到達の
-    期間だけ表示される。z-index は <video> (z-index 0相当) より上、
-    .overlay-wrap (z-index 25, スピナー・一時停止アイコン) より下。
-  */
   .thumbnail-cover {
     position: absolute;
     inset: 0;
@@ -64,7 +53,6 @@ export const itemStyle = `
     border-radius: 8px;
     box-sizing: border-box;
     display: block;
-    /* サムネイル画像の長押し保存・ドラッグを抑止 */
     -webkit-touch-callout: none;
     -webkit-user-select: none;
     user-select: none;
@@ -87,7 +75,6 @@ export const itemStyle = `
     overflow: hidden;
     border-radius: 8px;
   }
-  /* ロード中の背景サムネイル: 動画 (.feed-video) と完全に同じレイアウトで重ねる */
   .shimmer-thumb {
     position: absolute;
     inset: 0;
@@ -98,18 +85,12 @@ export const itemStyle = `
     border-radius: 8px;
     box-sizing: border-box;
     display: block;
-    /* 長押し保存・ドラッグを抑止 */
     -webkit-touch-callout: none;
     -webkit-user-select: none;
     user-select: none;
     -webkit-user-drag: none;
     pointer-events: none;
   }
-  /*
-    ローディングスピナー。overlay-wrap (inset:0、モバイルでは bottom:60px) の
-    中央に表示されるため、一時停止アイコン (.action-overlay) と同じ位置になる。
-    初回ロード中・再生中のバッファ不足 (waiting/stalled) の両方で使われる。
-  */
   .loading-spinner {
     position: absolute;
     inset: 0;
@@ -178,6 +159,8 @@ export const itemStyle = `
     -webkit-backdrop-filter: blur(6px);
     text-shadow: 0 1px 4px rgba(0,0,0,0.5);
   }
+
+  /* ━━━ ボトムバー ━━━ */
   .bottom-bar {
     position: absolute;
     bottom: 0;
@@ -187,10 +170,11 @@ export const itemStyle = `
     grid-template-columns: 1fr auto;
     align-items: end;
     z-index: 30;
-    padding: 0 4px 15px 12px;
+    /* モバイル: 左右余白を広めに、下余白はボトムナビ分を考慮 */
+    padding: 0 6px 16px 14px;
     box-sizing: border-box;
     pointer-events: none;
-    background: linear-gradient(to top, rgba(0,0,0,0.7) 0%, transparent 100%);
+    background: linear-gradient(to top, rgba(0,0,0,0.72) 0%, transparent 100%);
   }
   .info-overlay {
     min-width: 0;
@@ -198,13 +182,15 @@ export const itemStyle = `
     pointer-events: auto;
     padding-right: 0;
   }
+
+  /* ━━━ タイトル・女優名（モバイル基準で定義し PCで上書き） ━━━ */
   .item-title {
-    font-size: clamp(13px, 3.5vw, 16px);
+    font-size: 15px;          /* モバイル固定 */
     font-weight: 700;
     line-height: 1.35;
     color: #fff;
     text-shadow: 0 1px 6px rgba(0,0,0,0.8);
-    margin: 0 0 4px;
+    margin: 0 0 5px;
     display: -webkit-box;
     -webkit-line-clamp: 2;
     -webkit-box-orient: vertical;
@@ -212,8 +198,8 @@ export const itemStyle = `
     word-break: break-all;
   }
   .item-actress {
-    font-size: clamp(11px, 2.8vw, 13px);
-    color: rgba(255,255,255,0.75);
+    font-size: 13px;          /* モバイル固定 */
+    color: rgba(255,255,255,0.8);
     text-shadow: 0 1px 4px rgba(0,0,0,0.7);
     margin: 0;
     white-space: nowrap;
@@ -227,12 +213,12 @@ export const itemStyle = `
     margin-bottom: 6px;
   }
   .genre-chip {
-    padding: 3px 10px;
+    padding: 4px 11px;
     border-radius: 999px;
     border: 1px solid rgba(255,255,255,0.35);
     background: rgba(255,255,255,0.12);
     color: rgba(255,255,255,0.9);
-    font-size: clamp(10px, 2.5vw, 12px);
+    font-size: 12px;          /* モバイル固定 */
     font-weight: 600;
     cursor: pointer;
     white-space: nowrap;
@@ -244,12 +230,14 @@ export const itemStyle = `
     transition: background 0.15s;
   }
   .genre-chip:active { background: rgba(255,255,255,0.25); }
+
+  /* ━━━ サイドアクション（モバイル基準） ━━━ */
   .side-actions {
-    width: 60px;
+    width: 64px;              /* モバイルは少し広く */
     display: flex;
     flex-direction: column;
     align-items: center;
-    gap: clamp(8px, 1.4vh, 16px);
+    gap: clamp(10px, 1.6vh, 18px);
     pointer-events: auto;
     flex-shrink: 0;
   }
@@ -261,7 +249,7 @@ export const itemStyle = `
     background: none;
     border: none;
     cursor: pointer;
-    padding: 3px 0;
+    padding: 4px 0;
     width: 100%;
     -webkit-tap-highlight-color: transparent;
     touch-action: none;
@@ -272,9 +260,15 @@ export const itemStyle = `
   .side-btn:active { transform: scale(0.88); opacity: 0.7; }
   .side-btn--active svg { filter: drop-shadow(0 0 6px rgba(255,255,255,0.8)); }
   .side-btn--buy svg { stroke: #ff4d7d; }
+  /* モバイルのアイコンサイズは SVG の width/height 属性で制御するが
+     念のため min-size を保証する */
+  .side-btn svg {
+    width: 26px;
+    height: 26px;
+  }
   .side-btn-label {
     color: #fff;
-    font-size: 10px;
+    font-size: 11px;          /* モバイル固定 (10px → 11px) */
     font-weight: 600;
     letter-spacing: 0.02em;
     text-shadow: 0 1px 3px rgba(0,0,0,0.9);
@@ -283,6 +277,8 @@ export const itemStyle = `
     text-overflow: ellipsis;
     max-width: 100%;
   }
+
+  /* ━━━ スキップ ━━━ */
   .skip-ripple {
     position: absolute;
     transform: translate(-50%, -50%);
@@ -316,6 +312,8 @@ export const itemStyle = `
     .skip-ripple             { animation: none; opacity: 0; }
     .action-overlay          { animation: none; opacity: 0; }
   }
+
+  /* ━━━ スマホ専用（767px以下）━━━ */
   @media (max-width: 767px) {
     .feed-video,
     .thumbnail-img,
@@ -326,6 +324,8 @@ export const itemStyle = `
       bottom: 60px;
     }
   }
+
+  /* ━━━ PC（768px以上）━━━ */
   @media (min-width: 768px) {
     .bottom-bar {
       padding: 0 8px 20px 20px;
@@ -337,5 +337,7 @@ export const itemStyle = `
     .side-btn svg { width: 28px; height: 28px; }
     .item-title   { font-size: 17px; }
     .item-actress { font-size: 14px; }
+    .genre-chip   { font-size: 12px; }
+    .side-btn-label { font-size: 11px; }
   }
 `;

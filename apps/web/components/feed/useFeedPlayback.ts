@@ -111,6 +111,21 @@ export function useFeedPlayback({ slug, title, isActive, videoSrc, onOpenModal, 
   // プロ女優スキップ用の最小許容秒数。skipEffectiveRef が false なら 0。
   const skipLowerBoundRef = useRef(0);
 
+  // 同 slug 作品で「直近の再生位置」を記憶しておく ref。
+  // 再生中に <video> が onError → force リトライで src が差し替わったときに、
+  // 新しい <video> の loadedmetadata タイミングで currentTime をこの位置に戻して
+  // 「リトライしても最初から再生しない」を実現する。
+  // slug が変わった (新しい作品にスワイプ) ときは time を 0 にリセット。
+  const lastPlaybackRef = useRef<{ slug: string; time: number }>({ slug: "", time: 0 });
+
+  // slug が変わったら lastPlaybackRef をリセット。同じ <video> 上で src が差し替わる force リトライのときだけ
+  // 以前の位置を保持したいため、videoSrc 変化ではリセットしないことに注意。
+  useEffect(() => {
+    if (lastPlaybackRef.current.slug !== slug) {
+      lastPlaybackRef.current = { slug: "", time: 0 };
+    }
+  }, [slug]);
+
   useEffect(() => {
     const sync = () => {
       if (isMutedRef.current !== globalIsMuted) {
@@ -422,12 +437,31 @@ export function useFeedPlayback({ slug, title, isActive, videoSrc, onOpenModal, 
 
     const handleLoadedMeta = () => {
       evaluate();
+      // リトライ後のレジューム: 同 slug で直近の再生位置が記録されていれば、
+      // その位置に currentTime をセットして「リトライしても最初からではなく途中から」とする。
+      // プロ女優作品は下限 5 秒を超えている限りその位置を採用；超えていなければ enforceLowerBound で 5 秒に修正される。
+      const dur = video.duration;
+      if (
+        lastPlaybackRef.current.slug === slug &&
+        lastPlaybackRef.current.time > 0.5 &&
+        Number.isFinite(dur) &&
+        lastPlaybackRef.current.time < dur - 0.5
+      ) {
+        try { video.currentTime = lastPlaybackRef.current.time; } catch { /* ignore */ }
+      }
       // メタデータ確定直後、初回再生はまだ 0 から始まっている可能性が高いので飛ばす。
       // これにより、isActive=false の隣接スライドでもプロ女優作品は 5 秒地点に
       // シークされ、そのフレームがプレビューとして表示される。
       enforceLowerBound();
     };
-    const handleTimeUpdate = () => enforceLowerBound();
+    const handleTimeUpdate = () => {
+      // 同 slug 作品の再生位置を記録 (リトライ後に復帰させるため)。
+      // 記録は isActive スライドのみ。隣接スライドは paused なので timeupdate はそもそも発火しないが念のため。
+      if (isActiveRef.current) {
+        lastPlaybackRef.current = { slug, time: video.currentTime };
+      }
+      enforceLowerBound();
+    };
     const handleSeeking = () => enforceLowerBound();
     const handleSeeked = () => enforceLowerBound();
     const handleEnded = () => {
@@ -460,7 +494,7 @@ export function useFeedPlayback({ slug, title, isActive, videoSrc, onOpenModal, 
       video.removeEventListener("seeked", handleSeeked);
       video.removeEventListener("ended", handleEnded);
     };
-  }, [videoSrc, isProActress, playVideo]);
+  }, [slug, videoSrc, isProActress, playVideo]);
 
   // 再生中の読み込み停滾 (waiting/stalled) と、出荷再開 (playing/canplaythrough) を検知して
   // スピナーの表示・非表示を切り替える。isActive 中のときだけビデオ要素が

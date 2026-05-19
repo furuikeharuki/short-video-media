@@ -146,11 +146,12 @@ export default function FeedItem({ item, isActive, isAdjacent = false, isFirst, 
   const handleVideoError = useCallback(() => {
     videoSettledRef.current = true;
     clearHardTimeout();
-    // 動画ロードに失敗したときはサムネ (shimmer) にフォールバックして
-    // 黒画面を避ける。リトライが走り、次の loadeddata が来れば shimmer は消される。
-    setShimmerVisible(true);
+    // サムネ (shimmer) はここでは出さない。再生中の force リトライでは <video> の現フレームを
+    // できるだけ保持し、スピナーのみ表示する (useFeedPlayback の waiting/stalled で補う)。
+    // リトライも使い切って exhausted になった場合は、useResolvedVideoSrc が videoSrc=null を返し、
+    // FeedItem 上位の thumbnail-bg 経路でサムネが表示されるため、ここで明示的にサムネを出す必要はない。
     handleError();
-  }, [handleError, clearHardTimeout, setShimmerVisible]);
+  }, [handleError, clearHardTimeout]);
 
   // videoSrc が変わるたびにハードタイムアウトをセットし直す。
   // VIDEO_HARD_TIMEOUT_MS 以内に loadedmetadata / error が発火しないと

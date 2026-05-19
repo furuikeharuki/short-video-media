@@ -141,69 +141,68 @@ export default async function MovieDetailPage({ params }: PageProps) {
         <main style={styles.main}>
           <DetailViewTracker slug={movie.slug} title={movie.title} />
 
-          {/* PC では中央カラムに収める */}
-          <div style={styles.pageInner}>
-            <div style={styles.heroWrap}>
-              <img
-                src={imgSrc}
-                alt={`${movie.title} サムネイル`}
-                aria-hidden="true"
-                style={styles.heroBgBlur}
-              />
-              <img
-                src={imgSrc}
-                alt={`${movie.title}${movie.actresses.length > 0 ? ` - ${movie.actresses.join("・")}` : ""}`}
-                style={styles.heroImg}
-                width={720}
-                height={1280}
-                loading="eager"
-              />
-              <BackButton resumeFeedUnmuted />
+          <div style={styles.heroWrap}>
+            <img
+              src={imgSrc}
+              alt={`${movie.title} サムネイル`}
+              aria-hidden="true"
+              style={styles.heroBgBlur}
+            />
+            <img
+              src={imgSrc}
+              alt={`${movie.title}${movie.actresses.length > 0 ? ` - ${movie.actresses.join("・")}` : ""}`}
+              style={styles.heroImg}
+              width={720}
+              height={1280}
+              loading="eager"
+            />
+            <BackButton resumeFeedUnmuted />
+          </div>
+
+          <div style={styles.content}>
+            <div style={styles.genreList}>
+              {movie.genres.map((g) => (
+                <span key={g} style={styles.badge}>{g}</span>
+              ))}
+            </div>
+            <h1 style={styles.title}>{movie.title}</h1>
+
+            <div style={styles.scoreArea}>
+              {hasReview && (
+                <div style={styles.scoreItem}>
+                  <span style={styles.stars}>
+                    {"★".repeat(Math.round(movie.review_average!))}
+                    {"☆".repeat(5 - Math.round(movie.review_average!))}
+                  </span>
+                  <span style={styles.reviewNum}>
+                    {movie.review_average!.toFixed(1)} ({movie.review_count}件)
+                  </span>
+                </div>
+              )}
+              {price != null && (
+                <div style={styles.price}>¥{price.toLocaleString()}</div>
+              )}
             </div>
 
-            <div style={styles.content}>
-              <div style={styles.genreList}>
-                {movie.genres.map((g) => (
-                  <span key={g} style={styles.badge}>{g}</span>
-                ))}
-              </div>
-              <h1 style={styles.title}>{movie.title}</h1>
+            <div style={styles.metaTable}>
+              {metaRows.map(({ label, value }) => (
+                <div key={label} style={styles.metaRow}>
+                  <span style={styles.metaLabel}>{label}</span>
+                  <span style={styles.metaValue}>{value}</span>
+                </div>
+              ))}
+            </div>
 
-              <div style={styles.scoreArea}>
-                {hasReview && (
-                  <div style={styles.scoreItem}>
-                    <span style={styles.stars}>
-                      {"★".repeat(Math.round(movie.review_average!))}
-                      {"☆".repeat(5 - Math.round(movie.review_average!))}
-                    </span>
-                    <span style={styles.reviewNum}>
-                      {movie.review_average!.toFixed(1)} ({movie.review_count}件)
-                    </span>
-                  </div>
-                )}
-                {price != null && (
-                  <div style={styles.price}>¥{price.toLocaleString()}</div>
-                )}
-              </div>
+            {movie.description && (
+              <p style={styles.description}>{movie.description}</p>
+            )}
+            <div style={styles.ctaArea}>
+              <AffiliateLink href={movie.affiliate_url} slug={movie.slug} title={movie.title} />
+            </div>
 
-              <div style={styles.metaTable}>
-                {metaRows.map(({ label, value }) => (
-                  <div key={label} style={styles.metaRow}>
-                    <span style={styles.metaLabel}>{label}</span>
-                    <span style={styles.metaValue}>{value}</span>
-                  </div>
-                ))}
-              </div>
-
-              {movie.description && (
-                <p style={styles.description}>{movie.description}</p>
-              )}
-              <div style={styles.ctaArea}>
-                <AffiliateLink href={movie.affiliate_url} slug={movie.slug} title={movie.title} />
-              </div>
-              <div style={styles.adBottom}>
-                <AdSlot zone="native" />
-              </div>
+            {/* 広告は最大300pxに制限しセンタリング */}
+            <div style={styles.adBottom}>
+              <AdSlot zone="native" />
             </div>
           </div>
         </main>
@@ -222,19 +221,10 @@ const styles: Record<string, React.CSSProperties> = {
     top: 'var(--header-h, 52px)' as unknown as string,
     left: 0, right: 0, bottom: 0,
     overflowY: 'auto' as const,
-    overflowX: 'hidden' as const, // はみ出し防止
+    overflowX: 'hidden' as const,
     background: '#0a0a0a',
     color: '#fff',
     fontFamily: "-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif",
-  },
-  // PC でコンテンツを中央カラムに収めるラッパー
-  pageInner: {
-    width: '100%',
-    maxWidth: '640px',
-    marginLeft: 'auto',
-    marginRight: 'auto',
-    boxSizing: 'border-box' as const,
-    overflowX: 'hidden' as const,
   },
   heroWrap: {
     position: 'relative', width: '100%', height: '55svh' as unknown as string,
@@ -300,7 +290,6 @@ const styles: Record<string, React.CSSProperties> = {
   ctaArea: { display: 'flex', flexDirection: 'column' as const, gap: '12px' },
   adBottom: {
     marginTop: '24px',
-    // 広告コンテナ自体もはみ出し防止
     width: '100%',
     maxWidth: '100%',
     overflow: 'hidden',
@@ -315,12 +304,13 @@ const pageCSS = `
     overflow: visible !important;
     height: auto !important;
   }
-  /* 広告の ins / iframe が親を突き破らないように封じる */
+  /* 広告の ins/iframe/img 内部要素を親幅に封じる */
+  .ad-slot { overflow: hidden !important; }
+  .ad-slot > * { max-width: 100% !important; overflow: hidden !important; }
   .ad-slot ins,
   .ad-slot iframe,
   .ad-slot img {
     max-width: 100% !important;
-    width: 100% !important;
     box-sizing: border-box !important;
   }
   .affiliate-btn {

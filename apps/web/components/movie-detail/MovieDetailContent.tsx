@@ -3,6 +3,7 @@
 import Link from "next/link";
 import AffiliateLink from "@/components/analytics/affiliate-link";
 import ActressLink from "@/components/ActressLink";
+import AdSlot from "@/components/ads/AdSlot";
 import type { MovieDetail } from "@/lib/api/movies";
 
 const NA = "----";
@@ -120,6 +121,10 @@ export default function MovieDetailContent({ movie }: Props) {
         <div className="mdc-cta">
           <AffiliateLink href={movie.affiliate_url} slug={movie.slug} title={movie.title} />
         </div>
+
+        <div className="mdc-ad-bottom">
+          <AdSlot zone="native" />
+        </div>
       </div>
 
       <style>{`
@@ -185,6 +190,7 @@ export default function MovieDetailContent({ movie }: Props) {
           margin-bottom: 20px;
         }
         .mdc-cta { display: flex; flex-direction: column; gap: 12px; }
+        .mdc-ad-bottom { margin-top: 24px; }
 
         .affiliate-btn {
           display: flex; align-items: center; justify-content: center;

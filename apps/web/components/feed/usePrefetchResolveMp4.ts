@@ -32,6 +32,7 @@ const PREFETCH_DEBOUNCE_MS = 400;
 export function usePrefetchResolveMp4(
   items: MovieCard[],
   currentIndex: number,
+  isRapidSwiping: boolean = false,
 ): void {
   // 同時に飛ばしている prefetch を slug -> AbortController で管理。
   const inFlightRef = useRef<Map<string, AbortController>>(new Map());
@@ -59,6 +60,13 @@ export function usePrefetchResolveMp4(
       }
     }
 
+    // 高速スワイプ中は currentIndex が刻々と変わる。新規 prefetch は走らせず、
+    // スワイプ停止後に改めてこの effect が走るのを待つ。古い prefetch は上の
+    // ループで abort 済み。
+    if (isRapidSwiping) {
+      return;
+    }
+
     // デバウンス: 一定時間 currentIndex が変らなければ、その時点で対象の prefetch を発火する。
     // デバウンス中に currentIndex が進んだ場合 は setTimeout の cleanup でキャンセルされる。
     const timer = setTimeout(() => {
@@ -77,7 +85,7 @@ export function usePrefetchResolveMp4(
     return () => {
       clearTimeout(timer);
     };
-  }, [items, currentIndex]);
+  }, [items, currentIndex, isRapidSwiping]);
 
   // アンマウント時に全 prefetch を abort。
   useEffect(() => {

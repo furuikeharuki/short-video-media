@@ -25,6 +25,12 @@ interface Props {
   isAdjacent?: boolean;
   isFirst: boolean;
   isSecond?: boolean;
+  /**
+   * FeedViewer から伝えられる高速スワイプ状態。
+   * true の間は隣接スライドの <video> の preload を "metadata" に弱め、
+   * 中央 (isActive) の resolve / Range 取得が同時接続枠と帯域を奪われないようにする。
+   */
+  isRapidSwiping?: boolean;
   activeGenres?: string[];
   onGenreClick?: (genre: string) => void;
 }
@@ -49,7 +55,7 @@ const VIDEO_HARD_TIMEOUT_MS = 25000;
 // すべてのアクセス経路で 5 秒スキップが効く。
 const PRO_ACTRESS_GENRE = "プロ女優";
 
-export default function FeedItem({ item, isActive, isAdjacent = false, isFirst, isSecond = false }: Props) {
+export default function FeedItem({ item, isActive, isAdjacent = false, isFirst, isSecond = false, isRapidSwiping = false }: Props) {
   const [modalSlug, setModalSlug] = useState<string | null>(null);
   const { isAuthenticated, isBookmarked, toggle } = useBookmarks();
 
@@ -126,9 +132,24 @@ export default function FeedItem({ item, isActive, isAdjacent = false, isFirst, 
     isProActress: item.genres?.includes(PRO_ACTRESS_GENRE) ?? false,
   });
 
-  // 隣接スライド (isAdjacent) でもメディアバイトを先読みしておくため "auto" を採用。
-  // スワイプで中央に来た瞬間、すでに loadedmetadata / loadeddata まで進んでいる状態を作る。
-  const preloadAttr = isFirst || isSecond || isActive || isAdjacent ? "auto" : "metadata";
+  // preload 戦略:
+  //  - isActive (中央): 常に "auto"。中央動画の resolve / 再生は最優先。
+  //  - isAdjacent (隣接) 通常時: "auto" でメディアバイトを先読み。スワイプ中央到達で
+  //    黒画面を避ける。
+  //  - isAdjacent + 高速スワイプ中: "metadata" に弱める。隣接スライドのバイトより
+  //    中央スライドの Range 取得 / resolve のほうを優先したい。
+  //  - isFirst / isSecond の初期マウント: "auto" でファーストビューを早める。
+  //  - その他 (理論上ここには来ない): "metadata"。
+  let preloadAttr: "auto" | "metadata";
+  if (isActive) {
+    preloadAttr = "auto";
+  } else if (isAdjacent) {
+    preloadAttr = isRapidSwiping ? "metadata" : "auto";
+  } else if (isFirst || isSecond) {
+    preloadAttr = "auto";
+  } else {
+    preloadAttr = "metadata";
+  }
 
   // <video> がロードを開始したときのハンドラ。
   // 以前はここで shimmer (サムネ) を表示していたが、ロード中にサムネが一瞬見える

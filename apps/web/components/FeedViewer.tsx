@@ -15,6 +15,12 @@ import PrefetchVideoBuffer from "@/components/feed/PrefetchVideoBuffer";
 // モバイル Safari の同時接続上限は約 4 で、中央 1 + 隣接 2 + currentIndex+2 の隠し先読み 1 = 計 4。
 const WINDOW_SIZE = 1;
 
+// 高速スワイプ判定の閾値。
+// 前回 currentIndex 変更から RAPID_THRESHOLD_MS 以内に次の変更が来たら高速スワイプ中とみなす。
+const RAPID_THRESHOLD_MS = 350;
+// 最後の currentIndex 変更から RAPID_SETTLE_MS 経過で高速スワイプ解除 (= prefetch 再開許可)。
+const RAPID_SETTLE_MS = 350;
+
 interface Props {
   items: MovieCard[];
   initialIndex?: number;
@@ -37,18 +43,30 @@ export default function FeedViewer({
   const [windowItems,  setWindowItems]  = useState<MovieCard[]>([]);
   const windowStartRef = useRef(0);
 
+  // 高速連続スワイプ状態。currentIndex が短時間に立て続けに変わると true になり、
+  // 一定時間 (RAPID_SETTLE_MS) currentIndex が変わらなければ false に戻る。
+  // 値が true の間は usePrefetchResolveMp4 / usePrefetchVideoBytes を停止し、
+  // 隣接 <video> の preload も "metadata" に弱める。これにより、中央 (active) 動画の
+  // resolve と Range 取得が帯域 / 同時接続枠 / resolver 枠を奪われずに進む。
+  const [isRapidSwiping, setIsRapidSwiping] = useState(false);
+  const lastIndexChangeRef = useRef(0);
+  const rapidSettleTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
   // 先 3 枚分の MP4 URL を resolver で事前解決しておき、スワイプ到達時の
   // 再生開始を早める (resolver 側の 60s キャッシュを温めるだけで <video> は増やさない)。
   // クライアント側も resolveMp4Url のメモリキャッシュを温め、以降の同じ slug 読み出しを 0 リクエストにする。
-  usePrefetchResolveMp4(items, currentIndex);
+  // 高速スワイプ中は内部でデバウンスを長くし、停止後の currentIndex 周辺だけ発火する。
+  usePrefetchResolveMp4(items, currentIndex, isRapidSwiping);
 
   // currentIndex+2 (= 「次の次」) だけ、高接続コストを払って CDN から動画バイトも先読みしておく。
   // 連続スワイプしたとき、このスライドが隣接位置に来る頃にはすでにバッファがそこそこ温まっている状態にしておき、
   // 中央に来た瞬間にも黒画面が見えないようにする。
   // モバイル Safari の同時接続上限 (約 4) は 中央 1 + 隣接 2 + この先読み 1 = 計 4 で上限ギリギリ。
+  // 高速スワイプ中は slots を空にして隠し <video> をマウントしない (中央の帯域を奪わない)。
   const { slots: prefetchSlots, handleSlotError } = usePrefetchVideoBytes(
     items,
     currentIndex,
+    isRapidSwiping,
   );
 
   const [dragPx,         setDragPx]       = useState(0);
@@ -56,6 +74,32 @@ export default function FeedViewer({
   const dragStartYForEnd = useRef(0);
   const dragStartTime    = useRef(0);
   const isDragging       = useRef(false);
+
+  // 高速スワイプ検出。
+  //  - 直近の currentIndex 変更から RAPID_THRESHOLD_MS 以内に再度変わると "rapid" に入る。
+  //  - 最後の currentIndex 変更から RAPID_SETTLE_MS 経過したら "rapid" を解除。
+  //  - 解除と同時に prefetch hook 側のデバウンスタイマーが走り、現在 index 周辺を温める。
+  useEffect(() => {
+    const now = Date.now();
+    const sinceLast = now - lastIndexChangeRef.current;
+    lastIndexChangeRef.current = now;
+    if (sinceLast < RAPID_THRESHOLD_MS) {
+      setIsRapidSwiping(true);
+    }
+    if (rapidSettleTimerRef.current) {
+      clearTimeout(rapidSettleTimerRef.current);
+    }
+    rapidSettleTimerRef.current = setTimeout(() => {
+      setIsRapidSwiping(false);
+      rapidSettleTimerRef.current = null;
+    }, RAPID_SETTLE_MS);
+    return () => {
+      if (rapidSettleTimerRef.current) {
+        clearTimeout(rapidSettleTimerRef.current);
+        rapidSettleTimerRef.current = null;
+      }
+    };
+  }, [currentIndex]);
 
   // モーダル開閉状態をカスタムイベントで受け取る
   useEffect(() => {
@@ -206,6 +250,7 @@ export default function FeedViewer({
           key={slot.id}
           slug={slot.slug}
           src={slot.src}
+          preload={isRapidSwiping ? "metadata" : "auto"}
           onError={handleSlotError}
         />
       ))}
@@ -234,6 +279,7 @@ export default function FeedViewer({
               isAdjacent={Math.abs(offset) === 1}
               isFirst={absIndex === 0}
               isSecond={absIndex === 1}
+              isRapidSwiping={isRapidSwiping}
             />
           </div>
         );

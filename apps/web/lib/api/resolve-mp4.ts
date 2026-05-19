@@ -19,19 +19,29 @@ export type ResolveMp4Response = {
 
 /**
  * クライアント側メモリ内 in-flight デデュープキャッシュ。
+ *
  * 同じ slug を複数のコンポーネント (usePrefetchResolveMp4 / usePrefetchVideoBytes /
  * useResolvedVideoSrc) が同時に要求しても、API リクエストは 1 本にまとめる。
- * 解決済みの Promise もキャッシュして、二重リクエストを避ける。
- * force=true のリトライはキャッシュをバイパスし、成功したらキャッシュを上書きする。
  *
- * 重要 (PR #95): 内部の fetch には signal を渡さない。呼び出し元の signal は
- * 「Promise を await するか即座に null を返すか」の判定にのみ使う。
- * そうしないと、先に fetch を発火したコンポーネントがスクロールで abort されたときに、
- * 同じ slug を必要とする他のコンポーネント (例: 中央に到達した useResolvedVideoSrc)
- * まで巻き込まれて null が返ってきてしまう。fetch 自体は常に完走させて、
- * クライアント側と API 側キャッシュを確実に温める。
+ * AbortSignal の扱い (PR #95 → 改訂):
+ *   - 内部 fetch には共用 AbortController を渡し、購読者 (consumer) を参照カウントで
+ *     管理する。
+ *   - 全ての consumer が abort された場合に限り、内部 fetch を実際に中断する。
+ *   - これにより:
+ *       * 高速スワイプで古い prefetch の signal が abort されても、まだ「中央に到達した
+ *         useResolvedVideoSrc」など他の consumer が残っていれば fetch は止まらない。
+ *       * 逆に、誰も必要としなくなった (全 consumer が abort) ケースでは
+ *         無駄な resolver 呼び出しと帯域消費が実際に止まる。
+ *   - force=true は常にキャッシュをバイパスして新規 fetch を立てる。
  */
-const resolveCache = new Map<string, Promise<ResolveMp4Response | null>>();
+type CacheEntry = {
+  promise: Promise<ResolveMp4Response | null>;
+  controller: AbortController;
+  /** この in-flight に紐づく購読者数。0 になったら controller.abort()。 */
+  refCount: number;
+};
+
+const resolveCache = new Map<string, CacheEntry>();
 
 export async function resolveMp4Url(
   slug: string,
@@ -40,13 +50,14 @@ export async function resolveMp4Url(
   if (!slug) return null;
 
   // 呼び出し元の signal が既に abort されていれば即座に null。
-  // (ただし fetch はそれとは独立に走り続ける)
   if (options.signal?.aborted) return null;
 
-  // force=false のケース、既にキャッシュにあればそれを返す (新規 API を叩かない)。
+  // force=false のケース、既にキャッシュにあればそれを共有する。
   if (!options.force) {
     const cached = resolveCache.get(slug);
-    if (cached) return waitWithSignal(cached, options.signal);
+    if (cached) {
+      return subscribe(slug, cached, options.signal);
+    }
   }
 
   const params = new URLSearchParams();
@@ -56,7 +67,7 @@ export async function resolveMp4Url(
     query ? `?${query}` : ""
   }`;
 
-  // 内部 fetch には signal を渡さない。呼び出し元の abort は waitWithSignal で処理する。
+  const controller = new AbortController();
   const promise: Promise<ResolveMp4Response | null> = (async () => {
     try {
       const res = await fetch(url, {
@@ -64,6 +75,8 @@ export async function resolveMp4Url(
         // クライアントから直接叩くため Next.js のキャッシュは無効。
         // API 側で DB キャッシュを持っているのでここでキャッシュする必要はない。
         cache: "no-store",
+        // 全 consumer が abort されたら fetch も中断する。
+        signal: controller.signal,
       });
       if (!res.ok) {
         // 404 / 502 / 504 はサムネフォールバック (UX 上は同じ扱い)
@@ -75,41 +88,64 @@ export async function resolveMp4Url(
       }
       return data;
     } catch {
-      // ネットワークエラー
+      // ネットワークエラー / abort
       return null;
     }
   })();
 
-  // キャッシュに登録 (force も同様に上書きして 新しい URL を以降の読み出しに中継)。
-  // 但し null (失敗) ケースはキャッシュしない (一時的なネットワークエラーのリトライを可能にする)。
-  resolveCache.set(slug, promise);
+  const entry: CacheEntry = { promise, controller, refCount: 0 };
+  // force=true でも上書きしておく (これ以降の同一 slug 読み出しは新 URL を共有できる)。
+  resolveCache.set(slug, entry);
   void promise.then((res) => {
-    if (res === null && resolveCache.get(slug) === promise) {
+    // 失敗 (null) ケースはキャッシュから外す = 次回再試行できる。
+    if (res === null && resolveCache.get(slug) === entry) {
       resolveCache.delete(slug);
     }
   });
 
-  return waitWithSignal(promise, options.signal);
+  return subscribe(slug, entry, options.signal);
 }
 
 /**
- * 共有した Promise を await しつつ、呼び出し元の signal が abort されたら
- * 即座に null を返す (Promise 自体は abort されず走り続ける)。
+ * 共有 in-flight に consumer として subscribe する。
+ *  - signal が abort されたら refCount を 1 減らし、0 になったら controller.abort()。
+ *  - signal が無い consumer も 1 カウントされ、Promise 完了時に解放される。
+ *  - signal が既に abort されていれば購読せず即 null。
  */
-function waitWithSignal<T>(
-  promise: Promise<T | null>,
+function subscribe(
+  slug: string,
+  entry: CacheEntry,
   signal: AbortSignal | undefined,
-): Promise<T | null> {
-  if (!signal) return promise;
-  if (signal.aborted) return Promise.resolve(null);
-  return new Promise<T | null>((resolve) => {
+): Promise<ResolveMp4Response | null> {
+  if (signal?.aborted) return Promise.resolve(null);
+
+  entry.refCount += 1;
+  let released = false;
+  const release = () => {
+    if (released) return;
+    released = true;
+    entry.refCount -= 1;
+    if (entry.refCount <= 0) {
+      // 全 consumer が離脱 → 実 fetch を中断
+      entry.controller.abort();
+      if (resolveCache.get(slug) === entry) {
+        resolveCache.delete(slug);
+      }
+    }
+  };
+
+  return new Promise<ResolveMp4Response | null>((resolve) => {
     const onAbort = () => {
-      signal.removeEventListener("abort", onAbort);
+      signal?.removeEventListener("abort", onAbort);
+      release();
       resolve(null);
     };
-    signal.addEventListener("abort", onAbort, { once: true });
-    promise.then((value) => {
-      signal.removeEventListener("abort", onAbort);
+    if (signal) {
+      signal.addEventListener("abort", onAbort, { once: true });
+    }
+    entry.promise.then((value) => {
+      if (signal) signal.removeEventListener("abort", onAbort);
+      release();
       resolve(value);
     });
   });

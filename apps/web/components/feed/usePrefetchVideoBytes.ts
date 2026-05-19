@@ -59,6 +59,7 @@ interface PrefetchSlot {
 export function usePrefetchVideoBytes(
   items: MovieCard[],
   currentIndex: number,
+  isRapidSwiping: boolean = false,
 ): {
   slots: PrefetchSlot[];
   handleSlotError: (slug: string) => void;
@@ -99,6 +100,14 @@ export function usePrefetchVideoBytes(
     for (const [slug, controller] of inFlight.entries()) {
       controller.abort();
       inFlight.delete(slug);
+    }
+
+    // 高速スワイプ中は隠し <video> のマウントも resolve も走らせない。
+    // 中央の <video> が同時接続枠 / 帯域を独占できるようにする。
+    // スワイプが止まれば isRapidSwiping=false でこの effect が再実行されて
+    // 通常の debounce 経路で slot が立ち上がる。
+    if (isRapidSwiping) {
+      return;
     }
 
     // currentIndex が PREFETCH_DEBOUNCE_MS の間変わらなかったら slot 化 + resolve 発火。
@@ -149,7 +158,7 @@ export function usePrefetchVideoBytes(
     return () => {
       clearTimeout(timer);
     };
-  }, [items, currentIndex]);
+  }, [items, currentIndex, isRapidSwiping]);
 
   // アンマウント時に全 resolve を abort
   useEffect(() => {

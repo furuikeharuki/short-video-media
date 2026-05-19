@@ -13,6 +13,14 @@ interface Props {
   videoRef: RefObject<HTMLVideoElement>;
   thumbnailUrl: string;
   thumbnailAlt: string;
+  /**
+   * <video poster> を表示するかどうか。
+   * cachedSrc (= sample_movie_url) があり resolve API を叩かない場合は false にする。
+   * resolve 不要なケースでも poster を渡してしまうと、<video> マウント直後の数十〜数百ms
+   * (loadedmetadata → loadeddata の間) に poster 画像が見えてサムネのチラつきが発生するため、
+   * 「初回再生かつ resolve 必要」のときだけ poster を出すようにする。
+   */
+  showPoster: boolean;
   onLoadStart: () => void;
   onLoadedMetadata: () => void;
   onLoadedData: () => void;
@@ -38,6 +46,7 @@ export default function FeedItemVideo({
   videoRef,
   thumbnailUrl,
   thumbnailAlt,
+  showPoster,
   onLoadStart,
   onLoadedMetadata,
   onLoadedData,
@@ -94,9 +103,10 @@ export default function FeedItemVideo({
         src={src}
         // poster を指定しておくと、<video> が loadeddata に到達するまで
         // ブラウザがネイティブにサムネ画像を表示してくれる。
-        // これにより resolving (thumbnail-bg) → <video> マウント時の
-        // 「黒画面+スピナー」が出ず、サムネ+スピナーのまま自然に再生に遷移する。
-        poster={thumbnailUrl || undefined}
+        // resolve 必要 (cachedSrc 無し → thumbnail-bg 経由) のときだけ poster を出して、
+        // thumbnail-bg → <video> マウント時の黒画面+スピナーを避ける。
+        // 一方で cachedSrc 即時再生のときは poster を出すと逆にサムネが一瞬チラつくため undefined にする。
+        poster={showPoster && thumbnailUrl ? thumbnailUrl : undefined}
         muted
         loop
         playsInline

@@ -221,6 +221,10 @@ export default function FeedItem({ item, isActive, isAdjacent = false, isFirst, 
             videoRef={videoRef}
             thumbnailUrl={item.image_url_large ?? item.image_url_list ?? ""}
             thumbnailAlt={item.title}
+            // cachedSrc (sample_movie_url) があるときは resolve API を叩かず即時に <video> に src を付けられるため
+            // poster を出さずに黒→再生としてサムネのチラつきを避ける。
+            // cachedSrc が無いときだけ resolving 中の thumbnail-bg から <video> マウントへの遷移を滑らかにするために poster を出す。
+            showPoster={!item.sample_movie_url}
             onLoadStart={handleLoadStart}
             onLoadedMetadata={handleLoadedMetadata}
             onLoadedData={handleLoadedData}

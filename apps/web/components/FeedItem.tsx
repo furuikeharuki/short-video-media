@@ -64,6 +64,12 @@ export default function FeedItem({ item, isActive, isAdjacent = false, isFirst, 
     enabled: isActive || isAdjacent,
   });
 
+  // <video> が loadeddata / seeked / canplay に到達したかどうかの React state。
+  // これが false の間 = まだ黒画面の可能性があるので、thumbnail-bg-overlay (サムネ画像) を
+  // <video> の上に被せて黒画面を隠す。ここは opacity DOM 直接操作とは独立した
+  // React state。 useFeedPlayback 側の setVideoReady は 引き続き <video> の opacity を調整する。
+  const [videoReady, setVideoReadyState] = useState(false);
+
   // ハードタイムアウト管理。videoSrc が変わるたびにタイマーを仕掛け直す。
   const hardTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const videoSettledRef = useRef(false);
@@ -145,6 +151,7 @@ export default function FeedItem({ item, isActive, isAdjacent = false, isFirst, 
     videoSettledRef.current = true;
     clearHardTimeout();
     setVideoReady(true);
+    setVideoReadyState(true);
     // 初回ロードが完了したらスピナーを消す。その後は waiting/playing イベントで制御される。
     setSpinnerVisible(false);
     // 今回のロードが成功したので、以前のエラーで出ていた shimmer も明示的に隠しておく。
@@ -158,6 +165,7 @@ export default function FeedItem({ item, isActive, isAdjacent = false, isFirst, 
     videoSettledRef.current = true;
     clearHardTimeout();
     setVideoReady(true);
+    setVideoReadyState(true);
     setSpinnerVisible(false);
     setShimmerVisible(false);
   }, [setVideoReady, setSpinnerVisible, setShimmerVisible, clearHardTimeout]);
@@ -171,6 +179,7 @@ export default function FeedItem({ item, isActive, isAdjacent = false, isFirst, 
     videoSettledRef.current = true;
     clearHardTimeout();
     setVideoReady(true);
+    setVideoReadyState(true);
     setSpinnerVisible(false);
     setShimmerVisible(false);
   }, [setVideoReady, setSpinnerVisible, setShimmerVisible, clearHardTimeout]);
@@ -210,6 +219,12 @@ export default function FeedItem({ item, isActive, isAdjacent = false, isFirst, 
     return clearHardTimeout;
   }, [isActive, videoSrc, handleVideoError, clearHardTimeout]);
 
+  // slug または videoSrc が変わったら videoReady をリセット。
+  // (同じ <video> 要素に新しい src が付いたケースも含めて、再ロード中はサムネ被せる)
+  useEffect(() => {
+    setVideoReadyState(false);
+  }, [item.slug, videoSrc]);
+
   // 中央のスライド (isActive=true) と隣接スライド (isAdjacent=true) で <video> を描画する。
   // 隣接スライドの <video> は preload="auto" でメディアバイトの先読みを進めておくが、
   // useFeedPlayback の自動再生 effect は isActive=true のときしか動かないため、
@@ -223,31 +238,60 @@ export default function FeedItem({ item, isActive, isAdjacent = false, isFirst, 
     <>
       <section ref={sectionRef} className="feed-item" data-movie-id={item.id}>
         {showVideo ? (
-          <FeedItemVideo
-            src={videoSrc}
-            preload={preloadAttr}
-            containerRef={containerRef}
-            shimmerRef={shimmerRef}
-            spinnerRef={spinnerRef}
-            fastBadgeRef={fastBadgeRef}
-            overlayRef={overlayRef}
-            videoRef={videoRef}
-            thumbnailUrl={item.image_url_large ?? item.image_url_list ?? ""}
-            thumbnailAlt={item.title}
-            onLoadStart={handleLoadStart}
-            onLoadedMetadata={handleLoadedMetadata}
-            onLoadedData={handleLoadedData}
-            onCanPlay={handleCanPlay}
-            onSeeked={handleSeeked}
-            onError={handleVideoError}
-            onTouchStart={handleTouchStart}
-            onTouchEnd={handleTouchEnd}
-            onTouchCancel={handleTouchCancel}
-            onMouseDown={handleMouseDown}
-            onMouseUp={handleMouseUp}
-            onMouseLeave={handleMouseLeave}
-            onClick={handlePcClick}
-          />
+          <>
+            <FeedItemVideo
+              src={videoSrc}
+              preload={preloadAttr}
+              containerRef={containerRef}
+              shimmerRef={shimmerRef}
+              spinnerRef={spinnerRef}
+              fastBadgeRef={fastBadgeRef}
+              overlayRef={overlayRef}
+              videoRef={videoRef}
+              thumbnailUrl={item.image_url_large ?? item.image_url_list ?? ""}
+              thumbnailAlt={item.title}
+              onLoadStart={handleLoadStart}
+              onLoadedMetadata={handleLoadedMetadata}
+              onLoadedData={handleLoadedData}
+              onCanPlay={handleCanPlay}
+              onSeeked={handleSeeked}
+              onError={handleVideoError}
+              onTouchStart={handleTouchStart}
+              onTouchEnd={handleTouchEnd}
+              onTouchCancel={handleTouchCancel}
+              onMouseDown={handleMouseDown}
+              onMouseUp={handleMouseUp}
+              onMouseLeave={handleMouseLeave}
+              onClick={handlePcClick}
+            />
+            {/*
+              中央スライドでまだ <video> が loadeddata / seeked 未到達のときに限り、
+              サムネ画像を <video> の上に被せて黒画面を防ぐ。
+              - isActive 以外 (隣接スライド): 被せない。隣側で見える予定はないため不要。
+              - videoReady=true (すでにフレーム取得済): 被せない。スワイプで中央に
+                来た隣接スライドはこのパスでサムネ表示されず、<video> の 1 フレームがそのまま見える。
+              - isActive=true かつ videoReady=false: 被せる。cachedSrc 有りでも、
+                スワイプ中に見えてしまうとチラつくので isActive 限定。
+            */}
+            {isActive && !videoReady && (
+              <div
+                className="thumbnail-cover"
+                aria-hidden="true"
+                onContextMenu={(e) => e.preventDefault()}
+              >
+                <img
+                  src={item.image_url_large ?? item.image_url_list ?? ""}
+                  alt={item.title}
+                  className="thumbnail-img"
+                  loading="eager"
+                  width={720}
+                  height={1280}
+                  draggable={false}
+                  onContextMenu={(e) => e.preventDefault()}
+                />
+              </div>
+            )}
+          </>
         ) : (
           <div
             className="thumbnail-bg"

@@ -36,6 +36,24 @@ export const itemStyle = `
     -webkit-user-select: none;
     user-select: none;
   }
+  /*
+    <video> の上に被せるサムネカバー。
+    showVideo=true (= <video> マウント済) で、まだ loadeddata / seeked 未到達の
+    期間だけ表示される。z-index は <video> (z-index 0相当) より上、
+    .overlay-wrap (z-index 25, スピナー・一時停止アイコン) より下。
+  */
+  .thumbnail-cover {
+    position: absolute;
+    inset: 0;
+    overflow: hidden;
+    background: #000;
+    z-index: 2;
+    border-radius: 8px;
+    pointer-events: none;
+    -webkit-touch-callout: none;
+    -webkit-user-select: none;
+    user-select: none;
+  }
   .thumbnail-img {
     position: absolute;
     inset: 0;

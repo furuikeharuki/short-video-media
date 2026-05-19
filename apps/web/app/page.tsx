@@ -53,14 +53,10 @@ export default async function Page() {
     );
   }
 
-  // native有効ならセクション間に native、なければ与えられたバナーを使う
-  const nativeEnabled = isAdZoneEnabled("native");
+  // セクション間広告は横長バナー（300x100）固定。
+  // native（縦型カード）は横スクロール行間には不自然なので使わない。
   const bannerEnabled = isAdZoneEnabled("mobileBanner300x100");
-  const showSectionAd = nativeEnabled || bannerEnabled;
-  // セクション間広告の間隔（3セクションに1枚）
   const SECTION_AD_EVERY = 3;
-  // native 広告の context カウンター
-  let nativeAdCount = 0;
 
   return (
     <PullToRefresh className="home-main">
@@ -76,12 +72,9 @@ export default async function Page() {
           : { kind: "section" as const, key: section.key };
 
         const showAdAfter =
-          showSectionAd &&
+          bannerEnabled &&
           sectionIndex < sections.length - 1 &&
           (sectionIndex + 1) % SECTION_AD_EVERY === 0;
-
-        // native の場合は context で母体公告を区別する
-        const currentNativeCount = showAdAfter && nativeEnabled ? nativeAdCount++ : nativeAdCount;
 
         return (
           <div key={section.key}>
@@ -108,15 +101,7 @@ export default async function Page() {
             </HorizontalCardRow>
             {showAdAfter && (
               <div className="home-section-ad">
-                {nativeEnabled ? (
-                  <AdSlot
-                    zone="native"
-                    context={`home-section-${currentNativeCount}`}
-                    label="広告"
-                  />
-                ) : (
-                  <AdSlot zone="mobileBanner300x100" />
-                )}
+                <AdSlot zone="mobileBanner300x100" />
               </div>
             )}
           </div>

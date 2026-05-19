@@ -2,24 +2,36 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import FeedItem from "@/components/FeedItem";
+import FeedAdSlide from "@/components/ads/FeedAdSlide";
 import type { MovieCard } from "@/lib/api/feed";
 import { markFeedGesture } from "@/components/feed/useFeedPlayback";
 import { usePrefetchResolveMp4 } from "@/components/feed/usePrefetchResolveMp4";
 import { usePrefetchVideoBytes } from "@/components/feed/usePrefetchVideoBytes";
 import PrefetchVideoBuffer from "@/components/feed/PrefetchVideoBuffer";
+import { AD_FEED_INTERVAL, isAdZoneEnabled } from "@/lib/ads/config";
 
-// 同時にレンダリングするスライド数 = 中央 + 前後1枚ずつの計3枚。
-// 中央 (isActive) と隣接スライド (isAdjacent) の両方で <video> をマウントして preload を進めることで、
-// スワイプで中央に来た瞬間、新規マウント → loadstart → loadedmetadata の連鎖を避け、
-// 黒画面 + スピナーの一瞬挟まりを解消する。
-// モバイル Safari の同時接続上限は約 4 で、中央 1 + 隣接 2 + currentIndex+2 の隠し先読み 1 = 計 4。
 const WINDOW_SIZE = 1;
-
-// 高速スワイプ判定の閾値。
-// 前回 currentIndex 変更から RAPID_THRESHOLD_MS 以内に次の変更が来たら高速スワイプ中とみなす。
 const RAPID_THRESHOLD_MS = 350;
-// 最後の currentIndex 変更から RAPID_SETTLE_MS 経過で高速スワイプ解除 (= prefetch 再開許可)。
 const RAPID_SETTLE_MS = 350;
+
+type FeedSlide =
+  | { kind: "video"; movie: MovieCard; videoIndex: number }
+  | { kind: "ad"; adIndex: number };
+
+function buildSlides(movies: MovieCard[], interval: number, adEnabled: boolean): FeedSlide[] {
+  if (!adEnabled || interval <= 0) {
+    return movies.map((m, i) => ({ kind: "video", movie: m, videoIndex: i }));
+  }
+  const slides: FeedSlide[] = [];
+  let adIndex = 0;
+  movies.forEach((m, i) => {
+    slides.push({ kind: "video", movie: m, videoIndex: i });
+    if ((i + 1) % interval === 0 && i < movies.length - 1) {
+      slides.push({ kind: "ad", adIndex: adIndex++ });
+    }
+  });
+  return slides;
+}
 
 interface Props {
   items: MovieCard[];
@@ -35,36 +47,28 @@ export default function FeedViewer({
   onIndexChange,
 }: Props) {
   const containerRef  = useRef<HTMLDivElement>(null);
-  const currentIdxRef = useRef(initialIndex);
+  const currentIdxRef = useRef(0);
   const wheelLockRef  = useRef(false);
   const modalOpenRef  = useRef(false);
 
-  const [currentIndex, setCurrentIndex] = useState(initialIndex);
-  const [windowItems,  setWindowItems]  = useState<MovieCard[]>([]);
+  const adEnabled = isAdZoneEnabled("feedNative") && AD_FEED_INTERVAL > 0;
+
+  const [currentIndex, setCurrentIndex] = useState(0);
+  const [slides, setSlides] = useState<FeedSlide[]>([]);
+  const [windowSlides, setWindowSlides] = useState<FeedSlide[]>([]);
   const windowStartRef = useRef(0);
 
-  // 高速連続スワイプ状態。currentIndex が短時間に立て続けに変わると true になり、
-  // 一定時間 (RAPID_SETTLE_MS) currentIndex が変わらなければ false に戻る。
-  // 値が true の間は usePrefetchResolveMp4 / usePrefetchVideoBytes を停止し、
-  // 隣接 <video> の preload も "metadata" に弱める。これにより、中央 (active) 動画の
-  // resolve と Range 取得が帯域 / 同時接続枠 / resolver 枠を奪われずに進む。
   const [isRapidSwiping, setIsRapidSwiping] = useState(false);
   const lastIndexChangeRef = useRef(0);
   const rapidSettleTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  // 先 3 枚分の MP4 URL を resolver で事前解決しておき、スワイプ到達時の
-  // 再生開始を早める (resolver 側の 60s キャッシュを温めるだけで <video> は増やさない)。
-  // クライアント側も resolveMp4Url のメモリキャッシュを温め、以降の同じ slug 読み出しを 0 リクエストにする。
-  // 高速スワイプ中は内部でデバウンスを長くし、停止後の currentIndex 周辺だけ発火する。
-  usePrefetchResolveMp4(items, currentIndex, isRapidSwiping);
+  const movieItems = slides
+    .filter((s): s is Extract<FeedSlide, { kind: "video" }> => s.kind === "video")
+    .map((s) => s.movie);
 
-  // currentIndex+2 (= 「次の次」) だけ、高接続コストを払って CDN から動画バイトも先読みしておく。
-  // 連続スワイプしたとき、このスライドが隣接位置に来る頃にはすでにバッファがそこそこ温まっている状態にしておき、
-  // 中央に来た瞬間にも黒画面が見えないようにする。
-  // モバイル Safari の同時接続上限 (約 4) は 中央 1 + 隣接 2 + この先読み 1 = 計 4 で上限ギリギリ。
-  // 高速スワイプ中は slots を空にして隠し <video> をマウントしない (中央の帯域を奪わない)。
+  usePrefetchResolveMp4(movieItems, currentIndex, isRapidSwiping);
   const { slots: prefetchSlots, handleSlotError } = usePrefetchVideoBytes(
-    items,
+    movieItems,
     currentIndex,
     isRapidSwiping,
   );
@@ -75,33 +79,21 @@ export default function FeedViewer({
   const dragStartTime    = useRef(0);
   const isDragging       = useRef(false);
 
-  // 高速スワイプ検出。
-  //  - 直近の currentIndex 変更から RAPID_THRESHOLD_MS 以内に再度変わると "rapid" に入る。
-  //  - 最後の currentIndex 変更から RAPID_SETTLE_MS 経過したら "rapid" を解除。
-  //  - 解除と同時に prefetch hook 側のデバウンスタイマーが走り、現在 index 周辺を温める。
   useEffect(() => {
     const now = Date.now();
     const sinceLast = now - lastIndexChangeRef.current;
     lastIndexChangeRef.current = now;
-    if (sinceLast < RAPID_THRESHOLD_MS) {
-      setIsRapidSwiping(true);
-    }
-    if (rapidSettleTimerRef.current) {
-      clearTimeout(rapidSettleTimerRef.current);
-    }
+    if (sinceLast < RAPID_THRESHOLD_MS) setIsRapidSwiping(true);
+    if (rapidSettleTimerRef.current) clearTimeout(rapidSettleTimerRef.current);
     rapidSettleTimerRef.current = setTimeout(() => {
       setIsRapidSwiping(false);
       rapidSettleTimerRef.current = null;
     }, RAPID_SETTLE_MS);
     return () => {
-      if (rapidSettleTimerRef.current) {
-        clearTimeout(rapidSettleTimerRef.current);
-        rapidSettleTimerRef.current = null;
-      }
+      if (rapidSettleTimerRef.current) clearTimeout(rapidSettleTimerRef.current);
     };
   }, [currentIndex]);
 
-  // モーダル開閉状態をカスタムイベントで受け取る
   useEffect(() => {
     const onOpen  = () => { modalOpenRef.current = true; };
     const onClose = () => { modalOpenRef.current = false; };
@@ -113,55 +105,54 @@ export default function FeedViewer({
     };
   }, []);
 
-  const updateWindow = useCallback((idx: number) => {
+  const updateWindow = useCallback((idx: number, allSlides: FeedSlide[]) => {
     const start = Math.max(0, idx - WINDOW_SIZE);
-    const end   = Math.min(items.length, idx + WINDOW_SIZE + 1);
+    const end   = Math.min(allSlides.length, idx + WINDOW_SIZE + 1);
     windowStartRef.current = start;
-    setWindowItems(items.slice(start, end));
-  }, [items]);
+    setWindowSlides(allSlides.slice(start, end));
+  }, []);
 
-  // 初期インデックスを適用するのはマウント時 1 回だけ。
-  // fetchMore() で items が追記されるたびにこの effect が再生して
-  // setCurrentIndex(initialIndex) で先頭に戻されてしまうバグを防ぐ。
-  // items が増えるだけのケースは windowItems を現在 idx で再計算すればよい。
   const didInitRef = useRef(false);
   useEffect(() => {
+    const newSlides = buildSlides(items, AD_FEED_INTERVAL, adEnabled);
+    setSlides(newSlides);
     if (didInitRef.current) {
-      // 2 回目以降: items が追記されたときは window だけ現在 idx で更新。
-      // 現在インデックスが新しい items 長の範囲を越えないようクランプ。
-      const clamped = Math.min(currentIdxRef.current, Math.max(0, items.length - 1));
+      const clamped = Math.min(currentIdxRef.current, Math.max(0, newSlides.length - 1));
       if (clamped !== currentIdxRef.current) {
         currentIdxRef.current = clamped;
         setCurrentIndex(clamped);
       }
-      updateWindow(clamped);
+      updateWindow(clamped, newSlides);
       return;
     }
     didInitRef.current = true;
-    currentIdxRef.current = initialIndex;
-    setCurrentIndex(initialIndex);
-    updateWindow(initialIndex);
-    // 初期インデックスが既に末尾近く (残り 5 件以下) のケース、
-    // 例えば 20 件セクションの 20 件目 (index=19) から開始した場合は
-    // スワイプしないと onNearEnd が一度も引かれず fetchMore() が走らず、
-    // 「末尾」のまま固定されてしまう。初回マウント時に即座追加を促す。
-    if (items.length > 0 && items.length - initialIndex <= 5) {
-      onNearEnd?.(initialIndex);
+    const startIdx = 0;
+    currentIdxRef.current = startIdx;
+    setCurrentIndex(startIdx);
+    updateWindow(startIdx, newSlides);
+    if (newSlides.length > 0 && newSlides.length - startIdx <= 5) {
+      onNearEnd?.(startIdx);
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [items, initialIndex, updateWindow]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [items]);
 
   const goNext = useCallback(() => {
-    const nextIdx = currentIdxRef.current + 1;
-    if (nextIdx >= items.length) return;
-    // スワイプやホイールによるスライド遷移をユーザー操作としてマークし、次動画の unmuted 自動再生を許す
-    markFeedGesture();
-    currentIdxRef.current = nextIdx;
-    setCurrentIndex(nextIdx);
-    updateWindow(nextIdx);
-    onIndexChange?.(nextIdx);
-    if (items.length - nextIdx <= 5) onNearEnd?.(nextIdx);
-  }, [items, updateWindow, onNearEnd, onIndexChange]);
+    setSlides((prevSlides) => {
+      const nextIdx = currentIdxRef.current + 1;
+      if (nextIdx >= prevSlides.length) return prevSlides;
+      markFeedGesture();
+      currentIdxRef.current = nextIdx;
+      setCurrentIndex(nextIdx);
+      updateWindow(nextIdx, prevSlides);
+      onIndexChange?.(nextIdx);
+      const movieCount = prevSlides.filter(s => s.kind === "video").length;
+      const passedMovies = prevSlides
+        .slice(0, nextIdx + 1)
+        .filter(s => s.kind === "video").length;
+      if (movieCount - passedMovies <= 5) onNearEnd?.(nextIdx);
+      return prevSlides;
+    });
+  }, [updateWindow, onNearEnd, onIndexChange]);
 
   const goPrev = useCallback(() => {
     const next = Math.max(0, currentIdxRef.current - 1);
@@ -169,30 +160,28 @@ export default function FeedViewer({
     markFeedGesture();
     currentIdxRef.current = next;
     setCurrentIndex(next);
-    updateWindow(next);
+    setSlides((prev) => { updateWindow(next, prev); return prev; });
     onIndexChange?.(next);
   }, [updateWindow, onIndexChange]);
 
   useEffect(() => {
     const el = containerRef.current;
     if (!el) return;
-
     const onTouchStart = (e: TouchEvent) => {
       if (modalOpenRef.current) return;
       const y = e.touches[0].clientY;
-      isDragging.current       = true;
-      dragStartY.current       = y;
+      isDragging.current = true;
+      dragStartY.current = y;
       dragStartYForEnd.current = y;
-      dragStartTime.current    = Date.now();
+      dragStartTime.current = Date.now();
       setDragPx(0);
     };
-
     const onTouchMove = (e: TouchEvent) => {
       if (modalOpenRef.current) return;
       e.preventDefault();
       if (!isDragging.current) return;
-      const dy    = e.touches[0].clientY - dragStartY.current;
-      const atEnd = currentIdxRef.current >= items.length - 1;
+      const dy   = e.touches[0].clientY - dragStartY.current;
+      const atEnd = currentIdxRef.current >= slides.length - 1;
       const atTop = currentIdxRef.current <= 0;
       if ((dy > 0 && atTop) || (dy < 0 && atEnd)) {
         setDragPx(dy * 0.35);
@@ -200,7 +189,6 @@ export default function FeedViewer({
         setDragPx(dy);
       }
     };
-
     const onTouchEnd = (e: TouchEvent) => {
       if (modalOpenRef.current) { isDragging.current = false; return; }
       if (!isDragging.current) return;
@@ -212,12 +200,7 @@ export default function FeedViewer({
         if (dy < 0) goNext(); else goPrev();
       }
     };
-
-    const onTouchCancel = () => {
-      isDragging.current = false;
-      setDragPx(0);
-    };
-
+    const onTouchCancel = () => { isDragging.current = false; setDragPx(0); };
     const onWheel = (e: WheelEvent) => {
       if (modalOpenRef.current) return;
       e.preventDefault();
@@ -226,7 +209,6 @@ export default function FeedViewer({
       setTimeout(() => { wheelLockRef.current = false; }, 300);
       if (e.deltaY > 0) goNext(); else goPrev();
     };
-
     el.addEventListener("touchstart",  onTouchStart,  { passive: true });
     el.addEventListener("touchmove",   onTouchMove,   { passive: false });
     el.addEventListener("touchend",    onTouchEnd,    { passive: true });
@@ -239,7 +221,7 @@ export default function FeedViewer({
       el.removeEventListener("touchcancel", onTouchCancel);
       el.removeEventListener("wheel",       onWheel);
     };
-  }, [goNext, goPrev, items]);
+  }, [goNext, goPrev, slides]);
 
   const isDraggingState = dragPx !== 0;
 
@@ -254,31 +236,37 @@ export default function FeedViewer({
           onError={handleSlotError}
         />
       ))}
-      {windowItems.map((item, i) => {
+      {windowSlides.map((slide, i) => {
         const absIndex = windowStartRef.current + i;
         const offset   = absIndex - currentIndex;
         const isActive = offset === 0;
         const transform  = `translateY(calc(${offset * 100}% + ${dragPx}px))`;
         const transition = isDraggingState ? "none" : "transform 0.35s cubic-bezier(0.25,1,0.5,1)";
+
+        if (slide.kind === "ad") {
+          return (
+            <div
+              key={`ad-${slide.adIndex}`}
+              className="feed-slide"
+              style={{ transform, transition, zIndex: isActive ? 2 : 1, pointerEvents: isActive ? "auto" : "none" }}
+            >
+              <FeedAdSlide adIndex={slide.adIndex} isActive={isActive} />
+            </div>
+          );
+        }
+
         return (
           <div
-            // key を absIndex に依存させない。スワイプの度に再マウントされて
-            // <video> が読み込み直しになるのを防ぐ。
-            key={item.id}
+            key={slide.movie.id}
             className="feed-slide"
-            style={{
-              transform,
-              transition,
-              zIndex:        isActive ? 2 : 1,
-              pointerEvents: isActive ? "auto" : "none",
-            }}
+            style={{ transform, transition, zIndex: isActive ? 2 : 1, pointerEvents: isActive ? "auto" : "none" }}
           >
             <FeedItem
-              item={item}
+              item={slide.movie}
               isActive={isActive}
               isAdjacent={Math.abs(offset) === 1}
-              isFirst={absIndex === 0}
-              isSecond={absIndex === 1}
+              isFirst={slide.videoIndex === 0}
+              isSecond={slide.videoIndex === 1}
               isRapidSwiping={isRapidSwiping}
             />
           </div>

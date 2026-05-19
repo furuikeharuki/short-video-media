@@ -120,35 +120,37 @@ export default function FeedItem({ item, isActive, isAdjacent = false, isFirst, 
   // スワイプで中央に来た瞬間、すでに loadedmetadata / loadeddata まで進んでいる状態を作る。
   const preloadAttr = isFirst || isSecond || isActive || isAdjacent ? "auto" : "metadata";
 
-  // <video> がロードを開始したときに shimmer を一旦表示する。
-  // プリフェッチ済スライドでは loadstart → loadedmetadata が同一タスクキュー内に連続で
-  // 走るため、ブラウザは shimmer をレンダリングする前に消すことになりチラつかない。
-  // 初回ロード遅延 (プリフェッチ未ヒットや低速回線) のケースでだけ、サムネが
-  // 表示されて黒画面を防ぐ。
+  // <video> がロードを開始したときのハンドラ。
+  // 以前はここで shimmer (サムネ) を表示していたが、ロード中にサムネが一瞬見える
+  // チラつきを避けるため、現在は何もしない (スピナーは useFeedPlayback の
+  // waiting/stalled イベントと遅延タイマーで制御される)。
+  // サムネは onError 時のフォールバック用途に限定された。
   const handleLoadStart = useCallback(() => {
-    setShimmerVisible(true);
-  }, [setShimmerVisible]);
+    // no-op (以前は setShimmerVisible(true))
+  }, []);
 
-  // 動画のメタデータ (幅・高さ・duration 等) が読めた時点。
-  // このタイミングではまだピクセルデータはないが、すぐ後に loadeddata/canplay で
-  // <video> の opacity が 1 になるため、shimmer をここで消してもチラつかない。
-  const handleLoadedMetadata = useCallback(() => {
-    setShimmerVisible(false);
-  }, [setShimmerVisible]);
+  // loadedmetadata も現在は何もしない (もともと shimmer を消すためだけのハンドラだった)。
+  const handLoadedMetadataNoop = useCallback(() => {}, []);
+  const handleLoadedMetadata = handLoadedMetadataNoop;
 
   const handleLoadedData = useCallback(() => {
     videoSettledRef.current = true;
     clearHardTimeout();
     setVideoReady(true);
-    // 初回ロードが完了したらスピナーも一旦消す。その後は waiting/playing イベントで制御される。
+    // 初回ロードが完了したらスピナーを消す。その後は waiting/playing イベントで制御される。
     setSpinnerVisible(false);
-  }, [setVideoReady, setSpinnerVisible, clearHardTimeout]);
+    // 今回のロードが成功したので、以前のエラーで出ていた shimmer も明示的に隠しておく。
+    setShimmerVisible(false);
+  }, [setVideoReady, setSpinnerVisible, setShimmerVisible, clearHardTimeout]);
 
   const handleVideoError = useCallback(() => {
     videoSettledRef.current = true;
     clearHardTimeout();
+    // 動画ロードに失敗したときはサムネ (shimmer) にフォールバックして
+    // 黒画面を避ける。リトライが走り、次の loadeddata が来れば shimmer は消される。
+    setShimmerVisible(true);
     handleError();
-  }, [handleError, clearHardTimeout]);
+  }, [handleError, clearHardTimeout, setShimmerVisible]);
 
   // videoSrc が変わるたびにハードタイムアウトをセットし直す。
   // VIDEO_HARD_TIMEOUT_MS 以内に loadedmetadata / error が発火しないと

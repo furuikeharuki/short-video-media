@@ -84,8 +84,7 @@ export function useFeedPlayback({ slug, title, isActive, videoSrc, onOpenModal, 
 
   const isPlayingRef             = useRef(false);
   // この <video> インスタンスで一度でも playing イベントが発火したかどうか。
-  // 「一度でも再生が始まったら、その後の loadstart でサムネ (shimmer) を出さない」ロジックに使う。
-  // ループ再生や force リトライなどで loadstart が再発火したときにサムネが一瞬見えてしまうのを防ぐ。
+  // 現在は主に「初回ロード完了後に shimmer タイマーをリセットしない」等の状態追跡用。
   // videoSrc が変わったとき (= 新しい作品に切り替わったとき) はリセット。
   const hasPlayedRef             = useRef(false);
   // スピナー表示を一定時間遅らせるためのタイマー ID。
@@ -141,23 +140,10 @@ export function useFeedPlayback({ slug, title, isActive, videoSrc, onOpenModal, 
 
   // shimmer (サムネ画像背景) の表示制御。
   //
-  // 「プリフェッチ済の次動画はすぐ再生できるのに、スワイプ直後に
-  // サムネが一瞬見えてチラつく」問題を避けるため、shimmer は初期状態で
-  // display:none とし、<video> の loadstart で block / loadedmetadata で
-  // none にスイッチさせる。
-  //
-  // プリフェッチ済のケースでは loadstart → loadedmetadata が同じタスクキュー内に
-  // 連続で発火するため、ブラウザのレンダリングサイクル上 shimmer は描画される前に
-  // 消される (人間には見えない)。
-  // 初回ロード遅延 (プリフェッチ未ヒットや低速回線) のケースは loadstart と
-  // loadedmetadata の間に間隔があるため、サムネが表示されて黒画面を防ぐ。
-  //
-  // 一度でも playing イベントが発火した後 (hasPlayedRef=true) は、再生中の
-  // バッファ不足やループ再生 / force リトライなどで loadstart が再発火したとしても
-  // サムネを出さずスピナーのみ表示する (スピナーは waiting/stalled イベントで制御)。
-  // これにより「再生中にサムネが一瞬見える」チラつきを防ぐ。
+  // 現在の設計では shimmer は「動画取得・再生がどうしてもできない状況 (onError)」
+  // のフォールバックサムネとしてのみ使用される。
+  // 通常のロード中は <video> の最初の 1 フレームが表示されたままスピナーだけが出る設計。
   const setShimmerVisible = useCallback((visible: boolean) => {
-    if (visible && hasPlayedRef.current) return;
     const shimmer = shimmerRef.current;
     if (shimmer) shimmer.style.display = visible ? "block" : "none";
   }, []);

@@ -13,6 +13,8 @@ interface Props {
   videoRef: RefObject<HTMLVideoElement>;
   thumbnailUrl: string;
   thumbnailAlt: string;
+  onLoadStart: () => void;
+  onLoadedMetadata: () => void;
   onLoadedData: () => void;
   onCanPlay: () => void;
   onError?: (e: React.SyntheticEvent<HTMLVideoElement>) => void;
@@ -36,6 +38,8 @@ export default function FeedItemVideo({
   videoRef,
   thumbnailUrl,
   thumbnailAlt,
+  onLoadStart,
+  onLoadedMetadata,
   onLoadedData,
   onCanPlay,
   onError,
@@ -61,10 +65,17 @@ export default function FeedItemVideo({
     >
       {/*
         ロード中の背景サムネイル (動画と同じ contain ・同じ位置)。
-        動画が canplay に達したら useFeedPlayback.setVideoReady() で display:none にして消す。
-        スピナー自体は overlay-wrap 側に独立して置き、再生中のバッファ不足時にも表示できるようにする。
+        初期状態で display:none。<video> の loadstart で block にし、
+        loadedmetadata で none に戻すことで、プリフェッチ済スライドでスワイプした
+        瞬間にサムネが一瞬見えるチラつきを避ける。スピナー自体は overlay-wrap 側に
+        独立して置き、再生中のバッファ不足時にも表示できるようにする。
       */}
-      <div ref={shimmerRef} className="shimmer" aria-hidden="true">
+      <div
+        ref={shimmerRef}
+        className="shimmer"
+        aria-hidden="true"
+        style={{ display: "none" }}
+      >
         {thumbnailUrl ? (
           <img
             src={thumbnailUrl}
@@ -85,6 +96,8 @@ export default function FeedItemVideo({
         loop
         playsInline
         preload={preload}
+        onLoadStart={onLoadStart}
+        onLoadedMetadata={onLoadedMetadata}
         onLoadedData={onLoadedData}
         onCanPlay={onCanPlay}
         onError={onError}

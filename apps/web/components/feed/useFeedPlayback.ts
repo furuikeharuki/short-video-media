@@ -120,11 +120,31 @@ export function useFeedPlayback({ slug, title, isActive, videoSrc, onOpenModal, 
   // .overlay-wrap 内で中央に表示されるローディングスピナー (.loading-spinner) は
   // 独立して制御する。そうしないとキャッシュ切れで再バッファーしたときに
   // スピナーだけ表示したいケースをサポートできない。
+  //
+  // 注: この関数は <video> の opacity のみ制御する。shimmer の表示制御は
+  // setShimmerVisible で独立に行う (プリフェッチ済スライドでサムネが
+  // 一瞬見えるチラつきを避けるため、shimmer は loadstart/loadedmetadata ベースで
+  // 動かす)。
   const setVideoReady = useCallback((ready: boolean) => {
-    const video   = videoRef.current;
+    const video = videoRef.current;
+    if (video) video.style.opacity = ready ? "1" : "0";
+  }, []);
+
+  // shimmer (サムネ画像背景) の表示制御。
+  //
+  // 「プリフェッチ済の次動画はすぐ再生できるのに、スワイプ直後に
+  // サムネが一瞬見えてチラつく」問題を避けるため、shimmer は初期状態で
+  // display:none とし、<video> の loadstart で block / loadedmetadata で
+  // none にスイッチさせる。
+  //
+  // プリフェッチ済のケースでは loadstart → loadedmetadata が同じタスクキュー内に
+  // 連続で発火するため、ブラウザのレンダリングサイクル上 shimmer は描画される前に
+  // 消される (人間には見えない)。
+  // 初回ロード遅延 (プリフェッチ未ヒットや低速回線) のケースは loadstart と
+  // loadedmetadata の間に間隔があるため、サムネが表示されて黒画面を防ぐ。
+  const setShimmerVisible = useCallback((visible: boolean) => {
     const shimmer = shimmerRef.current;
-    if (video)   video.style.opacity   = ready ? "1" : "0";
-    if (shimmer) shimmer.style.display = ready ? "none" : "block";
+    if (shimmer) shimmer.style.display = visible ? "block" : "none";
   }, []);
 
   // ローディングスピナーの表示・非表示を切り替える。
@@ -303,10 +323,13 @@ export function useFeedPlayback({ slug, title, isActive, videoSrc, onOpenModal, 
     }
     isPlayingRef.current = false;
     setVideoReady(false);
+    // shimmer は見せず、次回 loadstart まで非表示を維持。プリフェッチ済スライドで
+    // スワイプした瞬間にサムネが一瞬見えるチラつきを避けるため。
+    setShimmerVisible(false);
     setSpinnerVisible(true);
     setFastBadge(false);
     window.dispatchEvent(new CustomEvent("video-progress", { detail: { progress: 0 } }));
-  }, [isActive, setVideoReady, setSpinnerVisible, setFastBadge, stopProgressLoop]);
+  }, [isActive, setVideoReady, setShimmerVisible, setSpinnerVisible, setFastBadge, stopProgressLoop]);
 
   // プロ女優スキップの確定処理。
   // <video> がマウントされ duration が読めるようになったタイミングで、
@@ -638,6 +661,7 @@ export function useFeedPlayback({ slug, title, isActive, videoSrc, onOpenModal, 
     overlayRef,
     isMuted,
     setVideoReady,
+    setShimmerVisible,
     setSpinnerVisible,
     handleToggleMute,
     handleShare,

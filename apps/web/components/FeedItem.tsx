@@ -83,6 +83,7 @@ export default function FeedItem({ item, isActive, isFirst, isSecond = false }: 
     overlayRef,
     isMuted,
     setVideoReady,
+    setShimmerVisible,
     setSpinnerVisible,
     handleToggleMute,
     handleShare,
@@ -106,6 +107,22 @@ export default function FeedItem({ item, isActive, isFirst, isSecond = false }: 
   });
 
   const preloadAttr = isFirst || isSecond ? "auto" : "metadata";
+
+  // <video> がロードを開始したときに shimmer を一旦表示する。
+  // プリフェッチ済スライドでは loadstart → loadedmetadata が同一タスクキュー内に連続で
+  // 走るため、ブラウザは shimmer をレンダリングする前に消すことになりチラつかない。
+  // 初回ロード遅延 (プリフェッチ未ヒットや低速回線) のケースでだけ、サムネが
+  // 表示されて黒画面を防ぐ。
+  const handleLoadStart = useCallback(() => {
+    setShimmerVisible(true);
+  }, [setShimmerVisible]);
+
+  // 動画のメタデータ (幅・高さ・duration 等) が読めた時点。
+  // このタイミングではまだピクセルデータはないが、すぐ後に loadeddata/canplay で
+  // <video> の opacity が 1 になるため、shimmer をここで消してもチラつかない。
+  const handleLoadedMetadata = useCallback(() => {
+    setShimmerVisible(false);
+  }, [setShimmerVisible]);
 
   const handleLoadedData = useCallback(() => {
     videoSettledRef.current = true;
@@ -160,6 +177,8 @@ export default function FeedItem({ item, isActive, isFirst, isSecond = false }: 
             videoRef={videoRef}
             thumbnailUrl={item.image_url_large ?? item.image_url_list ?? ""}
             thumbnailAlt={item.title}
+            onLoadStart={handleLoadStart}
+            onLoadedMetadata={handleLoadedMetadata}
             onLoadedData={handleLoadedData}
             onCanPlay={() => { setVideoReady(true); setSpinnerVisible(false); }}
             onError={handleVideoError}

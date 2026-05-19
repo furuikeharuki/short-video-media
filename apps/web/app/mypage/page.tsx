@@ -28,6 +28,16 @@ export default function MyPage() {
   const [views, setViews] = useState<ViewItem[] | null>(null);
   const [loading, setLoading] = useState(false);
 
+  // タブ切替時はスクロールを一番上に戻す
+  // (短いタブと長いタブで縦位置がずれるのを防ぐ)
+  const handleTabChange = useCallback((next: Tab) => {
+    setTab(next);
+    if (typeof document !== "undefined") {
+      const el = document.querySelector<HTMLElement>(".mypage-main");
+      if (el) el.scrollTo({ top: 0, behavior: "auto" });
+    }
+  }, []);
+
   const loadData = useCallback(async () => {
     const [b, v] = await Promise.all([
       getBookmarks({ limit: 100 }),
@@ -102,7 +112,7 @@ export default function MyPage() {
     <PullToRefresh className="mypage-main" onRefresh={loadData}>
       <TabSwiper
         tab={tab}
-        onChange={setTab}
+        onChange={handleTabChange}
         bookmarks={bookmarks}
         views={views}
         loading={loading}
@@ -245,14 +255,24 @@ function TabSwiper({
           className={`mypage-swipe-track${isDragging ? " is-dragging" : ""}`}
           style={{ transform: `translate3d(${translateExpr}, 0, 0)` }}
         >
-          <div className="mypage-swipe-pane">
+          <div
+            className={`mypage-swipe-pane${
+              tab === "bookmarks" ? " is-active" : ""
+            }${isDragging ? " is-dragging" : ""}`}
+            aria-hidden={tab !== "bookmarks" && !isDragging}
+          >
             {loading && bookmarks === null ? (
               <div className="mypage-empty">読み込み中...</div>
             ) : (
               <BookmarkList items={bookmarks ?? []} />
             )}
           </div>
-          <div className="mypage-swipe-pane">
+          <div
+            className={`mypage-swipe-pane${
+              tab === "views" ? " is-active" : ""
+            }${isDragging ? " is-dragging" : ""}`}
+            aria-hidden={tab !== "views" && !isDragging}
+          >
             {loading && views === null ? (
               <div className="mypage-empty">読み込み中...</div>
             ) : (
@@ -420,6 +440,7 @@ const styles = `
   .mypage-swipe-track {
     display: flex;
     width: 100%;
+    align-items: flex-start;
     transition: transform 0.22s cubic-bezier(0.2, 0.7, 0.2, 1);
     will-change: transform;
   }
@@ -431,6 +452,16 @@ const styles = `
     width: 100%;
     min-width: 0;
     padding: 0 16px 16px;
+    /* 非アクティブペインは高さを 0 にしてスクロール領域を伸ばさない
+       (アクティブタブのコンテンツ量よりも下にスクロールできないようにする)。
+       ドラッグ中は隣ペインも見える必要があるので例外的に展開する。 */
+    max-height: 0;
+    overflow: hidden;
+  }
+  .mypage-swipe-pane.is-active,
+  .mypage-swipe-pane.is-dragging {
+    max-height: none;
+    overflow: visible;
   }
 
   .mypage-empty {

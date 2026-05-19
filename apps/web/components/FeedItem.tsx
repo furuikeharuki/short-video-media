@@ -15,6 +15,14 @@ import MovieDetailModal from "./movie-detail/MovieDetailModal";
 interface Props {
   item: MovieCard;
   isActive: boolean;
+  /**
+   * 中央スライド (isActive) の直前/直後にマウントされている隣接スライドかどうか。
+   * true のときは <video> をマウントして preload を進めるが play() はしない。
+   * これにより、スワイプで中央に来た瞬間に既存の <video> へ play() するだけで
+   * 済み、新規マウント → loadstart → loadedmetadata の連鎖が走らずに
+   * 黒画面 + スピナーの一瞬挟まりを回避する。
+   */
+  isAdjacent?: boolean;
   isFirst: boolean;
   isSecond?: boolean;
   activeGenres?: string[];
@@ -37,17 +45,19 @@ const VIDEO_HARD_TIMEOUT_MS = 8000;
 // すべてのアクセス経路で 5 秒スキップが効く。
 const PRO_ACTRESS_GENRE = "プロ女優";
 
-export default function FeedItem({ item, isActive, isFirst, isSecond = false }: Props) {
+export default function FeedItem({ item, isActive, isAdjacent = false, isFirst, isSecond = false }: Props) {
   const [modalSlug, setModalSlug] = useState<string | null>(null);
   const { isAuthenticated, isBookmarked, toggle } = useBookmarks();
 
   // 表示する動画 URL の解決ロジック。
   // - cachedSrc を optimistic に使い、無ければ API を叩く
   // - <video> がエラーを返したら 1 回だけ force=true で再 resolve する
+  // 隣接スライド (isAdjacent) でも URL 解決を走らせて、スワイプ到達時に
+  // すでに <video> が読み込み済みになっているようにする。
   const { videoSrc, exhausted, resolving, handleError } = useResolvedVideoSrc({
     slug: item.slug,
     cachedSrc: item.sample_movie_url,
-    enabled: isActive,
+    enabled: isActive || isAdjacent,
   });
 
   // ハードタイムアウト管理。videoSrc が変わるたびにタイマーを仕掛け直す。
@@ -106,7 +116,9 @@ export default function FeedItem({ item, isActive, isFirst, isSecond = false }: 
     isProActress: item.genres?.includes(PRO_ACTRESS_GENRE) ?? false,
   });
 
-  const preloadAttr = isFirst || isSecond ? "auto" : "metadata";
+  // 隣接スライド (isAdjacent) でもメディアバイトを先読みしておくため "auto" を採用。
+  // スワイプで中央に来た瞬間、すでに loadedmetadata / loadeddata まで進んでいる状態を作る。
+  const preloadAttr = isFirst || isSecond || isActive || isAdjacent ? "auto" : "metadata";
 
   // <video> がロードを開始したときに shimmer を一旦表示する。
   // プリフェッチ済スライドでは loadstart → loadedmetadata が同一タスクキュー内に連続で
@@ -156,11 +168,15 @@ export default function FeedItem({ item, isActive, isFirst, isSecond = false }: 
     return clearHardTimeout;
   }, [isActive, videoSrc, handleVideoError, clearHardTimeout]);
 
-  // 中央のスライド (isActive=true) だけ <video> を描画する。
-  // 隣接スライドはサムネイルのみ表示して、同時に複数の
-  // <video> 読み込みが走らないようにする。これでモバイル Safari の
-  // 同時接続上限・帯域競合を避け、再生開始までの時間を短縮できる。
-  const showVideo = isActive && videoSrc !== null && !exhausted;
+  // 中央のスライド (isActive=true) と隣接スライド (isAdjacent=true) で <video> を描画する。
+  // 隣接スライドの <video> は preload="auto" でメディアバイトの先読みを進めておくが、
+  // useFeedPlayback の自動再生 effect は isActive=true のときしか動かないため、
+  // 隣接スライドの <video> は paused のままバッファだけ温まる。
+  // スワイプで中央に来た瞬間、既存の <video> インスタンスへ play() するだけで
+  // 済むので、新規マウント由来の黒画面+スピナーが入らない。
+  // モバイル Safari の同時接続上限 (~6) は WINDOW_SIZE=1 で 3 枚 + プリフェッチ 2 枚
+  // = 計 5 枚に収まる (PrefetchVideoBuffer 削除後はそれも不要)。
+  const showVideo = (isActive || isAdjacent) && videoSrc !== null && !exhausted;
 
   return (
     <>

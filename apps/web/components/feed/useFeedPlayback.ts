@@ -446,20 +446,20 @@ export function useFeedPlayback({ slug, title, isActive, videoSrc, onOpenModal, 
   // (端末向きを変えたときや SSR ハイドレート直後など、isActive prop の同期前に発火するケースに備える)
   // videoSrc を deps に含めることで、resolver で URL が遅延取得され <video> が今マウントされた
   // ときにも observer を貼り直し、このフォールバック経路でも自動再生を起こせるようにしておく。
+  //
+  // 重要: isActive=false の隣接スライド (<video> を preload のためにマウントしているケース) では
+  // observer で勝手に isActive 扱いにして再生してはいけない。isActive prop を source of truth とし、
+  // observer は 「親がすでに isActive=true と見なしているが paused のとき」 に限って再生をトリガーする。
   useEffect(() => {
+    if (!isActive) return;
     const video = videoRef.current;
     if (!video) return;
     const playObserver = new IntersectionObserver(([entry]) => {
-      if (entry.isIntersecting) {
-        if (!isActiveRef.current) {
-          isActiveRef.current = true;
-          isMutedRef.current = globalIsMuted;
-          setIsMuted(globalIsMuted);
-          playVideo(video, false);
-        } else if (video.paused) {
-          // 既に active だが paused のとき (モーダル戻りなど) は再生再開
-          playVideo(video, false);
-        }
+      if (!entry.isIntersecting) return;
+      if (!isActiveRef.current) return;
+      if (video.paused) {
+        // 既に active だが paused のとき (モーダル戻りなど) は再生再開
+        playVideo(video, false);
       }
     }, { threshold: PLAY_THRESHOLD });
     playObserver.observe(video);

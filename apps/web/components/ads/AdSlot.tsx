@@ -17,9 +17,8 @@ type Props = {
    */
   context?: string;
   /**
-   * モーダルなど「mount された瞬間に provider をリセットして新しい <ins> を
+   * モーダルなど「mount された瞬間に provider をリッセットして新しい <ins> を
    * 確実に拾わせたい」ときに true にする。
-   * true の場合、mount 時に resetAndServeAd を 1 度だけ呼ぶ。
    */
   resetOnMount?: boolean;
 };
@@ -64,76 +63,35 @@ export default function AdSlot({
 
   const enabled = cfg.enabled;
 
-  /**
-   * クライアント初回レンダリング時の初期化。
-   *
-   * ポイント: sessionStorage に "1" がある = 「かつてこのセッション内で広告が入った」
-   * という事実だけを意味する。これを hasContent=true に映するのはあくまで「予約高さを持つコンテナを
-   * CLS させずに維持する」ため。実際に creative が入っているかは別問題。
-   *
-   * この mount 時に <ins> は必ず空 (DOM 初期化直後) なので、
-   * resetAndServeAd を呼んで provider に再スキャンさせる必要がある。
-   * ただし複数 AdSlot が並行する場合は reset を 1 回に抑えたいため、
-   * 別の useEffect (下記) で処理し、LayoutEffect は高さの復元のみ担う。
-   */
+  // クライアント初回レンダリング時: sessionStorage から「予約高さ」のみ復元する。
+  // hasContentRef は false のまま→広告が実際に入るまで bump を許可する。
   useLayoutEffect(() => {
     if (!enabled) return;
-    const wasFilled = readWasFilled(zone, context);
-    if (wasFilled) {
-      // hasContent=true にはするが、hasContentRef は false のままにする。
-      // → requestBump が「前回入ったけど今回はまだ空」を正しく検知できる。
+    if (readWasFilled(zone, context)) {
       setHasContent(true);
-      // hasContentRef.current は false のまま: viewport 進入時に bump させる
+      // hasContentRef.current はあえて false のままにする。
+      // → mount 直後の resetAndServeAd 後に creative が入ったときに
+      //   onContent() → hasContentRef=true となり、次回以降の bump を正しく抑制できる。
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [zone, context, enabled]);
 
-  /**
-   * mount 直後に creative の実在を確認し、入っていなければ resetAndServeAd を呼ぶ。
-   *
-   * 「wasFilled が記録されている = creative が必ず入っている」わけではない。
-   * ナビゲーション復帰の場合、Next.js App Router は force-dynamic ページを再レンダリングし、
-   * AdSlot がアンマウント→再マウントされる。<ins> は常に空の DOM から始まる。
-   * このタイミングで provider をリセットしないと、ExoClick は新しい <ins> を拾いたくれない。
-   *
-   * 個別の 「reset」 と 「resetOnMount」 の違い:
-   *   - resetOnMount: モーダル用。常に mount 時に reset。
-   *   - ここのロジック: 通常ページ用。wasFilled かつ creative が空のときにのみ reset。
-   */
+  // mount 直後に必ず resetAndServeAd を呼ぶ。
+  // 理由:
+  //   - force-dynamic ページ間遷移では AdSlot がアンマウント→再マウントされる。
+  //   - <ins> は常に空の新屎 DOM から始まる。
+  //   - ad-provider.js の初期スキャンは既に完了しているため、
+  //     serveAd だけでは新しい <ins> を拾えない。
+  //   - RESET_COOLDOWN_MS=300ms なので、複数 AdSlot が同時に mount しても
+  //     window キーによるクールダウンで 1 回だけリセットされる。
   useEffect(() => {
     if (!enabled) return;
-
-    if (resetOnMount) {
-      // モーダル: mount 時に必ず reset
-      const t = window.setTimeout(() => {
-        resetAndServeAd(cfg.provider);
-      }, 100);
-      return () => window.clearTimeout(t);
-    }
-
-    // 通常ページ: wasFilled が記録されている場合は、creative が本当に入っているか確認する。
-    // 确認方法: 少し待ってから <ins> 内に creative DOM があるかをチェック。
-    // あれば hasContentRef=true にして bump を抑制、なければ resetAndServeAd で拾い直す。
-    const wasFilled = readWasFilled(zone, context);
-    if (!wasFilled) return;
-
+    // 少し遅延して <ins> が DOM に描画されてから呼ぶ
     const t = window.setTimeout(() => {
-      // <ins> の子要素を確認 (IntersectionObserver が発火する前の時間帯)
-      const insEl = document.querySelector(
-        `.ad-slot-${zone} ins[data-zoneid]`
-      );
-      const hasCreative = !!insEl?.querySelector(
-        "iframe, img, video, a, picture, canvas"
-      );
-      if (hasCreative) {
-        // creative あり: hasContentRef=true にして bump を抑制
-        hasContentRef.current = true;
-      } else {
-        // creative なし: provider をリセットして拾い直す
-        resetAndServeAd(cfg.provider);
-      }
-    }, 300);
+      resetAndServeAd(cfg.provider);
+    }, 80);
     return () => window.clearTimeout(t);
+  // mount 時のみ。
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 

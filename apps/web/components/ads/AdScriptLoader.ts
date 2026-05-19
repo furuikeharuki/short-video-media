@@ -17,7 +17,7 @@
  * ad-provider.js は SPA で後から DOM に挿入された <ins> を取りこぼすことがある。
  * その救済として `resetProvider(provider)` を用意するが、これは「ページ全体で
  * 一度だけ・1 ティック内で 1 度だけ」に限定して呼ぶこと。複数 <AdSlot> が同居する
- * ページで何度も呼ぶと、まだ serve 中の他の枠まで巻き添えで空にしてしまう。
+ * ページで何度も呼ぶと、まだ serve 中の他の枠まで巻き添えで殺してしまう。
  */
 
 declare global {
@@ -38,12 +38,18 @@ const scriptInjected: Record<Provider, boolean> = {
   pemsrv: false,
 };
 
-// 直近の reset 実行時刻。短時間に複数回呼ばれても 1 回だけ効かせるためのクールダウン。
-const lastResetAt: Record<Provider, number> = {
-  magsrv: 0,
-  pemsrv: 0,
-};
-const RESET_COOLDOWN_MS = 1500;
+/**
+ * 直近の reset 実行時刻。短時間に複数回呼ばれても 1 回だけ効かせるためのクールダウン。
+ *
+ * 値を小さくする理由:
+ * ホーム→マイページ→ホーム と遷移すると Next.js App Router は force-dynamic ページを
+ * サーバから再レンダリングするため AdSlot がアンマウント→再マウントされる。
+ * その際に複数 AdSlot が同時に mount されて同時に resetAndServeAd を呼ぶが、
+ * その「複数呼び」を 1 回に抑えたいだけで、
+ * 「遷移自体の長さ」よりも小さい値にする必要はない。
+ * 300ms で十分。
+ */
+const RESET_COOLDOWN_MS = 300;
 
 function ensureGlobal(): void {
   if (typeof window === "undefined") return;
@@ -78,7 +84,7 @@ function ensureProviderScript(provider: Provider): void {
 /**
  * `AdProvider.push({ serve: {} })` を公式タグ準拠で同期的に呼ぶ。
  *
- * 呼び出し元は <ins> を DOM に描画したあとの useEffect 内でこれを叩く。
+ * 呼び元は <ins> を DOM に描画したあとの useEffect 内でこれをたたく。
  * script のロード完了は待たない (待つと配列キュー差し替え後の挙動と噛み合わない)。
  */
 export function serveAd(provider: Provider): void {
@@ -103,18 +109,24 @@ export function serveAd(provider: Provider): void {
  *   1) 既存の <script data-ad-provider="..."> を削除
  *   2) window.AdProvider を空配列に置き直し (現 push 実装を捨てる)
  *   3) scriptInjected[provider]=false にして次回 ensureProviderScript で再注入
- *   4) 念のため即時 push({serve:{}}) (ロード前ならキューに溜まり、ロード後の初期
+ *   4) 即時 push({serve:{}}) (ロード前ならキューに溜まり、ロード後の初期
  *      スキャンで未処理 <ins> 群と一緒に処理される)
  */
 export function resetAndServeAd(provider: Provider): void {
   if (typeof window === "undefined") return;
   const now = Date.now();
-  if (now - lastResetAt[provider] < RESET_COOLDOWN_MS) {
-    // 直近で reset 済み。重ねて捨てると serve 中の他枠を殺すので普通の serve だけ。
-    serveAd(provider);
+  // lastResetAt を window に持たせる。
+  // モジュールレベル変数は Next.js の Hot Module Replacement でリセットされないが、
+  // window はページ遷移でリセットされるためクールダウンも正しくリセットされる。
+  const WIN_KEY = `__adResetAt_${provider}` as keyof Window;
+  const lastReset = (window[WIN_KEY] as number | undefined) ?? 0;
+  if (now - lastReset < RESET_COOLDOWN_MS) {
+    // 直近で reset 済み。並行した他 AdSlot からの呼び出しの場合は何もしない。
+    // (既に reset 後の serve が走っているので追加 serveAd 不要)
     return;
   }
-  lastResetAt[provider] = now;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  (window as any)[WIN_KEY] = now;
 
   const scripts = document.querySelectorAll<HTMLScriptElement>(
     `script[data-ad-provider="${provider}"]`,

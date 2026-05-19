@@ -5,12 +5,12 @@ import FeedItem from "@/components/FeedItem";
 import type { MovieCard } from "@/lib/api/feed";
 import { markFeedGesture } from "@/components/feed/useFeedPlayback";
 import { usePrefetchResolveMp4 } from "@/components/feed/usePrefetchResolveMp4";
-import { usePrefetchVideoBytes } from "@/components/feed/usePrefetchVideoBytes";
-import PrefetchVideoBuffer from "@/components/feed/PrefetchVideoBuffer";
 
 // 同時にレンダリングするスライド数 = 中央 + 前後1枚ずつの計3枚。
-// 4枚以上の `<video>` を同時に持つとモバイル Safari の同時接続上限に
-// ぶつかってネットワーク待ちが連鎖し、再生が始まらなくなる。
+// 中央 (isActive) と隣接スライド (isAdjacent) の両方で <video> をマウントして preload を進めることで、
+// スワイプで中央に来た瞬間、新規マウント → loadstart → loadedmetadata の連鎖を避け、
+// 黒画面 + スピナーの一瞬挟まりを解消する。
+// 4枚以上の <video> を同時に持つとモバイル Safari の同時接続上限 (約 6) にぶつかるため、3 枚が上限。
 const WINDOW_SIZE = 1;
 
 interface Props {
@@ -37,16 +37,10 @@ export default function FeedViewer({
 
   // 先 3 枚分の MP4 URL を resolver で事前解決しておき、スワイプ到達時の
   // 再生開始を早める (resolver 側の 60s キャッシュを温めるだけで <video> は増やさない)。
+  // 動画バイト自体の先読みは、隣接スライド (isAdjacent) の <video preload="auto"> が直接担うので
+  // 以前あった PrefetchVideoBuffer / usePrefetchVideoBytes は不要になった (モバイル Safari の
+  // 同時接続上限 約 6 を超えないよう 隠し <video> は廃止)。
   usePrefetchResolveMp4(items, currentIndex);
-
-  // 更に先 2 枚分の動画バイトも先読み (隠し <video preload="auto"> を画面外にマウント)。
-  // DMM CDN は Cache-Control: no-store だが CloudFront 側にキャッシュがあるため、
-  // <video> のメディアバイトを事前に採ると HTTP/2 接続が温まり、再生開始が早くなる。
-  // prefetch 中の <video> が失敗したら handleSlotError で self-heal (DB キャッシュ無効化 + force resolve)。
-  const { slots: prefetchSlots, handleSlotError } = usePrefetchVideoBytes(
-    items,
-    currentIndex,
-  );
 
   const [dragPx,         setDragPx]       = useState(0);
   const dragStartY       = useRef(0);
@@ -198,14 +192,6 @@ export default function FeedViewer({
 
   return (
     <div ref={containerRef} className="feed-container">
-      {prefetchSlots.map((slot) => (
-        <PrefetchVideoBuffer
-          key={slot.id}
-          slug={slot.slug}
-          src={slot.src}
-          onError={handleSlotError}
-        />
-      ))}
       {windowItems.map((item, i) => {
         const absIndex = windowStartRef.current + i;
         const offset   = absIndex - currentIndex;
@@ -228,6 +214,7 @@ export default function FeedViewer({
             <FeedItem
               item={item}
               isActive={isActive}
+              isAdjacent={Math.abs(offset) === 1}
               isFirst={absIndex === 0}
               isSecond={absIndex === 1}
             />

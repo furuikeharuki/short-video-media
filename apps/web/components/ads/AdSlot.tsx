@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { AD_ZONES, isAdZoneEnabled, type AdZoneKey } from "@/lib/ads/config";
-import { serveAd } from "./AdScriptLoader";
+import { resetAndServeAd, serveAd } from "./AdScriptLoader";
 
 type Props = {
   zone: AdZoneKey;
@@ -19,13 +19,30 @@ type Props = {
  *   <script>(AdProvider=window.AdProvider||[]).push({serve:{}})</script>
  *
  * 設計ポイント:
- * - <ins> は内側の <AdIns> コンポーネントに key を当てて分離する。
- *   戻る/復帰時に key を bump することで <ins> DOM 自体を作り直し、
- *   ad-provider.js に「未処理 <ins>」として再認識させる
- *   (既処理 <ins> は無視されるため、空 <ins> に再 push しても serve されない)。
- * - 一定時間 creative が入らなかった slot は display:none で畳む。
- *   黒い空枠だけが残る事故を避ける。
- * - 二重 serve を避けるため slot ごとに in-flight ガードとクールダウンを置く。
+ *
+ * 1. <ins> は内側の <AdIns> に key を当てて分離する。
+ *    再生成 (key bump) すると React は <ins> の DOM を作り直すため、
+ *    ad-provider.js は「新しい未処理 <ins>」として再 serve できる。
+ *
+ * 2. **viewport に入ってから serve する**。
+ *    オフスクリーンの枠を即 serve すると、ExoClick は viewport 外の枠を
+ *    no-fill 扱いにしやすく、結果として「ホームをスクロールしているうちに
+ *    広告がだんだん消える」症状を引き起こす。IntersectionObserver で
+ *    最初に画面内に入ったタイミングを待ってから初回 serve する。
+ *
+ * 3. **空のまま終わった枠も DOM 上は残し、display:none で完全に消さない**。
+ *    一度畳むと戻れなくなり「何回か表示しているうちに消える」症状になる。
+ *    no-fill 判定後は枠を最小高さで保持し、次に viewport に再進入したり
+ *    タブが復帰した時に key を bump してもう一度 serve を試す。
+ *
+ * 4. **複数枠が同居するページで provider を巻き添えで殺さない**。
+ *    ad-provider.js のリセットは「ホーム復帰直後の最初の 1 回」のみ。
+ *    クールダウンを AdScriptLoader 側に持たせ、複数 AdSlot から同時に
+ *    要求が来ても 1 回しか効かないようにしてある。
+ *
+ * 5. ナビゲーション復帰 (popstate / pageshow / visibilitychange) を検知して、
+ *    creative が入っていない (またはそもそも今までフィルされなかった) 枠を
+ *    key bump で作り直し、合わせて provider を 1 度だけリセット要求する。
  */
 export default function AdSlot({
   zone,
@@ -36,53 +53,69 @@ export default function AdSlot({
   const cfg = AD_ZONES[zone];
 
   // 内側 <ins> を作り直すための世代 key。
-  // 戻る/復帰時で creative が入らなかった場合に bump して新しい <ins> を mount する。
+  // 戻る/復帰/再可視化時に bump して新しい <ins> を mount する。
   const [insKey, setInsKey] = useState(0);
+  // 現世代の <ins> に creative が入ったか。
   const [hasContent, setHasContent] = useState(false);
-  const [collapsed, setCollapsed] = useState(false);
+  // 現世代が no-fill で諦め済みか (display:none にはしない、最小高さで残す)。
+  const [emptyGen, setEmptyGen] = useState(false);
 
-  // 直近の serve 試行時刻 (クールダウン用)
-  const lastServeAtRef = useRef(0);
-  // 現在の世代で既に serve したか (StrictMode の二重実行対策)
+  // 直近の世代 bump 時刻 (クールダウン用)。
+  const lastBumpAtRef = useRef(0);
+  // 現世代の <ins> が既に serve 試行されたか (StrictMode 二重実行対策)。
   const servedThisGenRef = useRef(false);
 
   // bump 要求中フラグ。短時間に複数イベントが来ても 1 回だけ bump する。
   const bumpScheduledRef = useRef(false);
 
+  // 既に viewport に入って 1 度でも serve したか。初回 serve は IntersectionObserver
+  // 経由で発火させ、それ以降の bump はイベント駆動。
+  const hasEnteredViewportRef = useRef(false);
+
   const enabled = cfg.enabled;
 
-  // 再 serve をトリガする中央関数。
-  // - hasContent なら何もしない (既に creative が見えている)
-  // - 直近 2 秒以内に同 slot を bump 済みなら何もしない
-  // - それ以外: insKey++ → AdIns が remount → 新 <ins> で AdProvider.push({serve:{}})
-  const requestRefresh = () => {
+  /**
+   * 世代 bump を要求する。
+   * - creative が既に入っているなら何もしない (張り替える必要がない)
+   * - 直近 2 秒以内に bump 済みなら何もしない
+   * - それ以外: 次フレームで insKey++ + emptyGen=false に戻す
+   *
+   * `withProviderReset=true` の場合は ad-provider.js を一度捨てて再注入する。
+   * これは「ホームに戻った直後」など、ad-provider.js が後発 <ins> を
+   * 取りこぼしている疑いが強い時にだけ使う。AdScriptLoader 側のクールダウンが
+   * あるため、複数枠から同時に呼んでも 1 回しか効かない。
+   */
+  const requestBump = (withProviderReset: boolean) => {
     if (!enabled) return;
     if (hasContent) return;
     if (bumpScheduledRef.current) return;
     const now = Date.now();
-    if (now - lastServeAtRef.current < 2000) return;
+    if (now - lastBumpAtRef.current < 2000) return;
     bumpScheduledRef.current = true;
-    // 次フレームで bump (連続イベント吸収)
     requestAnimationFrame(() => {
       bumpScheduledRef.current = false;
-      lastServeAtRef.current = Date.now();
-      setCollapsed(false);
+      lastBumpAtRef.current = Date.now();
       servedThisGenRef.current = false;
+      setEmptyGen(false);
       setInsKey((k) => k + 1);
+      if (withProviderReset) {
+        // 1 度だけ provider を捨てて再ロード。ad-provider.js の初期スキャンで
+        // 新しい <ins> (この後 React が mount する) も含めて拾い直す。
+        resetAndServeAd(cfg.provider);
+      }
     });
   };
 
+  // ナビゲーション復帰系イベント。ホーム→/feed→ホームで戻ったときの拾い直しが目的。
   useEffect(() => {
     if (!enabled) return;
-    const onPopState = () => requestRefresh();
+    const onPopState = () => requestBump(true);
     const onPageShow = (e: PageTransitionEvent) => {
-      // bfcache 復帰でも、それ以外の表示でも空ならリフレッシュ。
-      // persisted は記録だけして判定には使わない。
       void e.persisted;
-      requestRefresh();
+      requestBump(true);
     };
     const onVisibility = () => {
-      if (document.visibilityState === "visible") requestRefresh();
+      if (document.visibilityState === "visible") requestBump(false);
     };
     window.addEventListener("popstate", onPopState);
     window.addEventListener("pageshow", onPageShow);
@@ -92,30 +125,32 @@ export default function AdSlot({
       window.removeEventListener("pageshow", onPageShow);
       document.removeEventListener("visibilitychange", onVisibility);
     };
-    // hasContent をクロージャ経由で読むが、requestRefresh が再生成されるため
-    // hasContent 依存は外す ( ref と setState の組み合わせで十分 )
+    // hasContent / 各 ref はクロージャ越しに最新を読むため依存に入れない。
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [enabled]);
 
   if (!isAdZoneEnabled(zone)) return null;
 
-  // creative が入ったあとに予約サイズを当て CLS を抑える。
-  // 畳んだら display:none で完全に消す。
-  const wrapperStyle: React.CSSProperties = collapsed
-    ? { display: "none" }
-    : {
-        display: "flex",
-        flexDirection: "column",
-        alignItems: "center",
-        justifyContent: "center",
-        width: "100%",
-        boxSizing: "border-box",
-        background: "transparent",
-        ...(hasContent && cfg.reservedHeight != null
-          ? { minHeight: `${cfg.reservedHeight}px` }
-          : {}),
-        ...style,
-      };
+  // wrapper のスタイル。creative が入った時だけ予約高さを適用 (CLS 抑止)。
+  // 空のままでも display:none にはしない (一度畳むと戻れなくなる)。
+  const wrapperStyle: React.CSSProperties = {
+    display: "flex",
+    flexDirection: "column",
+    alignItems: "center",
+    justifyContent: "center",
+    width: "100%",
+    boxSizing: "border-box",
+    background: "transparent",
+    // 空枠時は中身を持たないので 0 高さで実質非表示、ただし IntersectionObserver
+    // の対象として DOM に残るようにする (1px の見えない高さで観測される)。
+    minHeight:
+      hasContent && cfg.reservedHeight != null
+        ? `${cfg.reservedHeight}px`
+        : emptyGen
+          ? "1px"
+          : "1px",
+    ...style,
+  };
 
   return (
     <aside
@@ -141,11 +176,19 @@ export default function AdSlot({
         key={insKey}
         cfg={cfg}
         servedThisGenRef={servedThisGenRef}
-        lastServeAtRef={lastServeAtRef}
-        onContent={() => setHasContent(true)}
-        onCollapse={() => {
-          setHasContent(false);
-          setCollapsed(true);
+        hasEnteredViewportRef={hasEnteredViewportRef}
+        onContent={() => {
+          setHasContent(true);
+          setEmptyGen(false);
+        }}
+        onEmpty={() => {
+          // 「この世代では入らなかった」状態に遷移。display:none にはしない。
+          setEmptyGen(true);
+        }}
+        onBecameVisibleAgain={() => {
+          // 空のまま画面外に出て、もう一度画面に入ってきたケース。
+          // 世代を bump して serve をやり直す。
+          requestBump(false);
         }}
       />
     </aside>
@@ -155,25 +198,28 @@ export default function AdSlot({
 /**
  * 単一の <ins data-zoneid> を render するだけのサブコンポーネント。
  *
- * mount 直後に AdProvider.push({serve:{}}) を 1 度だけ呼ぶ。
- * 親が key を bump すると React は <ins> DOM を作り直すため、
- * ad-provider.js から見ても「新しい未処理 <ins>」になり、再 serve できる。
- *
- * MutationObserver で creative 挿入を検知し、入ったら onContent を呼ぶ。
- * 4 秒経っても入らなければ onCollapse を呼んで枠ごと畳ませる。
+ * 動作:
+ *  - IntersectionObserver で viewport 進入を待つ
+ *  - 初回進入で AdProvider.push({serve:{}}) を 1 度だけ呼ぶ
+ *  - MutationObserver で creative の挿入を検知して onContent を呼ぶ
+ *  - 4 秒で入らなかったら onEmpty を呼ぶ (枠は残す、display:none にしない)
+ *  - 既に空になった枠が再び viewport に入ってきたら onBecameVisibleAgain を呼ぶ
+ *    → 親が世代を bump し直してくれる
  */
 function AdIns({
   cfg,
   servedThisGenRef,
-  lastServeAtRef,
+  hasEnteredViewportRef,
   onContent,
-  onCollapse,
+  onEmpty,
+  onBecameVisibleAgain,
 }: {
   cfg: (typeof AD_ZONES)[AdZoneKey];
   servedThisGenRef: React.MutableRefObject<boolean>;
-  lastServeAtRef: React.MutableRefObject<number>;
+  hasEnteredViewportRef: React.MutableRefObject<boolean>;
   onContent: () => void;
-  onCollapse: () => void;
+  onEmpty: () => void;
+  onBecameVisibleAgain: () => void;
 }) {
   const insRef = useRef<HTMLModElement | null>(null);
 
@@ -182,63 +228,99 @@ function AdIns({
     if (!el) return;
 
     let cancelled = false;
+    let contentSeen = false;
+    let emptyEmitted = false;
 
     const insHasAd = (): boolean => {
-      // ins 内に iframe / img / video / a 等が入ったかで判定する。
-      // creative iframe はクロスオリジンで中身を覗けないが、要素の有無は判る。
-      if (el.querySelector("iframe, img, video, a, picture, canvas")) return true;
-      // ins 自体にサイズが入っていれば creative が描画された可能性が高い。
-      const r = el.getBoundingClientRect();
-      if (r.width >= 50 && r.height >= 50) return true;
-      return false;
+      // creative iframe / img / video 等が <ins> 内に追加されたかで判定する。
+      // サイズだけでの判定は ad-provider.js が ins に属性を付けただけの状態を
+      // 誤検出することがあるためやめた。
+      return !!el.querySelector("iframe, img, video, a, picture, canvas");
     };
 
-    // 既に creative が入っている (HMR / 二重 mount) なら状態反映だけ。
-    if (insHasAd()) {
-      onContent();
-    } else if (!servedThisGenRef.current) {
+    const tryServeOnce = () => {
+      if (servedThisGenRef.current) return;
       servedThisGenRef.current = true;
-      lastServeAtRef.current = Date.now();
       serveAd(cfg.provider);
-    }
+    };
 
-    const observer = new MutationObserver(() => {
+    // MutationObserver: creative 挿入の検知。
+    const mo = new MutationObserver(() => {
       if (cancelled) return;
-      if (insHasAd()) {
+      if (!contentSeen && insHasAd()) {
+        contentSeen = true;
         onContent();
-        observer.disconnect();
+        mo.disconnect();
       }
     });
-    observer.observe(el, { childList: true, subtree: true, attributes: true });
+    mo.observe(el, { childList: true, subtree: true });
 
-    // 約 600ms 後にまだ ad-provider.js が間に合っていないなら 1 度だけ追加 serve
-    // (この時点では同じ <ins> 上での再 push なので二重描画は起こらない。
-    //  既処理になっていれば ad-provider.js が無視する)
-    const retryTimer = window.setTimeout(() => {
-      if (cancelled) return;
-      if (!insHasAd()) {
-        lastServeAtRef.current = Date.now();
-        serveAd(cfg.provider);
-      }
-    }, 700);
+    // IntersectionObserver: viewport 進入の検知 + 再進入の検知。
+    // - 初回進入 → serve 開始
+    // - 既に creative 持ちなら何もしない
+    // - 空のまま画面外に出てから戻ってきた場合は親に世代 bump を依頼
+    let serveStarted = false;
+    let collapseTimer: number | null = null;
+    let retryTimer: number | null = null;
 
-    // 4 秒経っても何も入らない/サイズが付かないなら no-fill とみなして畳む。
-    const collapseTimer = window.setTimeout(() => {
-      if (cancelled) return;
-      if (!insHasAd()) {
-        observer.disconnect();
-        onCollapse();
-      }
-    }, 4000);
+    const beginServeFlow = () => {
+      if (serveStarted) return;
+      serveStarted = true;
+      hasEnteredViewportRef.current = true;
+      tryServeOnce();
+      // 約 700ms 後にまだ入っていなければ追加 push (同じ <ins> 上の再 push)。
+      // 既に処理済みなら ad-provider.js が無視するので副作用なし。
+      retryTimer = window.setTimeout(() => {
+        if (cancelled || contentSeen) return;
+        if (!insHasAd()) {
+          serveAd(cfg.provider);
+        }
+      }, 700);
+      // 4 秒で入らなければ no-fill とみなし親に通知。
+      // ただし枠は display:none にせず、最小高さで残す。
+      collapseTimer = window.setTimeout(() => {
+        if (cancelled || contentSeen) return;
+        if (!insHasAd() && !emptyEmitted) {
+          emptyEmitted = true;
+          onEmpty();
+        }
+      }, 4000);
+    };
+
+    const io = new IntersectionObserver(
+      (entries) => {
+        if (cancelled) return;
+        for (const entry of entries) {
+          if (!entry.isIntersecting) continue;
+          if (!serveStarted) {
+            beginServeFlow();
+          } else if (emptyEmitted && !contentSeen) {
+            // 空のまま一度画面外に出て、戻ってきた。親に bump を依頼。
+            onBecameVisibleAgain();
+          }
+        }
+      },
+      // 少し早めに発火させて creative ロードのリードタイムを稼ぐ。
+      { rootMargin: "200px 0px", threshold: 0.01 },
+    );
+    io.observe(el);
+
+    // 初期状態が既に creative 入り (HMR / 二重 mount) なら状態反映だけ。
+    if (insHasAd()) {
+      contentSeen = true;
+      onContent();
+      mo.disconnect();
+    }
 
     return () => {
       cancelled = true;
-      observer.disconnect();
-      window.clearTimeout(retryTimer);
-      window.clearTimeout(collapseTimer);
+      mo.disconnect();
+      io.disconnect();
+      if (retryTimer != null) window.clearTimeout(retryTimer);
+      if (collapseTimer != null) window.clearTimeout(collapseTimer);
     };
-    // mount に対して 1 度実行すれば十分。
-    // 親が key bump するとこの effect も再実行される。
+    // mount に対して 1 度実行すれば十分。親が key bump するとこの effect も
+    // 自動的に再実行される。
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 

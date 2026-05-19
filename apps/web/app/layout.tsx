@@ -27,6 +27,9 @@ export const metadata: Metadata = {
   creator: SITE_NAME,
   verification: {
     google: "yE_TjT7FgGV-2DYARJhuv3UOAm8-2QUJfSnZoIlVjiA",
+    other: {
+      "6a97888e-site-verification": "cc3e298a0904fce9fab07e30b99e9f23",
+    },
   },
   openGraph: {
     type: "website",

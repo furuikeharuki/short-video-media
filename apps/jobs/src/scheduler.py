@@ -24,8 +24,10 @@ egress 大量課金 ($61/2日 など) を完全にゼロ化することが目的
   - DMM_LINK_AFFILIATE_ID     : 購入リンク用 af_id
   - RESOLVER_BASE_URL         : Xserver VPS resolver (http://162.43.24.128)
   - RESOLVER_API_KEY          : resolver Bearer Token
-  - RESOLVE_CONCURRENCY       : resolve_sample_urls の同時 HTTP リクエスト数 (デフォルト 32)
-                                resolver 側の RESOLVER_CONCURRENCY と揃えること
+  - RESOLVE_CONCURRENCY       : resolve_sample_urls の同時 HTTP リクエスト数 (デフォルト 8)
+                                resolver 側の RESOLVER_CONCURRENCY と揃えること。
+                                実測で resolver の真の並列上限は 7-8 (Playwright コンテキスト数)、
+                                それより上げてもキューイングされるだけでスループットは伸びない。
   - SCHEDULER_RUN_ON_START    : "true" なら起動直後に 1 回 sync を実行 (任意)
 """
 from __future__ import annotations
@@ -88,20 +90,26 @@ async def _run_sync_catalog() -> None:
 
 
 def _resolve_concurrency() -> int:
-    """RESOLVE_CONCURRENCY 環境変数を読む。デフォルト 32。
+    """RESOLVE_CONCURRENCY 環境変数を読む。デフォルト 8。
 
     resolver 側 (Xserver VPS) の RESOLVER_CONCURRENCY と揃えること。
     片方だけ大きくしても活かしきれない / 詰まる。
+
+    2026-05-19 ベンチマーク結果:
+      - 16 並列で初期 7 件だけ同時処理され、残り 9 件はキューイングされた
+        (12s + 23s の 2 バッチ構造、スループット 0.68 req/s)
+      - 8 並列も同じスループットになるため、上げても意味がない
+      - 将来 resolver を複数ブラウザ化 / uvicorn workers 複数化したら上げる
     """
     try:
-        v = int(os.getenv("RESOLVE_CONCURRENCY", "32"))
+        v = int(os.getenv("RESOLVE_CONCURRENCY", "8"))
         return max(1, v)
     except ValueError:
         logger.warning(
-            "invalid RESOLVE_CONCURRENCY=%r, falling back to 32",
+            "invalid RESOLVE_CONCURRENCY=%r, falling back to 8",
             os.getenv("RESOLVE_CONCURRENCY"),
         )
-        return 32
+        return 8
 
 
 async def _run_resolve_sample_urls() -> None:

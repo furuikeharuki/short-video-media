@@ -99,6 +99,20 @@ export default function Header() {
     });
   }, []);
 
+  // /feed (ショート動画画面) からの遷移は pushState/@modal 並列ルート・<video>
+  // 副作用で SPA 遷移が不安定なため、フルページ遷移にして確実に動かす。
+  // (FeedItemMeta のジャンル chip と同じ理由)
+  const navigateTo = useCallback(
+    (href: string) => {
+      if (typeof window !== "undefined" && window.location.pathname.startsWith("/feed")) {
+        window.location.assign(href);
+      } else {
+        router.push(href);
+      }
+    },
+    [router]
+  );
+
   const submit = useCallback(
     (q: string) => {
       const trimmed = q.trim();
@@ -107,9 +121,9 @@ export default function Header() {
       setQuery("");
       // 人気ジャンル集計用に search イベントを送る (失敗は無視)
       logEvent({ event_type: "search", search_query: trimmed });
-      router.push(`/search?q=${encodeURIComponent(trimmed)}`);
+      navigateTo(`/search?q=${encodeURIComponent(trimmed)}`);
     },
-    [router]
+    [navigateTo]
   );
 
   // 人気ジャンルのタグをクリックしたとき: キーワード検索ではなくジャンル絞り込みに飛ばす。
@@ -121,9 +135,9 @@ export default function Header() {
       setOpen(false);
       setQuery("");
       logEvent({ event_type: "search", search_query: trimmed });
-      router.push(`/search?genre=${encodeURIComponent(trimmed)}`);
+      navigateTo(`/search?genre=${encodeURIComponent(trimmed)}`);
     },
-    [router]
+    [navigateTo]
   );
 
   const handleLogoClick = useCallback(() => {

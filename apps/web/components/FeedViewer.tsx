@@ -21,8 +21,27 @@ const BOTTOM_NAV_H = 56;
  * スワイプと確定するまでの縦移動量のしきい値 (px)。
  * この距離を超えて初めて縦スクロール抑止 (preventDefault) を呼ぶ。
  * それ未満の移動量（タップ）では呼ばず、ブラウザの click イベント発火を妨げない。
+ *
+ * 8px だと小さなジャンル chip や検索アイコン等のタップ中に指のわずかな
+ * ぶれで簡単に超えてしまい preventDefault が走り synthetic click が消える。
+ * 16px なら明確なスワイプとタップを区別しつつ、タップの指ブレは吸収できる。
  */
-const SWIPE_LOCK_THRESHOLD = 8;
+const SWIPE_LOCK_THRESHOLD = 16;
+
+/**
+ * touchstart の target がインタラクティブな要素 (ボタン / リンク / 入力欄など)
+ * の場合は、FeedViewer のスワイプロジックを一切走らせない。
+ * これにより、ジャンル chip や side-actions ボタン、フィード内に重ねた他の
+ * インタラクティブ要素のタップが「指ブレ → preventDefault → click 消失」で
+ * 失敗するのを完全に防ぐ。
+ */
+function isInteractiveTarget(target: EventTarget | null): boolean {
+  if (!(target instanceof Element)) return false;
+  // closest で祖先 (たとえば <button> 内の <svg>) も拾う
+  return !!target.closest(
+    'button, a, input, textarea, select, [role="button"], [role="link"], [contenteditable="true"]',
+  );
+}
 
 type FeedSlide =
   | { kind: "video"; movie: MovieCard; videoIndex: number }
@@ -101,6 +120,8 @@ export default function FeedViewer({
   const isDragging         = useRef(false);
   /** BottomNav 上で始まったタッチ → スワイプ処理・preventDefault をスキップ */
   const touchStartedInNavRef  = useRef(false);
+  /** ジャンル chip 等のインタラクティブ要素上で始まったタッチ → スワイプを乗っ取らない */
+  const touchStartedOnInteractiveRef = useRef(false);
   /** touchmove で一度でも SWIPE_LOCK_THRESHOLD を超えたか */
   const swipeLockedRef        = useRef(false);
 
@@ -212,8 +233,18 @@ export default function FeedViewer({
       const startY = e.touches[0].clientY;
       if (isTouchInBottomNav(startY)) {
         touchStartedInNavRef.current = true;
+        touchStartedOnInteractiveRef.current = false;
         return;
       }
+      // ジャンル chip / side-actions / 詳細ボタン等のインタラクティブ要素上で
+      // 始まったタッチは、スワイプ判定を一切走らせない (preventDefault しない)。
+      // これにより指のわずかなブレで click が消えるのを防ぐ。
+      if (isInteractiveTarget(e.target)) {
+        touchStartedOnInteractiveRef.current = true;
+        touchStartedInNavRef.current = false;
+        return;
+      }
+      touchStartedOnInteractiveRef.current = false;
       touchStartedInNavRef.current = false;
       swipeLockedRef.current = false;
       isDragging.current = true;
@@ -226,6 +257,7 @@ export default function FeedViewer({
     const onTouchMove = (e: TouchEvent) => {
       if (modalOpenRef.current) return;
       if (touchStartedInNavRef.current) return;
+      if (touchStartedOnInteractiveRef.current) return;
       if (!isDragging.current) return;
 
       const dy = e.touches[0].clientY - dragStartY.current;
@@ -249,6 +281,10 @@ export default function FeedViewer({
         touchStartedInNavRef.current = false;
         return;
       }
+      if (touchStartedOnInteractiveRef.current) {
+        touchStartedOnInteractiveRef.current = false;
+        return;
+      }
       if (!isDragging.current) return;
       isDragging.current = false;
       swipeLockedRef.current = false;
@@ -262,6 +298,7 @@ export default function FeedViewer({
       isDragging.current = false;
       swipeLockedRef.current = false;
       touchStartedInNavRef.current = false;
+      touchStartedOnInteractiveRef.current = false;
       setDragPx(0);
     };
 

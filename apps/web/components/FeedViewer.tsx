@@ -29,17 +29,21 @@ const BOTTOM_NAV_H = 56;
 const SWIPE_LOCK_THRESHOLD = 16;
 
 /**
- * touchstart の target がインタラクティブな要素 (ボタン / リンク / 入力欄など)
- * の場合は、FeedViewer のスワイプロジックを一切走らせない。
- * これにより、ジャンル chip や side-actions ボタン、フィード内に重ねた他の
- * インタラクティブ要素のタップが「指ブレ → preventDefault → click 消失」で
- * 失敗するのを完全に防ぐ。
+ * touchstart の target がテキスト入力系の要素 (input / textarea / contenteditable
+ * / select) の場合は、FeedViewer のスワイプロジックを走らせない。
+ * これらの要素はテキスト選択 / 文字入力のためにタッチを内部で消費しており、
+ * 親側で preventDefault するとキャレット移動などができなくなる。
+ *
+ * 注: ボタン / リンク (button, a, role="button"/"link") は **除外しない**。
+ *     ジャンル chip や side-actions のボタンの上から始まったスワイプも
+ *     上下方向にしきい値 (SWIPE_LOCK_THRESHOLD) を超えれば通常のフィード
+ *     スワイプとして扱う。タップ (しきい値未満) は preventDefault しないので
+ *     ブラウザが click を発火させて従来通り動作する。
  */
-function isInteractiveTarget(target: EventTarget | null): boolean {
+function isTextInputTarget(target: EventTarget | null): boolean {
   if (!(target instanceof Element)) return false;
-  // closest で祖先 (たとえば <button> 内の <svg>) も拾う
   return !!target.closest(
-    'button, a, input, textarea, select, [role="button"], [role="link"], [contenteditable="true"]',
+    'input, textarea, select, [contenteditable="true"]',
   );
 }
 
@@ -120,8 +124,12 @@ export default function FeedViewer({
   const isDragging         = useRef(false);
   /** BottomNav 上で始まったタッチ → スワイプ処理・preventDefault をスキップ */
   const touchStartedInNavRef  = useRef(false);
-  /** ジャンル chip 等のインタラクティブ要素上で始まったタッチ → スワイプを乗っ取らない */
-  const touchStartedOnInteractiveRef = useRef(false);
+  /**
+   * テキスト入力系 (input / textarea / contenteditable / select) 上で始まった
+   * タッチ → スワイプ判定を走らせない (キャレット移動などを妨げないため)。
+   * ボタン / リンクはここに含めない (それらはタップ閾値で自動判別する)。
+   */
+  const touchStartedOnTextInputRef = useRef(false);
   /** touchmove で一度でも SWIPE_LOCK_THRESHOLD を超えたか */
   const swipeLockedRef        = useRef(false);
   /**
@@ -274,18 +282,22 @@ export default function FeedViewer({
       const startY = e.touches[0].clientY;
       if (isTouchInBottomNav(startY)) {
         touchStartedInNavRef.current = true;
-        touchStartedOnInteractiveRef.current = false;
+        touchStartedOnTextInputRef.current = false;
         return;
       }
-      // ジャンル chip / side-actions / 詳細ボタン等のインタラクティブ要素上で
-      // 始まったタッチは、スワイプ判定を一切走らせない (preventDefault しない)。
-      // これにより指のわずかなブレで click が消えるのを防ぐ。
-      if (isInteractiveTarget(e.target)) {
-        touchStartedOnInteractiveRef.current = true;
+      // テキスト入力系の要素 (input / textarea / contenteditable / select) 上で
+      // 始まったタッチはスワイプ判定を一切走らせない (キャレット移動 / 文字選択
+      // を妨げないため)。
+      // ボタン / リンク / chip 等はここで bail せず通常の swipe 経路に乗せる。
+      // しきい値 (SWIPE_LOCK_THRESHOLD = 16px) 未満ならタップとしてブラウザの
+      // synthetic click が発火するし、超えたら preventDefault してフィード
+      // スワイプとして扱う。
+      if (isTextInputTarget(e.target)) {
+        touchStartedOnTextInputRef.current = true;
         touchStartedInNavRef.current = false;
         return;
       }
-      touchStartedOnInteractiveRef.current = false;
+      touchStartedOnTextInputRef.current = false;
       touchStartedInNavRef.current = false;
       swipeLockedRef.current = false;
       isDragging.current = true;
@@ -298,7 +310,7 @@ export default function FeedViewer({
     const onTouchMove = (e: TouchEvent) => {
       if (modalOpenRef.current) return;
       if (touchStartedInNavRef.current) return;
-      if (touchStartedOnInteractiveRef.current) return;
+      if (touchStartedOnTextInputRef.current) return;
       if (!isDragging.current) return;
 
       const dy = e.touches[0].clientY - dragStartY.current;
@@ -322,8 +334,8 @@ export default function FeedViewer({
         touchStartedInNavRef.current = false;
         return;
       }
-      if (touchStartedOnInteractiveRef.current) {
-        touchStartedOnInteractiveRef.current = false;
+      if (touchStartedOnTextInputRef.current) {
+        touchStartedOnTextInputRef.current = false;
         return;
       }
       if (!isDragging.current) return;
@@ -339,7 +351,7 @@ export default function FeedViewer({
       isDragging.current = false;
       swipeLockedRef.current = false;
       touchStartedInNavRef.current = false;
-      touchStartedOnInteractiveRef.current = false;
+      touchStartedOnTextInputRef.current = false;
       setDragPx(0);
     };
 
@@ -359,7 +371,7 @@ export default function FeedViewer({
       isDragging.current = false;
       swipeLockedRef.current = false;
       touchStartedInNavRef.current = false;
-      touchStartedOnInteractiveRef.current = false;
+      touchStartedOnTextInputRef.current = false;
       wheelLockRef.current = false;
       pendingNextRef.current = false;
       setDragPx(0);

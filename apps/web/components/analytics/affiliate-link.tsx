@@ -13,17 +13,34 @@ export default function AffiliateLink({
   slug,
   title,
 }: AffiliateLinkProps) {
+  // 空文字 / 不正値の affiliate_url が来たときに <a href=""> で同じページに
+  // 戻ってしまうのを防ぐ。データ欠落時はクリック不能ボタン (disabled) を出す。
+  const safeHref = typeof href === "string" ? href.trim() : "";
+  if (!safeHref) {
+    return (
+      <button
+        type="button"
+        disabled
+        className="affiliate-btn"
+        aria-disabled="true"
+      >
+        購入ページは現在ご利用いただけません
+      </button>
+    );
+  }
   return (
     <a
-      href={href}
+      href={safeHref}
       target="_blank"
-      rel="noopener noreferrer"
+      // FANZA / DMM アフィリエイト遷移なので sponsored を付ける (Google ガイドライン)。
+      // noopener noreferrer は target=_blank のセキュリティ対策で必須。
+      rel="noopener noreferrer sponsored"
       className="affiliate-btn"
       onClick={() => {
         void trackEvent("affiliate_click", {
           slug,
           title,
-          affiliate_url: href,
+          affiliate_url: safeHref,
         });
       }}
     >

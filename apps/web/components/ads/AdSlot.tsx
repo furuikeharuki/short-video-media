@@ -303,6 +303,20 @@ export default function AdSlot({
 
   useEffect(() => {
     if (!enabled) return;
+    // priority モード (モーダル) では popstate / pageshow / visibilitychange を
+    // 起点に insKey をバンプしない。理由:
+    //   - モーダル open は parent (MovieDetailModal) 側が openInstanceId を
+    //     付与した key で AdSlot 全体を一意化する。中で AdIns を bump して
+    //     しまうと、最初の `<ins>` (例 adInsId=3) に serve push を出した
+    //     直後に key 変更で `<ins>` が detach され、provider が後から
+    //     iframe を挿入する宛先がいなくなる。
+    //   - 二回目以降の AdIns mount は新しい <ins> でまた serve push する
+    //     ので、結果として「provider への push 回数だけ増えて creative は
+    //     1 つも見えない」状態になる (実観測 PR #128 後ログ)。
+    // 通常ページ (priority=false) は従来通り bump する。これは「ホーム ↔
+    // 詳細ページ」のソフトナビ後に SPA で <ins> が DOM 残置されているケース
+    // の救済として実績がある。
+    if (priority) return;
     const onPopState = () => requestBump(true);
     const onPageShow = (e: PageTransitionEvent) => { void e.persisted; requestBump(true); };
     const onVisibility = () => { if (document.visibilityState === "visible") requestBump(false); };
@@ -315,7 +329,7 @@ export default function AdSlot({
       document.removeEventListener("visibilitychange", onVisibility);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [enabled]);
+  }, [enabled, priority]);
 
   if (!isAdZoneEnabled(zone)) return null;
 
@@ -433,9 +447,18 @@ function AdIns({
     const containerHasAd = (): boolean =>
       !!moTarget.querySelector("iframe, img, video, a, picture, canvas");
 
+    // priority 経路では「contentSeen 検知時に retry timer を全てキャンセル + mask 復元」
+    // を一括で行うフック。 priority ブロック内で実装したい本体ロジックがあるため、
+    // 最初は null で、 priority ブロック実行時に差し込む。
+    let onContentDetected: ((reason: string) => void) | null = null;
+
     const mo = new MutationObserver(() => {
       if (cancelled) return;
-      if (!contentSeen && (insHasAd() || containerHasAd())) {
+      if (contentSeen) return;
+      if (!(insHasAd() || containerHasAd())) return;
+      if (onContentDetected) {
+        onContentDetected("mutation-observer");
+      } else {
         contentSeen = true;
         onContent();
         mo.disconnect();
@@ -455,6 +478,9 @@ function AdIns({
       // 入っている必要がある。モーダル末尾の <ins> はモーダルを開いた直後は
       // スクロール下にあるので、IO の交差を待ってから serve push を出す。
       let firstServeStarted = false;
+      // priority モード内の累積 serve push 回数。再試行ループが暴走していないか
+      // 後から見るための debug ログ用。
+      let servePushCount = 0;
 
       // mask の累積復元クロージャ。
       // 以前は serveWithMask の各回で「250ms 後に復元」していたが、provider の
@@ -482,21 +508,42 @@ function AdIns({
         }
       };
 
-      const serveWithMask = () => {
+      // 予約済みのリトライ timer を全てキャンセルする。 contentSeen 検知時に
+      // 呼んで「埋まったあとも push が連発する」症状を止める。
+      const cancelPendingRetries = () => {
+        while (timers.length > 0) {
+          const id = timers.pop();
+          if (id != null) window.clearTimeout(id);
+        }
+      };
+
+      const handleContentSeen = (reason: string) => {
+        if (contentSeen) return;
+        contentSeen = true;
+        onContent();
+        restoreAll();
+        cancelPendingRetries();
+        mo.disconnect();
+        adDebugLog("priority content seen", {
+          reason,
+          adInsId: insIdRef.current,
+          zoneId: cfg.zoneId,
+          selfHasIframe: !!el.querySelector("iframe"),
+          childCount: el.children.length,
+          innerHTMLLength: el.innerHTML.length,
+          servePushCount,
+        });
+        dumpInsForZone(cfg.zoneId, "after-content", cfg.insClass);
+      };
+
+      const serveWithMask = (source: string) => {
         if (cancelled) return;
+        if (contentSeen) return;
         if (insHasAd() || containerHasAd()) {
-          if (!contentSeen) {
-            contentSeen = true;
-            onContent();
-          }
-          // 自身に iframe が来たので競合 mask は不要に。
-          restoreAll();
-          adDebugLog("priority content seen", {
-            adInsId: insIdRef.current,
-            zoneId: cfg.zoneId,
-            selfHasIframe: !!el.querySelector("iframe"),
-          });
-          dumpInsForZone(cfg.zoneId, "after-content", cfg.insClass);
+          // すでに iframe / img / video が入った状態でここに来た = MO が
+          // フリップする前に retry timer が走ったケース。 contentSeen を
+          // 立てて以降の push を全て止める。
+          handleContentSeen(`serveWithMask:${source}:content-already-present`);
           return;
         }
         const restore = maskCompetingInsElements(cfg.zoneId, cfg.insClass, el);
@@ -509,7 +556,11 @@ function AdIns({
         const parentCs = el.parentElement && typeof window !== "undefined"
           ? window.getComputedStyle(el.parentElement)
           : null;
+        servePushCount++;
         adDebugLog("priority serve push", {
+          source,
+          servePushCount,
+          adInsId: insIdRef.current,
           zoneId: cfg.zoneId,
           insClass: cfg.insClass,
           insInDom: !!el.isConnected,
@@ -520,6 +571,9 @@ function AdIns({
           sameClassInsCount: document.querySelectorAll(
             `ins.${cfg.insClass}`,
           ).length,
+          childCount: el.children.length,
+          hasIframe: !!el.querySelector("iframe"),
+          innerHTMLLength: el.innerHTML.length,
           rect: { x: rect.x, y: rect.y, w: rect.width, h: rect.height },
           inViewportY: rect.bottom > 0 && rect.top < window.innerHeight,
           insStyle: cs ? { display: cs.display, visibility: cs.visibility, opacity: cs.opacity } : null,
@@ -533,6 +587,35 @@ function AdIns({
         });
         serveAd(cfg.provider);
       };
+
+      // contentSeen を「retry timer 起点」でも検知できるよう、各 retry の
+      // 入り口でチェックして既に埋まっていたら no-op にする。これで provider
+      // が iframe を挿入したのに MO 通知が遅れて retry が走ってしまうケース
+      // でも、二重 push を防げる。
+      const scheduleRetry = (delay: number, source: string) => {
+        const id = window.setTimeout(() => {
+          if (cancelled) return;
+          if (contentSeen) return;
+          if (insHasAd() || containerHasAd()) {
+            adDebugLog("priority retry skipped", {
+              source,
+              reason: "content-present",
+              adInsId: insIdRef.current,
+              childCount: el.children.length,
+              hasIframe: !!el.querySelector("iframe"),
+            });
+            handleContentSeen(`retry:${source}:content-present`);
+            return;
+          }
+          serveWithMask(source);
+        }, delay);
+        timers.push(id);
+      };
+
+      // MO の content 検知を priority 用 handler に向ける。MO は要素登録済みなので
+      // ここで onContentDetected を差し替えるだけで、以降の mutation 通知は
+      // handleContentSeen 経由 (= retry timer cancel + mask restore + ログ) になる。
+      onContentDetected = handleContentSeen;
 
       hasEnteredViewportRef.current = true;
       adDebugLog("priority mount", {
@@ -561,20 +644,23 @@ function AdIns({
         if (cancelled || contentSeen || firstServeStarted) return;
         firstServeStarted = true;
         adDebugLog("priority first serve", { reason, adInsId: insIdRef.current });
-        serveWithMask();
-        // 1.0s / 2.5s / 4.0s の再試行。各回 serveWithMask で mask が
-        // 累積復元キューに積まれ、contentSeen で一括 restore される。
-        // provider script のロード遅延、初回 push が他要素に取られた等の
-        // ケースをカバーする。
-        timers.push(window.setTimeout(serveWithMask, 1000));
-        timers.push(window.setTimeout(serveWithMask, 2500));
-        timers.push(window.setTimeout(serveWithMask, 4000));
+        serveWithMask("first");
+        // 再試行は 2 回に絞る (PR #128 までは 1.0s / 2.5s / 4.0s の 3 回 +
+        // 8s fallback restore で、provider が静かに no-fill を返した場合に
+        // 計 4 回も serve push が出ていた)。各 retry の入り口で contentSeen
+        // と insHasAd() を確認するので、埋まっていれば即座に no-op になる。
+        scheduleRetry(2000, "retry-2s");
+        scheduleRetry(5000, "retry-5s");
         // モーダル広告 unfilled でも背後 `<ins>` をいつまでも mask した
         // ままにすると、modal close 後にフィード広告が空になる。最大 8s
         // でフォールバック restore する (provider がこの時間内に inject
         // しないなら今回の serve は諦め、フィード側は通常動作に戻す)。
         timers.push(window.setTimeout(() => {
-          adDebugLog("priority mask fallback restore");
+          adDebugLog("priority mask fallback restore", {
+            adInsId: insIdRef.current,
+            contentSeen,
+            servePushCount,
+          });
           restoreAll();
         }, 8000));
       };
@@ -611,15 +697,16 @@ function AdIns({
       const io = new IntersectionObserver(
         (entries) => {
           if (cancelled) return;
+          if (contentSeen) return;
           for (const entry of entries) {
             if (!entry.isIntersecting) continue;
             if (!firstServeStarted) {
               beginPriorityServe("intersection");
-            } else if (!contentSeen) {
-              // 既に serve 済みでまだ埋まっていない場合、 viewport に
-              // 再び入ったタイミングで最後の保険として serveWithMask を呼ぶ。
-              serveWithMask();
             }
+            // viewport に再入したときの「保険 push」は廃止。 retry timer
+            // (2s, 5s) と mask による競合排除が走っているので、これ以上
+            // 上から push を重ねる理由はない (PR #128 のログで観測された
+            // 「同じ <ins> に 5 連続 serve push」を防ぐため)。
           }
         },
         { rootMargin: "50px 0px", threshold: 0.01 },
@@ -639,9 +726,7 @@ function AdIns({
       );
 
       if (insHasAd() || containerHasAd()) {
-        contentSeen = true;
-        onContent();
-        mo.disconnect();
+        handleContentSeen("mount-init");
       }
 
       return () => {
@@ -650,7 +735,7 @@ function AdIns({
         io.disconnect();
         if (rafA) cancelAnimationFrame(rafA);
         if (rafB) cancelAnimationFrame(rafB);
-        for (const t of timers) window.clearTimeout(t);
+        cancelPendingRetries();
         // unmount 時に必ず競合 `<ins>` の data-zoneid を戻す。
         // restoreAll は冪等 (空キューなら no-op)。
         restoreAll();

@@ -39,17 +39,18 @@ const scriptInjected: Record<Provider, boolean> = {
 };
 
 /**
- * 直近の reset 実行時刻。短時間に複数回呼ばれても 1 回だけ効かせるためのクールダウン。
+ * 短時間に複数回呼ばれたときに連続 push を最小に抑えるための薄いクールダウン。
  *
- * 値を小さくする理由:
- * ホーム→マイページ→ホーム と遷移すると Next.js App Router は force-dynamic ページを
- * サーバから再レンダリングするため AdSlot がアンマウント→再マウントされる。
- * その際に複数 AdSlot が同時に mount されて同時に resetAndServeAd を呼ぶが、
- * その「複数呼び」を 1 回に抑えたいだけで、
- * 「遷移自体の長さ」よりも小さい値にする必要はない。
- * 300ms で十分。
+ * 以前は destructive reset (script 削除 + window.AdProvider 置換) を 1 回に絞るために
+ * 300ms 設定だったが、destructive reset を廃止 (provider 内部状態の破壊を防ぐため)
+ * してからは「単なる push({serve:{}}) を 1 回に抑える」用途しか残っていない。
+ *
+ * 300ms にしてしまうと、ページ AdSlot が serve した直後 (80ms) に 詳細モーダルの
+ * AdSlot が mount → serve しても cooldown に弾かれてしまい、モーダルの \`<ins>\` が
+ * 永遠に埋まらない不具合になる。 30ms 程度に下げて「同じ tick での多重 push のみ抑制」
+ * とし、別 AdSlot のための serve はちゃんと通すようにする。
  */
-const RESET_COOLDOWN_MS = 300;
+const RESET_COOLDOWN_MS = 30;
 
 function ensureGlobal(): void {
   if (typeof window === "undefined") return;

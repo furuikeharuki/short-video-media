@@ -14,6 +14,9 @@ const WINDOW_SIZE = 1;
 const RAPID_THRESHOLD_MS = 350;
 const RAPID_SETTLE_MS = 350;
 
+// BottomNav の高さ。タッチ終端がここより下なら BottomNav 操作として扱う。
+const BOTTOM_NAV_H = 56;
+
 type FeedSlide =
   | { kind: "video"; movie: MovieCard; videoIndex: number }
   | { kind: "ad"; adIndex: number; key: string };
@@ -45,6 +48,11 @@ function appendSlides(
     }
   }
   return [...prev, ...added];
+}
+
+/** タッチ開始点が BottomNav 領域かどうかを判定する */
+function isTouchInBottomNav(clientY: number): boolean {
+  return clientY >= window.innerHeight - BOTTOM_NAV_H;
 }
 
 interface Props {
@@ -95,6 +103,8 @@ export default function FeedViewer({
   const dragStartYForEnd = useRef(0);
   const dragStartTime    = useRef(0);
   const isDragging       = useRef(false);
+  // BottomNav 上で始まったタッチはスワイプとして扱わない
+  const touchStartedInNavRef = useRef(false);
 
   useEffect(() => {
     const now = Date.now();
@@ -194,14 +204,23 @@ export default function FeedViewer({
     if (!el) return;
     const onTouchStart = (e: TouchEvent) => {
       if (modalOpenRef.current) return;
+      const startY = e.touches[0].clientY;
+      // BottomNav 上タッチはフィードスワイプとして扱わない
+      if (isTouchInBottomNav(startY)) {
+        touchStartedInNavRef.current = true;
+        return;
+      }
+      touchStartedInNavRef.current = false;
       isDragging.current = true;
-      dragStartY.current = e.touches[0].clientY;
-      dragStartYForEnd.current = e.touches[0].clientY;
+      dragStartY.current = startY;
+      dragStartYForEnd.current = startY;
       dragStartTime.current = Date.now();
       setDragPx(0);
     };
     const onTouchMove = (e: TouchEvent) => {
       if (modalOpenRef.current) return;
+      // BottomNav 上タッチは preventDefault しない
+      if (touchStartedInNavRef.current) return;
       e.preventDefault();
       if (!isDragging.current) return;
       const dy    = e.touches[0].clientY - dragStartY.current;
@@ -211,6 +230,11 @@ export default function FeedViewer({
     };
     const onTouchEnd = (e: TouchEvent) => {
       if (modalOpenRef.current) { isDragging.current = false; return; }
+      // BottomNav 上タッチはスワイプ処理をスキップ
+      if (touchStartedInNavRef.current) {
+        touchStartedInNavRef.current = false;
+        return;
+      }
       if (!isDragging.current) return;
       isDragging.current = false;
       setDragPx(0);
@@ -218,7 +242,11 @@ export default function FeedViewer({
       const dt = Date.now() - dragStartTime.current;
       if (Math.abs(dy) > 60 && dt < 1000) { if (dy < 0) goNext(); else goPrev(); }
     };
-    const onTouchCancel = () => { isDragging.current = false; setDragPx(0); };
+    const onTouchCancel = () => {
+      isDragging.current = false;
+      touchStartedInNavRef.current = false;
+      setDragPx(0);
+    };
     const onWheel = (e: WheelEvent) => {
       if (modalOpenRef.current) return;
       e.preventDefault();

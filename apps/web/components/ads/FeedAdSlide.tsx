@@ -35,18 +35,32 @@ const css = `
     align-items: center;
     justify-content: center;
   }
-  /* モバイル: 画面幅を最大限活用する。
-     左右の余白を最小限に留めて広告を大きく見せる。 */
+  /* 広告ラッパーを画面幅いっぱいに広げる */
   .feed-ad-slide .ad-slot {
     width: 100% !important;
-    max-width: 100%;
-    padding: 0 8px;
+    max-width: 100% !important;
+    padding: 0;
     box-sizing: border-box;
+  }
+  /* <ins> も幅いっぱいに */
+  .feed-ad-slide .ad-slot ins {
+    width: 100% !important;
+    max-width: 100% !important;
+    display: block !important;
+  }
+  /* 広告内の iframe・img も幅に合わせる */
+  .feed-ad-slide .ad-slot ins iframe,
+  .feed-ad-slide .ad-slot ins img {
+    width: 100% !important;
+    max-width: 100% !important;
+    height: auto !important;
   }
   @media (min-width: 768px) {
     .feed-ad-slide .ad-slot {
-      max-width: 480px;
-      padding: 0 16px;
+      max-width: 480px !important;
+    }
+    .feed-ad-slide .ad-slot ins {
+      max-width: 480px !important;
     }
   }
 `;

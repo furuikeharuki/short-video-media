@@ -304,14 +304,33 @@ const pageCSS = `
     overflow: visible !important;
     height: auto !important;
   }
-  /* 広告の ins/iframe/img 内部要素を親幅に封じる */
-  .ad-slot { overflow: hidden !important; }
-  .ad-slot > * { max-width: 100% !important; overflow: hidden !important; }
-  .ad-slot ins,
-  .ad-slot iframe,
-  .ad-slot img {
+  /* 広告内部要素を親幅に封じつつ、スマホでは幅100%まで広げる */
+  .ad-slot {
+    width: 100% !important;
     max-width: 100% !important;
+    overflow: hidden !important;
+  }
+  .ad-slot > * { max-width: 100% !important; overflow: hidden !important; }
+  .ad-slot ins {
+    width: 100% !important;
+    max-width: 100% !important;
+    display: block !important;
     box-sizing: border-box !important;
+  }
+  .ad-slot ins iframe,
+  .ad-slot ins img,
+  .ad-slot ins picture,
+  .ad-slot ins video {
+    width: 100% !important;
+    max-width: 100% !important;
+    height: auto !important;
+    box-sizing: border-box !important;
+  }
+  @media (min-width: 768px) {
+    .ad-slot,
+    .ad-slot ins {
+      max-width: 480px !important;
+    }
   }
   .affiliate-btn {
     display: flex; align-items: center; justify-content: center;

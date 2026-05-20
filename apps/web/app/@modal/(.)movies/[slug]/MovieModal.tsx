@@ -175,7 +175,7 @@ export default function MovieModal({ movie }: { movie: MovieDetail }) {
               resetOnMount=true でモーダル open 直後に provider をリセットし、
               背後ページの DOM が生きたまま追加された新しい <ins> を確実に拾わせる。
             */}
-            <div style={adBottomStyle}>
+            <div className="mm-ad-bottom" style={adBottomStyle}>
               <AdSlot zone="native" context="modal" resetOnMount />
             </div>
           </div>
@@ -385,9 +385,44 @@ const ctaStyle: React.CSSProperties = {
 
 const adBottomStyle: React.CSSProperties = {
   marginTop: "24px",
+  width: "100%",
+  maxWidth: "100%",
+  overflow: "hidden",
+  boxSizing: "border-box",
 };
 
 const modalCSS = `
+  /* モーダル内 native 広告：スマホでも幅100%まで広げる */
+  .mm-ad-bottom .ad-slot {
+    width: 100% !important;
+    max-width: 100% !important;
+    overflow: hidden !important;
+  }
+  .mm-ad-bottom .ad-slot > * {
+    max-width: 100% !important;
+    overflow: hidden !important;
+  }
+  .mm-ad-bottom .ad-slot ins {
+    width: 100% !important;
+    max-width: 100% !important;
+    display: block !important;
+    box-sizing: border-box !important;
+  }
+  .mm-ad-bottom .ad-slot ins iframe,
+  .mm-ad-bottom .ad-slot ins img,
+  .mm-ad-bottom .ad-slot ins picture,
+  .mm-ad-bottom .ad-slot ins video {
+    width: 100% !important;
+    max-width: 100% !important;
+    height: auto !important;
+    box-sizing: border-box !important;
+  }
+  @media (min-width: 768px) {
+    .mm-ad-bottom .ad-slot,
+    .mm-ad-bottom .ad-slot ins {
+      max-width: 480px !important;
+    }
+  }
   .affiliate-btn {
     display: flex;
     align-items: center;

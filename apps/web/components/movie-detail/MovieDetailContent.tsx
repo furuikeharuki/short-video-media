@@ -217,14 +217,36 @@ export default function MovieDetailContent({ movie }: Props) {
           box-sizing: border-box;
         }
 
-        /* native広告内部要素を親幅に封じる */
-        .ad-slot { overflow: hidden !important; }
-        .ad-slot > * { max-width: 100% !important; overflow: hidden !important; }
-        .ad-slot ins,
-        .ad-slot iframe,
-        .ad-slot img {
+        /* native広告内部要素を親幅に封じつつ、スマホでは幅100%まで広げる */
+        .mdc-ad-bottom .ad-slot {
+          width: 100% !important;
           max-width: 100% !important;
+          overflow: hidden !important;
+        }
+        .mdc-ad-bottom .ad-slot > * {
+          max-width: 100% !important;
+          overflow: hidden !important;
+        }
+        .mdc-ad-bottom .ad-slot ins {
+          width: 100% !important;
+          max-width: 100% !important;
+          display: block !important;
           box-sizing: border-box !important;
+        }
+        .mdc-ad-bottom .ad-slot ins iframe,
+        .mdc-ad-bottom .ad-slot ins img,
+        .mdc-ad-bottom .ad-slot ins picture,
+        .mdc-ad-bottom .ad-slot ins video {
+          width: 100% !important;
+          max-width: 100% !important;
+          height: auto !important;
+          box-sizing: border-box !important;
+        }
+        @media (min-width: 768px) {
+          .mdc-ad-bottom .ad-slot,
+          .mdc-ad-bottom .ad-slot ins {
+            max-width: 480px !important;
+          }
         }
 
         .affiliate-btn {

@@ -132,6 +132,15 @@ export default function FeedViewer({
    * ref 化することで listener は一度しか attach せず、最新値だけ参照する。
    */
   const slidesLengthRef = useRef(0);
+  /**
+   * 「現在 slides の最後にいる + ユーザは下に進みたい」状態を覚えておくフラグ。
+   * 厳しいフィルター (例: ジャンル 2 つ AND) で 1 ページあたりの結果が少ないと、
+   * 高速スワイプで末尾に到達した瞬間に fetchMore がまだ返っておらず goNext が
+   * silent no-op (\`nextIdx >= prevSlides.length\`) になる。
+   * これを true にしておけば、items が伸びて新しい slide が追加された直後に
+   * 自動で goNext を 1 回だけ走らせ、ユーザのスワイプ意図を取りこぼさない。
+   */
+  const pendingNextRef = useRef(false);
 
   // touch listener が参照するための ref を毎レンダー同期 (再 attach しないため)
   slidesLengthRef.current = slides.length;
@@ -210,8 +219,16 @@ export default function FeedViewer({
   const goNext = useCallback(() => {
     setSlides((prevSlides) => {
       const nextIdx = currentIdxRef.current + 1;
-      if (nextIdx >= prevSlides.length) return prevSlides;
+      if (nextIdx >= prevSlides.length) {
+        // 末尾到達: fetchMore がまだ走っていない可能性があるので明示的にキック。
+        // さらに「下に進みたい意図」を覚えておき、新しい slide が来た瞬間に自動で
+        // 1 段だけ進めるようにする (restrictive filter で fetchMore が遅れた時の救済)。
+        pendingNextRef.current = true;
+        onNearEnd?.(currentIdxRef.current);
+        return prevSlides;
+      }
       markFeedGesture();
+      pendingNextRef.current = false;
       currentIdxRef.current = nextIdx;
       setCurrentIndex(nextIdx);
       updateWindow(nextIdx, prevSlides);
@@ -229,11 +246,24 @@ export default function FeedViewer({
     const next = Math.max(0, currentIdxRef.current - 1);
     if (next === currentIdxRef.current) return;
     markFeedGesture();
+    // 上に戻る操作をしたら "進みたい意図" は破棄する
+    pendingNextRef.current = false;
     currentIdxRef.current = next;
     setCurrentIndex(next);
     setSlides((prev) => { updateWindow(next, prev); return prev; });
     onIndexChange?.(next);
   }, [updateWindow, onIndexChange]);
+
+  // 末尾で goNext を空振りした (pendingNextRef === true) ときに、新しい slide が
+  // 追加されたら自動で 1 段だけ進める。これにより
+  // 「ジャンル 2 つ等で結果が少なめのフィード × 高速スワイプ」の場面でも
+  // ユーザのスワイプ意図が取り残されない。
+  useEffect(() => {
+    if (!pendingNextRef.current) return;
+    if (slides.length <= currentIdxRef.current + 1) return;
+    pendingNextRef.current = false;
+    goNext();
+  }, [slides.length, goNext]);
 
   useEffect(() => {
     const el = containerRef.current;
@@ -331,6 +361,7 @@ export default function FeedViewer({
       touchStartedInNavRef.current = false;
       touchStartedOnInteractiveRef.current = false;
       wheelLockRef.current = false;
+      pendingNextRef.current = false;
       setDragPx(0);
     };
     const onVisibilityChange = () => {

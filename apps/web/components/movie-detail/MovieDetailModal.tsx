@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useCallback, useState } from "react";
+import { useEffect, useRef, useCallback, useState, useMemo } from "react";
 import { createPortal } from "react-dom";
 import type { MovieDetail } from "@/lib/api/movies";
 import MovieDetailContent from "./MovieDetailContent";
@@ -14,6 +14,13 @@ interface Props {
 
 type State = "idle" | "loading" | "ready" | "error";
 
+// モーダルを開くたびに加算されるグローバルカウンタ。AdSlot の key に slug と一緒に
+// 含めることで、同じ slug の動画でモーダルを再度開いた場合や、 React tree の都合で
+// slug が同値とみなされたケースでも AdSlot が確実に新規 mount されるようにする。
+// provider が前回 modal の `<ins>` への参照を内部に持ったまま、 next push を別の
+// `<ins>` (フィード側) にバインドしてしまう症状を抑えるためのもの。
+let modalOpenInstanceCounter = 0;
+
 export default function MovieDetailModal({ slug, onClose }: Props) {
   const [movie, setMovie] = useState<MovieDetail | null>(null);
   const [state, setState] = useState<State>("loading");
@@ -24,6 +31,13 @@ export default function MovieDetailModal({ slug, onClose }: Props) {
   const startYRef   = useRef(0);
   const currentYRef = useRef(0);
   const isDraggingRef = useRef(false);
+
+  // モーダル open のインスタンス ID。同一の MovieDetailModal インスタンスでは固定。
+  // AdSlot の key にこれを含めることで、provider 内部に残った前回 <ins> 参照と
+  // 新しい <ins> が混同されないようにする。useMemo で「mount 時点で 1 回だけ
+  // 採番」する (slug 変更時は MovieDetailModal 自体は同インスタンスのまま
+  // 再 fetch するが、AdSlot は slug 変化で remount するので問題ない)。
+  const openInstanceId = useMemo(() => ++modalOpenInstanceCounter, []);
 
   useEffect(() => {
     setMounted(true);
@@ -229,7 +243,7 @@ export default function MovieDetailModal({ slug, onClose }: Props) {
           */}
           <div className="mdm-ad-bottom">
             <AdSlot
-              key={`modal-ad-${slug}`}
+              key={`modal-ad-${slug}-${openInstanceId}`}
               zone="mobileBanner300x250"
               context="modal"
               priority

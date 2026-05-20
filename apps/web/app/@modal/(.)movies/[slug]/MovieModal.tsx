@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useEffect, useRef } from "react";
+import { useEffect, useMemo, useRef } from "react";
 import AffiliateLink from "@/components/analytics/affiliate-link";
 import DetailViewTracker from "@/components/analytics/detail-view-tracker";
 import ActressLink from "@/components/ActressLink";
@@ -18,9 +18,16 @@ function formatDate(dateStr: string | null): string {
   return `${d.getFullYear()}年${d.getMonth() + 1}月${d.getDate()}日`;
 }
 
+// このコンポーネントが mount するたびに加算されるグローバルカウンタ。
+// AdSlot の key に movie.slug と一緒に含めて、Next.js が同 slug で再 mount した場合や
+// クライアントナビゲーションで同じインスタンスを再利用したように見える場合でも、
+// AdSlot を必ず remount させて provider に新しい <ins> を見せる。
+let homeModalOpenInstanceCounter = 0;
+
 export default function MovieModal({ movie }: { movie: MovieDetail }) {
   const router = useRouter();
   const scrollRef = useRef<HTMLDivElement>(null);
+  const openInstanceId = useMemo(() => ++homeModalOpenInstanceCounter, []);
 
   useEffect(() => {
     const videos = Array.from(
@@ -180,7 +187,12 @@ export default function MovieModal({ movie }: { movie: MovieDetail }) {
                  serve を取られてモーダル <ins> が空のまま残るのを防ぐ。
             */}
             <div className="mm-ad-bottom" style={adBottomStyle}>
-              <AdSlot zone="mobileBanner300x250" context="modal" priority />
+              <AdSlot
+                key={`home-modal-ad-${movie.slug}-${openInstanceId}`}
+                zone="mobileBanner300x250"
+                context="modal"
+                priority
+              />
             </div>
           </div>
         </div>

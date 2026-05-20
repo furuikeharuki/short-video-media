@@ -80,7 +80,7 @@ function adDebugLog(...args: unknown[]): void {
  * 入ってしまっている等) の調査用。各要素の DOM 接続状態 / 親チェーン /
  * 内側の iframe / 描画矩形を吐き出す。
  */
-function dumpInsForZone(zoneId: string, label: string): void {
+function dumpInsForZone(zoneId: string, label: string, insClass?: string): void {
   if (!isAdDebugEnabled() || typeof document === "undefined") return;
   const live = Array.from(
     document.querySelectorAll<HTMLElement>(`ins[data-zoneid="${zoneId}"]`),
@@ -90,7 +90,17 @@ function dumpInsForZone(zoneId: string, label: string): void {
       `ins[data-ad-zone-stash="${zoneId}"]`,
     ),
   );
-  const all = [...live, ...stashed];
+  const byClass = insClass
+    ? Array.from(document.querySelectorAll<HTMLElement>(`ins.${insClass}`))
+    : [];
+  const seen = new Set<HTMLElement>();
+  const all: HTMLElement[] = [];
+  for (const el of [...live, ...stashed, ...byClass]) {
+    if (!seen.has(el)) {
+      seen.add(el);
+      all.push(el);
+    }
+  }
   const dump = all.map((el) => {
     const rect = el.getBoundingClientRect();
     const parents: string[] = [];
@@ -104,9 +114,11 @@ function dumpInsForZone(zoneId: string, label: string): void {
       depth++;
     }
     return {
+      adInsId: el.dataset.adInsId ?? null,
       connected: el.isConnected,
       dataZoneId: el.getAttribute("data-zoneid"),
-      stash: el.dataset.adZoneStash ?? null,
+      stashZone: el.dataset.adZoneStash ?? null,
+      stashClass: el.dataset.adClassStash ?? null,
       cls: el.className,
       hasIframe: !!el.querySelector("iframe"),
       iframeSrc: el.querySelector("iframe")?.getAttribute("src") ?? null,
@@ -134,36 +146,91 @@ function writeWasFilled(zone: AdZoneKey, context: string): void {
 }
 
 /**
- * `selfIns` 以外で同じ zoneid を持つ `<ins>` を一時的に「provider から見えなく」する。
+ * `selfIns` 以外で、provider のスキャナから「同じターゲット <ins>」と見える可能性のある
+ * 要素をすべて一時的に provider から見えなくする。
  *
- * data-zoneid を data-ad-zone-stash に逃がし、data-zoneid を空にする。
- * 復元用クロージャを返す。複数回呼ばれて二重 stash しないよう、すでに stash 済みの
- * 要素はスキップする (二重 stash で本来値を失わないため)。
+ * 退避対象の属性:
+ *   - data-zoneid  (ExoClick provider が zone を識別するのに使う想定)
+ *   - class        (ExoClick の renderer が `ins.eas6a97888eXX` で querySelector して
+ *                   iframe を挿入するバリエーションがあるため、class を空にして
+ *                   セレクタにヒットしないようにする)
+ *   - width / height (renderer 側で寸法を読むときの誤マッチ対策)
  *
- * 復元は冪等。stash されていない要素はそのまま。
+ * これらを `data-ad-zone-stash` (= 元の data-zoneid) と `data-ad-class-stash` /
+ * `data-ad-width-stash` / `data-ad-height-stash` に逃がし、復元用クロージャを返す。
+ *
+ * data-zoneid 単独 mask だと「provider が class セレクタで <ins> を選ぶ」場合に
+ * 競合 <ins> も serve 対象となり、push 1 回で消費する 1 ad request が背後の
+ * フィード <ins> に取られて、モーダル <ins> が空のまま残る不具合が観測された
+ * (modal を 2 回目以降開いたとき再現)。class まで mask することでセレクタが
+ * どちらでもモーダル側だけが残るようになる。
+ *
+ * 復元は冪等で、すでに stash 済みの要素は二重 stash しない (本来値の保護)。
  */
 function maskCompetingInsElements(
   zoneId: string,
+  insClass: string,
   selfIns: HTMLElement | null,
 ): () => void {
   if (typeof document === "undefined" || !zoneId) return () => {};
-  const all = Array.from(
+  // data-zoneid と class セレクタの両方で候補を集める (どちらかが空でも拾えるように)。
+  const byZone = Array.from(
     document.querySelectorAll<HTMLElement>(`ins[data-zoneid="${zoneId}"]`),
   );
+  const byClass = insClass
+    ? Array.from(
+        document.querySelectorAll<HTMLElement>(`ins.${insClass}`),
+      )
+    : [];
+  const all: HTMLElement[] = [];
+  const seen = new Set<HTMLElement>();
+  for (const el of [...byZone, ...byClass]) {
+    if (!seen.has(el)) {
+      seen.add(el);
+      all.push(el);
+    }
+  }
   const masked: HTMLElement[] = [];
   for (const el of all) {
     if (el === selfIns) continue;
     if (el.dataset.adZoneStash != null) continue; // すでに stash 済み
-    el.dataset.adZoneStash = zoneId;
+    el.dataset.adZoneStash = el.getAttribute("data-zoneid") ?? "";
+    el.dataset.adClassStash = el.getAttribute("class") ?? "";
+    const w = el.getAttribute("width");
+    const h = el.getAttribute("height");
+    if (w != null) el.dataset.adWidthStash = w;
+    if (h != null) el.dataset.adHeightStash = h;
     el.setAttribute("data-zoneid", "");
+    el.setAttribute("class", "");
+    if (w != null) el.removeAttribute("width");
+    if (h != null) el.removeAttribute("height");
     masked.push(el);
   }
   return () => {
     for (const el of masked) {
-      const original = el.dataset.adZoneStash;
-      if (original) {
-        el.setAttribute("data-zoneid", original);
+      const zoneOrig = el.dataset.adZoneStash;
+      if (zoneOrig != null) {
+        el.setAttribute("data-zoneid", zoneOrig);
         delete el.dataset.adZoneStash;
+      }
+      const classOrig = el.dataset.adClassStash;
+      if (classOrig != null) {
+        if (classOrig === "") {
+          el.removeAttribute("class");
+        } else {
+          el.setAttribute("class", classOrig);
+        }
+        delete el.dataset.adClassStash;
+      }
+      const wOrig = el.dataset.adWidthStash;
+      if (wOrig != null) {
+        el.setAttribute("width", wOrig);
+        delete el.dataset.adWidthStash;
+      }
+      const hOrig = el.dataset.adHeightStash;
+      if (hOrig != null) {
+        el.setAttribute("height", hOrig);
+        delete el.dataset.adHeightStash;
       }
     }
   };
@@ -321,6 +388,11 @@ export default function AdSlot({
   );
 }
 
+// adDebug 用のグローバル ID カウンタ。AdIns が mount するたびにインクリメントして
+// 各 <ins> インスタンスに data-ad-ins-id を打つ。debug log でモーダル N 回目の
+// <ins> がどれか・どの <ins> に iframe が入ったか追跡する用。
+let nextAdInsId = 1;
+
 function AdIns({
   cfg,
   priority,
@@ -337,10 +409,15 @@ function AdIns({
   onBecameVisibleAgain: () => void;
 }) {
   const insRef = useRef<HTMLModElement | null>(null);
+  const insIdRef = useRef<number>(0);
 
   useEffect(() => {
     const el = insRef.current;
     if (!el) return;
+
+    // インスタンス ID を付ける (debug 用)。
+    insIdRef.current = nextAdInsId++;
+    el.dataset.adInsId = String(insIdRef.current);
 
     let cancelled = false;
     let contentSeen = false;
@@ -407,25 +484,39 @@ function AdIns({
           }
           // 自身に iframe が来たので競合 mask は不要に。
           restoreAll();
-          dumpInsForZone(cfg.zoneId, "after-content");
+          adDebugLog("priority content seen", {
+            adInsId: insIdRef.current,
+            zoneId: cfg.zoneId,
+            selfHasIframe: !!el.querySelector("iframe"),
+          });
+          dumpInsForZone(cfg.zoneId, "after-content", cfg.insClass);
           return;
         }
-        const restore = maskCompetingInsElements(cfg.zoneId, el);
+        const restore = maskCompetingInsElements(cfg.zoneId, cfg.insClass, el);
         restoreFns.push(restore);
         adDebugLog("priority serve push", {
           zoneId: cfg.zoneId,
+          insClass: cfg.insClass,
           insInDom: !!el.isConnected,
           dataZoneId: el.getAttribute("data-zoneid"),
+          sameZoneInsCount: document.querySelectorAll(
+            `ins[data-zoneid="${cfg.zoneId}"]`,
+          ).length,
+          sameClassInsCount: document.querySelectorAll(
+            `ins.${cfg.insClass}`,
+          ).length,
         });
         serveAd(cfg.provider);
       };
 
       hasEnteredViewportRef.current = true;
       adDebugLog("priority mount", {
+        adInsId: insIdRef.current,
         zoneId: cfg.zoneId,
         provider: cfg.provider,
+        insClass: cfg.insClass,
       });
-      dumpInsForZone(cfg.zoneId, "mount");
+      dumpInsForZone(cfg.zoneId, "mount", cfg.insClass);
       // rAF を 2 回挟んでブラウザのレイアウトを確定させてから serve する。
       // モーダルのトランジション完了直後 (まだ <ins> が viewport 外) でも
       // priority mode は IO を待たずに serve するので問題ない。

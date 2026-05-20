@@ -27,6 +27,20 @@ function isPublicFile(pathname: string): boolean {
   return PUBLIC_FILE_NAMES.has(lastSegment);
 }
 
+// 検索エンジンクローラの User-Agent を判定する。
+// 該当時は年齢確認リダイレクトをスキップして実ページを返し、
+// Google が "年齢確認" を home の <title> として index しないようにする。
+// (robots.txt 上は /age-gate を Disallow しているが、unauth で / を踏んだ
+//  クローラを 307 で /age-gate へ飛ばすと、リダイレクト元 / のスニペット/
+//  タイトルとして age-gate ページの内容を拾ってしまうため、ここで止める)
+const CRAWLER_UA_PATTERN =
+  /(googlebot|bingbot|slurp|duckduckbot|baiduspider|yandexbot|sogou|exabot|facebot|facebookexternalhit|twitterbot|linkedinbot|applebot|petalbot|google-inspectiontool|chrome-lighthouse|adsbot-google|mediapartners-google)/i;
+
+function isCrawler(userAgent: string | null): boolean {
+  if (!userAgent) return false;
+  return CRAWLER_UA_PATTERN.test(userAgent);
+}
+
 export function middleware(request: NextRequest) {
   const { pathname } = request.nextUrl;
 
@@ -38,6 +52,14 @@ export function middleware(request: NextRequest) {
   // sitemap.xml / robots.txt はクローラが age 確認 cookie 無しで取得するため
   // 年齢認証より前に通過させる (検索エンジン登録時に HTML を返さないため)。
   if (isPublicFile(pathname)) {
+    return NextResponse.next();
+  }
+
+  // 検索エンジンクローラは年齢ゲートをバイパスして実ページを取得させる。
+  // これにより Google が "/" のタイトルを "年齢確認 | AV Shorts" として
+  // index してしまう問題を防ぐ。クローラ判定は UA ベースで保守的に行い、
+  // 通常ユーザの年齢確認フローには影響しない。
+  if (isCrawler(request.headers.get("user-agent"))) {
     return NextResponse.next();
   }
 

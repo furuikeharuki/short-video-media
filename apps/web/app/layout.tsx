@@ -21,8 +21,12 @@ export const viewport: Viewport = {
 
 export const metadata: Metadata = {
   metadataBase: new URL(SITE_URL),
+  // - default: 子ページが title を指定しなかったとき (= ホーム "/") の <title>。
+  //   Google は検索結果でサイト名を自動付与する仕様 (重複 "| AV Shorts | AV Shorts"
+  //   になりがち) のため、ここではブランド名のみにする。
+  // - template: 子ページが title を指定したときの組み立て (例: "ホーム | AV Shorts")。
   title: {
-    default: `${SITE_NAME} | AVショート動画メディア`,
+    default: SITE_NAME,
     template: `%s | ${SITE_NAME}`,
   },
   description: SITE_DESCRIPTION,
@@ -43,12 +47,12 @@ export const metadata: Metadata = {
     locale: SITE_LOCALE,
     url: SITE_URL,
     siteName: SITE_NAME,
-    title: `${SITE_NAME} | AVショート動画メディア`,
+    title: SITE_NAME,
     description: SITE_DESCRIPTION,
   },
   twitter: {
     card: "summary_large_image",
-    title: `${SITE_NAME} | AVショート動画メディア`,
+    title: SITE_NAME,
     description: SITE_DESCRIPTION,
   },
   robots: {

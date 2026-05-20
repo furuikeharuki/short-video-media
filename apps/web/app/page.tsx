@@ -9,13 +9,14 @@ import { isAdZoneEnabled } from "@/lib/ads/config";
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
 
+// ホーム "/" の <title> は root layout の default (= "AV Shorts") をそのまま
+// 使う (Google が検索結果でサイト名を自動付与するため "ホーム | AV Shorts |
+// AV Shorts" のような重複表示にならないようにする)。
 export const metadata: Metadata = {
-  title: "ホーム",
   description:
     "本日配信開始の新作、日間/週間/月間ランキング、人気ジャンル別のAVショート動画を一覧でチェック。気に入った作品はFANZAでそのまま購入できます。",
   alternates: { canonical: "/" },
   openGraph: {
-    title: "ホーム",
     description:
       "新作・ランキング・人気ジャンルのAVショート動画。気に入った作品はFANZAでそのまま購入できます。",
     url: "/",

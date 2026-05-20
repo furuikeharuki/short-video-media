@@ -209,10 +209,20 @@ export function useFeedPlayback({ slug, title, isActive, videoSrc, onOpenModal, 
     if (el) el.style.display = visible ? "block" : "none";
   }, []);
 
+  // 直近 dispatch した progress を記憶しておき、差分が無視できるほど小さいときは
+  // dispatch しない。BottomNav のシークバーは ~0.1% 単位で十分滑らかに見えるので、
+  // 毎フレーム同値を投げて BottomNav の setState を 60fps 走らせる必要はない。
+  // これにより、useFeedPlayback の rAF と BottomNav の setProgress の組み合わせ
+  // による「Maximum update depth exceeded」誤検知を避ける。
+  const lastDispatchedProgressRef = useRef(-1);
+
   const startProgressLoop = useCallback(() => {
     const tick = () => {
       const video = videoRef.current;
-      if (!video || !isActiveRef.current) return;
+      if (!video || !isActiveRef.current) {
+        rafRef.current = null;
+        return;
+      }
       // プロ女優スキップ有効時はシークバーの 0% を「下限 (5秒) 目」に対応させる。
       // 進捗 = (currentTime - lower) / (duration - lower)。
       // 通常動画 (lower = 0) はこれまでと同じ currentTime / duration。
@@ -224,7 +234,15 @@ export function useFeedPlayback({ slug, title, isActive, videoSrc, onOpenModal, 
         if (progress < 0) progress = 0;
         else if (progress > 1) progress = 1;
       }
-      window.dispatchEvent(new CustomEvent("video-progress", { detail: { progress } }));
+      // 0.001 (= 0.1%) 未満の変化では dispatch しない。
+      // 終端 (1.0) / 始端 (0.0) ちょうどへの遷移は確実に通す。
+      const last = lastDispatchedProgressRef.current;
+      const reachedEdge =
+        (progress === 0 && last !== 0) || (progress === 1 && last !== 1);
+      if (reachedEdge || Math.abs(progress - last) >= 0.001) {
+        lastDispatchedProgressRef.current = progress;
+        window.dispatchEvent(new CustomEvent("video-progress", { detail: { progress } }));
+      }
       rafRef.current = requestAnimationFrame(tick);
     };
     if (rafRef.current) cancelAnimationFrame(rafRef.current);
@@ -236,6 +254,18 @@ export function useFeedPlayback({ slug, title, isActive, videoSrc, onOpenModal, 
       cancelAnimationFrame(rafRef.current);
       rafRef.current = null;
     }
+  }, []);
+
+  // アンマウント時に rAF を必ず止める。<video> 要素が外れたあとも tick が
+  // 走り続けると video-progress を空 dispatch し続けて BottomNav 側で
+  // 不必要な setState を生むため。
+  useEffect(() => {
+    return () => {
+      if (rafRef.current) {
+        cancelAnimationFrame(rafRef.current);
+        rafRef.current = null;
+      }
+    };
   }, []);
 
   useEffect(() => {

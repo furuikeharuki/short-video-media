@@ -72,29 +72,36 @@ export function usePrefetchVideoBytes(
   // slug -> MovieCard.id の逆引き。onError から slot を特定するため。
   const slugToIdRef = useRef<Map<string, string>>(new Map());
 
+  // 対象スライド (currentIndex + PREFETCH_AHEAD の 1 枚) を安定キーで識別する。
+  // 親が毎レンダー新しい items 配列を渡してきても、対象 slide が変わっていなければ
+  // effect を再実行しない。これにより setSlots([]) の連鎖再レンダーを防ぐ。
+  const targetIdx = currentIndex + PREFETCH_AHEAD;
+  const targetItem = targetIdx < items.length ? items[targetIdx] : null;
+  const targetId = targetItem?.id ?? "";
+  const targetSlug = targetItem?.slug ?? "";
+  const targetSampleUrl = targetItem?.sample_movie_url ?? "";
+
   useEffect(() => {
     const inFlight = inFlightRef.current;
     const slugToId = slugToIdRef.current;
 
-    // 対象スライドを集める (currentIndex + PREFETCH_AHEAD の 1 枚だけ。
-    // currentIndex±1 は WINDOW_SIZE=1 の隣接スライド (isAdjacent) がすでに直接 preload している)。
-    const targets: MovieCard[] = [];
-    const idx = currentIndex + PREFETCH_AHEAD;
-    if (idx < items.length) {
-      const item = items[idx];
-      if (item && item.slug) targets.push(item);
-    }
+    // 対象スライド (currentIndex + PREFETCH_AHEAD の 1 枚だけ) の最小情報。
+    // currentIndex±1 は WINDOW_SIZE=1 の隣接スライド (isAdjacent) がすでに直接 preload している。
+    const hasTarget = !!(targetId && targetSlug);
 
     // slug -> id 逆引きを更新
     slugToId.clear();
-    for (const item of targets) {
-      slugToId.set(item.slug, item.id);
+    if (hasTarget) {
+      slugToId.set(targetSlug, targetId);
     }
 
     // スクロール中は cachedSrc 有無に関わらず slots を一旦空にする。
     // これにより隠し <video> がアンマウントされ、中央の <video> への帯域集中を保てる。
     // スクロールが PREFETCH_DEBOUNCE_MS の間止まってから slot 化を再開する。
-    setSlots([]);
+    // 既に空のときは新しい [] を渡さず prev をそのまま返すことで、setState の
+    // 同値 bail-out を発火させて不要な再レンダー (= 親の再レンダー → items 配列
+    // 新参照 → 当 effect 再実行 → setSlots([]) ループ) を防ぐ。
+    setSlots((prev) => (prev.length === 0 ? prev : []));
 
     // 進行中の resolve はすべて一旦 abort。スクロール停止したときに改めて起動する。
     for (const [slug, controller] of inFlight.entries()) {
@@ -114,42 +121,43 @@ export function usePrefetchVideoBytes(
     // - cachedSrc 有: すぐ slot 化され、隠し <video> がマウントしてバイト先読み開始
     // - cachedSrc 無: resolveMp4Url を呼んで取得し、成功したら slot に追加
     const timer = setTimeout(() => {
-      const debouncedSlots: PrefetchSlot[] = [];
-      const toResolve: MovieCard[] = [];
-      for (const item of targets) {
-        if (item.sample_movie_url) {
-          debouncedSlots.push({
-            id: item.id,
-            slug: item.slug,
-            src: item.sample_movie_url,
-          });
-        } else {
-          toResolve.push(item);
-        }
-      }
-      if (debouncedSlots.length > 0) {
-        setSlots(debouncedSlots);
-      }
-
-      for (const item of toResolve) {
-        if (inFlight.has(item.slug)) continue;
+      if (!hasTarget) return;
+      if (targetSampleUrl) {
+        const nextSlot: PrefetchSlot = {
+          id: targetId,
+          slug: targetSlug,
+          src: targetSampleUrl,
+        };
+        // 既に同 id / src で slot 化済みなら再度 setState しない (再レンダー回避)。
+        setSlots((prev) => {
+          if (
+            prev.length === 1 &&
+            prev[0].id === nextSlot.id &&
+            prev[0].src === nextSlot.src
+          ) {
+            return prev;
+          }
+          return [nextSlot];
+        });
+      } else {
+        if (inFlight.has(targetSlug)) return;
         const controller = new AbortController();
-        inFlight.set(item.slug, controller);
-        void resolveMp4Url(item.slug, { signal: controller.signal })
+        inFlight.set(targetSlug, controller);
+        void resolveMp4Url(targetSlug, { signal: controller.signal })
           .then((res) => {
             if (controller.signal.aborted) return;
             if (!res?.mp4_url) return;
             setSlots((prev) => {
-              if (prev.some((s) => s.id === item.id)) return prev;
+              if (prev.some((s) => s.id === targetId)) return prev;
               return [
                 ...prev,
-                { id: item.id, slug: item.slug, src: res.mp4_url },
+                { id: targetId, slug: targetSlug, src: res.mp4_url },
               ];
             });
           })
           .finally(() => {
-            if (inFlight.get(item.slug) === controller) {
-              inFlight.delete(item.slug);
+            if (inFlight.get(targetSlug) === controller) {
+              inFlight.delete(targetSlug);
             }
           });
       }
@@ -158,7 +166,10 @@ export function usePrefetchVideoBytes(
     return () => {
       clearTimeout(timer);
     };
-  }, [items, currentIndex, isRapidSwiping]);
+    // items 配列そのものではなく、対象スライドの id / slug / sample_movie_url を
+    // deps にする。親の毎レンダー (新しい items 配列参照) で effect が走らないよう
+    // にするため。currentIndex / isRapidSwiping は従来通り。
+  }, [targetId, targetSlug, targetSampleUrl, isRapidSwiping]);
 
   // アンマウント時に全 resolve を abort
   useEffect(() => {

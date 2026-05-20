@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useEffect, useMemo, useRef } from "react";
+import { useEffect, useRef } from "react";
 import AffiliateLink from "@/components/analytics/affiliate-link";
 import DetailViewTracker from "@/components/analytics/detail-view-tracker";
 import ActressLink from "@/components/ActressLink";
@@ -18,16 +18,9 @@ function formatDate(dateStr: string | null): string {
   return `${d.getFullYear()}年${d.getMonth() + 1}月${d.getDate()}日`;
 }
 
-// このコンポーネントが mount するたびに加算されるグローバルカウンタ。
-// AdSlot の key に movie.slug と一緒に含めて、Next.js が同 slug で再 mount した場合や
-// クライアントナビゲーションで同じインスタンスを再利用したように見える場合でも、
-// AdSlot を必ず remount させて provider に新しい <ins> を見せる。
-let homeModalOpenInstanceCounter = 0;
-
 export default function MovieModal({ movie }: { movie: MovieDetail }) {
   const router = useRouter();
   const scrollRef = useRef<HTMLDivElement>(null);
-  const openInstanceId = useMemo(() => ++homeModalOpenInstanceCounter, []);
 
   useEffect(() => {
     const videos = Array.from(
@@ -179,20 +172,11 @@ export default function MovieModal({ movie }: { movie: MovieDetail }) {
             {/*
               context="modal" でページの AdSlot (context="page") と
               sessionStorage キーを分離し、状態が混在しないようにする。
-              priority=true で:
-               - IntersectionObserver の交差判定を待たずに mount 直後に serve を発火し
-                 (モーダルの <ins> は最初スクロール下にあるため intersecting にならない)
-               - serve push 直前に、背後フィードに残っている同じ zoneid の <ins>
-                 (FeedAdSlide) の data-zoneid を退避することで、provider がフィード側に
-                 serve を取られてモーダル <ins> が空のまま残るのを防ぐ。
+              resetOnMount=true でモーダル open 直後に provider をリセットし、
+              背後ページの DOM が生きたまま追加された新しい <ins> を確実に拾わせる。
             */}
             <div className="mm-ad-bottom" style={adBottomStyle}>
-              <AdSlot
-                key={`home-modal-ad-${movie.slug}-${openInstanceId}`}
-                zone="mobileBanner300x250"
-                context="modal"
-                priority
-              />
+              <AdSlot zone="mobileBanner300x250" context="modal" resetOnMount />
             </div>
           </div>
         </div>

@@ -59,6 +59,54 @@ function adDebugLog(...args: unknown[]): void {
   console.log("[AdSlot]", ...args);
 }
 
+/**
+ * 現在 DOM に存在する `<ins data-zoneid="${zoneId}">` (および stash 中の
+ * `<ins data-ad-zone-stash="${zoneId}">`) の状態を全部ダンプする。
+ *
+ * `?adDebug=1` のときだけ走る。広告 iframe が「provider 的には成功なのに
+ * ユーザに見えていない」現象 (= iframe が detached ノードや別 `<ins>` に
+ * 入ってしまっている等) の調査用。各要素の DOM 接続状態 / 親チェーン /
+ * 内側の iframe / 描画矩形を吐き出す。
+ */
+function dumpInsForZone(zoneId: string, label: string): void {
+  if (!isAdDebugEnabled() || typeof document === "undefined") return;
+  const live = Array.from(
+    document.querySelectorAll<HTMLElement>(`ins[data-zoneid="${zoneId}"]`),
+  );
+  const stashed = Array.from(
+    document.querySelectorAll<HTMLElement>(
+      `ins[data-ad-zone-stash="${zoneId}"]`,
+    ),
+  );
+  const all = [...live, ...stashed];
+  const dump = all.map((el) => {
+    const rect = el.getBoundingClientRect();
+    const parents: string[] = [];
+    let cur: HTMLElement | null = el.parentElement;
+    let depth = 0;
+    while (cur && depth < 8) {
+      parents.push(
+        `${cur.tagName}${cur.id ? "#" + cur.id : ""}${cur.className && typeof cur.className === "string" ? "." + cur.className.split(" ").filter(Boolean).join(".") : ""}`,
+      );
+      cur = cur.parentElement;
+      depth++;
+    }
+    return {
+      connected: el.isConnected,
+      dataZoneId: el.getAttribute("data-zoneid"),
+      stash: el.dataset.adZoneStash ?? null,
+      cls: el.className,
+      hasIframe: !!el.querySelector("iframe"),
+      iframeSrc: el.querySelector("iframe")?.getAttribute("src") ?? null,
+      childCount: el.children.length,
+      rect: { x: rect.x, y: rect.y, w: rect.width, h: rect.height },
+      parents,
+    };
+  });
+  // eslint-disable-next-line no-console
+  console.log(`[AdSlot:dump:${label}] zone=${zoneId} count=${all.length}`, dump);
+}
+
 function readWasFilled(zone: AdZoneKey, context: string): boolean {
   try {
     return sessionStorage.getItem(makeStorageKey(zone, context)) === "1";
@@ -192,6 +240,14 @@ export default function AdSlot({
 
   if (!isAdZoneEnabled(zone)) return null;
 
+  // priority モード (モーダル) では、provider が iframe を `<ins>` に挿入する
+  // タイミングと我々の MutationObserver が hasContent=true にフリップする
+  // タイミングの間に「iframe は来ているが wrapper minHeight=1px + overflow:hidden
+  // でクリップされ画面に見えない」というラグが起きる可能性がある。
+  // priority のときは reservedHeight をはじめから確保しておく (label だけは
+  // hasContent=true まで出さないので、PR #123 で禁じた「空枠の "広告" ラベル
+  // 先行表示」は発生しない)。
+  const reserveHeightUpfront = priority && cfg.reservedHeight != null;
   const wrapperStyle: React.CSSProperties = {
     display: "flex",
     flexDirection: "column",
@@ -199,13 +255,17 @@ export default function AdSlot({
     justifyContent: "center",
     width: "100%",
     maxWidth: "100%",
-    overflow: "hidden",
     boxSizing: "border-box",
     background: "transparent",
-    minHeight:
-      hasContent && cfg.reservedHeight != null
+    minHeight: reserveHeightUpfront
+      ? `${cfg.reservedHeight}px`
+      : hasContent && cfg.reservedHeight != null
         ? `${cfg.reservedHeight}px`
         : "1px",
+    // priority のときは wrapper を overflow:visible にして「provider が iframe を
+    // `<ins>` の外 (= wrapper 直下) に挿入する rare バリエーション」でも見える
+    // ようにしておく。非 priority は従来通り CLS 抑止のため overflow:hidden。
+    overflow: reserveHeightUpfront ? "visible" : "hidden",
     ...style,
   };
 
@@ -276,15 +336,23 @@ function AdIns({
     const insHasAd = (): boolean =>
       !!el.querySelector("iframe, img, video, a, picture, canvas");
 
+    // provider のごく一部のレンダラーは iframe を `<ins>` 内部ではなく
+    // 親 (`<aside class="ad-slot">`) 直下に挿入することがある。その場合でも
+    // 「広告は来ている」状態としたいので、`<ins>` の親を一つ上まで MO の
+    // 観測対象に含める。
+    const moTarget: HTMLElement = (el.parentElement as HTMLElement) ?? el;
+    const containerHasAd = (): boolean =>
+      !!moTarget.querySelector("iframe, img, video, a, picture, canvas");
+
     const mo = new MutationObserver(() => {
       if (cancelled) return;
-      if (!contentSeen && insHasAd()) {
+      if (!contentSeen && (insHasAd() || containerHasAd())) {
         contentSeen = true;
         onContent();
         mo.disconnect();
       }
     });
-    mo.observe(el, { childList: true, subtree: true });
+    mo.observe(moTarget, { childList: true, subtree: true });
 
     // ---- priority モード (モーダルなど): 多段リトライ + 競合 <ins> mask ----
     if (priority) {
@@ -292,27 +360,52 @@ function AdIns({
       let rafA = 0;
       let rafB = 0;
 
+      // mask の累積復元クロージャ。
+      // 以前は serveWithMask の各回で「250ms 後に復元」していたが、provider の
+      // api.php → renderer script ロード → iframe inject まで 500ms〜数秒
+      // かかることがある (特に 2 回目以降の modal open / モバイル回線時)。
+      // 復元タイミングが injection より先に来ると provider が背後 (フィードの
+      // FeedAdSlide) `<ins>` を target にして iframe をそこに入れ、モーダルは
+      // 永遠に空のまま、という症状になる。
+      //
+      // 解決: contentSeen=true (= 自分の `<ins>` に iframe が来た) もしくは
+      // AdSlot unmount のタイミングまで mask を保持する。複数回 serveWithMask
+      // が呼ばれても maskCompetingInsElements 自身が二重 stash をスキップする
+      // ので、累積で 1 回しか stash されない。
+      const restoreFns: Array<() => void> = [];
+      const restoreAll = () => {
+        while (restoreFns.length > 0) {
+          const fn = restoreFns.pop();
+          if (fn) {
+            try {
+              fn();
+            } catch {
+              /* ignore */
+            }
+          }
+        }
+      };
+
       const serveWithMask = () => {
-        if (cancelled || contentSeen) return;
-        if (insHasAd()) {
+        if (cancelled) return;
+        if (insHasAd() || containerHasAd()) {
           if (!contentSeen) {
             contentSeen = true;
             onContent();
           }
+          // 自身に iframe が来たので競合 mask は不要に。
+          restoreAll();
+          dumpInsForZone(cfg.zoneId, "after-content");
           return;
         }
         const restore = maskCompetingInsElements(cfg.zoneId, el);
+        restoreFns.push(restore);
         adDebugLog("priority serve push", {
           zoneId: cfg.zoneId,
           insInDom: !!el.isConnected,
           dataZoneId: el.getAttribute("data-zoneid"),
         });
         serveAd(cfg.provider);
-        // 250ms 経てば provider のスキャンはほぼ完了する。
-        // それ以前に restore してしまうと provider が他の <ins> を見つけて
-        // モーダル枠を素通りする可能性があるため。
-        const restoreId = window.setTimeout(restore, 250);
-        timers.push(restoreId);
       };
 
       hasEnteredViewportRef.current = true;
@@ -320,6 +413,7 @@ function AdIns({
         zoneId: cfg.zoneId,
         provider: cfg.provider,
       });
+      dumpInsForZone(cfg.zoneId, "mount");
       // rAF を 2 回挟んでブラウザのレイアウトを確定させてから serve する。
       // モーダルのトランジション完了直後 (まだ <ins> が viewport 外) でも
       // priority mode は IO を待たずに serve するので問題ない。
@@ -327,11 +421,21 @@ function AdIns({
         rafB = requestAnimationFrame(() => {
           if (cancelled) return;
           serveWithMask();
-          // 1.0s / 2.5s の再試行。各回ごとに mask + restore。
+          // 1.0s / 2.5s / 4.0s の再試行。各回 serveWithMask で mask が
+          // 累積復元キューに積まれ、contentSeen で一括 restore される。
           // provider script のロード遅延、初回 push が他要素に取られた等の
-          // ケースをカバーする。content が来たら serveWithMask 内で no-op になる。
+          // ケースをカバーする。
           timers.push(window.setTimeout(serveWithMask, 1000));
           timers.push(window.setTimeout(serveWithMask, 2500));
+          timers.push(window.setTimeout(serveWithMask, 4000));
+          // モーダル広告 unfilled でも背後 `<ins>` をいつまでも mask した
+          // ままにすると、modal close 後にフィード広告が空になる。最大 8s
+          // でフォールバック restore する (provider がこの時間内に inject
+          // しないなら今回の serve は諦め、フィード側は通常動作に戻す)。
+          timers.push(window.setTimeout(() => {
+            adDebugLog("priority mask fallback restore");
+            restoreAll();
+          }, 8000));
         });
       });
 
@@ -353,7 +457,7 @@ function AdIns({
       );
       io.observe(el);
 
-      if (insHasAd()) {
+      if (insHasAd() || containerHasAd()) {
         contentSeen = true;
         onContent();
         mo.disconnect();
@@ -366,6 +470,9 @@ function AdIns({
         if (rafA) cancelAnimationFrame(rafA);
         if (rafB) cancelAnimationFrame(rafB);
         for (const t of timers) window.clearTimeout(t);
+        // unmount 時に必ず競合 `<ins>` の data-zoneid を戻す。
+        // restoreAll は冪等 (空キューなら no-op)。
+        restoreAll();
       };
     }
 
@@ -388,11 +495,11 @@ function AdIns({
       tryServeOnce();
       retryTimer = window.setTimeout(() => {
         if (cancelled || contentSeen) return;
-        if (!insHasAd()) serveAd(cfg.provider);
+        if (!insHasAd() && !containerHasAd()) serveAd(cfg.provider);
       }, 700);
       collapseTimer = window.setTimeout(() => {
         if (cancelled || contentSeen) return;
-        if (!insHasAd() && !emptyEmitted) {
+        if (!insHasAd() && !containerHasAd() && !emptyEmitted) {
           emptyEmitted = true;
         }
       }, 4000);
@@ -414,7 +521,7 @@ function AdIns({
     );
     io.observe(el);
 
-    if (insHasAd()) {
+    if (insHasAd() || containerHasAd()) {
       contentSeen = true;
       onContent();
       mo.disconnect();
@@ -441,12 +548,22 @@ function AdIns({
     width: widthVal,
   };
 
+  // ExoClick の renderer (`https://a.magsrv.com/content/banner.js`) は
+  // 一部バリエーションで `<ins>` の `width` / `height` 属性を読んで iframe
+  // 寸法を決める。CSS の `style="width: 300px"` だけだと拾い損ねるケースが
+  // あるため、reservedWidth / reservedHeight があるときは HTML 属性としても
+  // セットしておく (300x250 / 300x100 など固定サイズの zone 用)。
+  const insAttrs: Record<string, string | number> = {};
+  if (cfg.reservedWidth != null) insAttrs.width = cfg.reservedWidth;
+  if (cfg.reservedHeight != null) insAttrs.height = cfg.reservedHeight;
+
   return (
     <ins
       ref={insRef as React.RefObject<HTMLModElement>}
       className={cfg.insClass}
       data-zoneid={cfg.zoneId}
       style={insStyle}
+      {...insAttrs}
     />
   );
 }

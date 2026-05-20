@@ -215,12 +215,21 @@ export default function MovieDetailModal({ slug, onClose }: Props) {
             最初の push 時点で <ins data-zoneid=5929910> が DOM に存在し、
             「ホーム側 5929930 だけが Request にバッチされ、5929910 が一度も
             push されない」という症状を防ぐ。
+
+            さらに `key={slug}` で modal を開くごとに AdSlot を完全に remount する。
+            provider 内部に前回 modal の `<ins>` 参照が残っていたり、serve 済み
+            フラグが立っていても、新しい React tree + 新しい DOM ノードで毎回
+            やり直しになるため、「初回モーダルは出るが 2 回目以降は出ない」
+            (provider が 2 回目の `<ins>` に iframe を入れていても背後の古い
+             ノードに入っていた等の) ケースを抑止する。
+
             視覚的位置は MovieDetailContent と同様にコンテンツ末尾 (CTA の前)
             を狙うが、ロード中でも幅 100% のスロットとして mdm-scroll の末尾に
             描画される。
           */}
           <div className="mdm-ad-bottom">
             <AdSlot
+              key={`modal-ad-${slug}`}
               zone="mobileBanner300x250"
               context="modal"
               priority

@@ -532,18 +532,28 @@ const pageCSS = `
   *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
   html, body { background: #0a0a0a !important; overflow: hidden !important; }
 
-  /* native広告内部要素を親幅に封じつつ、スマホでは幅100%まで広げる */
+  /* native広告 (ExoClick Recommendation Widget) を親幅まで広げる。
+     widget は ins の中に <div>/<a> を入れ子で生成し、内部 wrapper に
+     インライン style で固定 px 幅を当てる場合があるため、ins 直下の
+     widget root と入れ子全要素の max-width / width を強制する。 */
   .ad-slot {
     width: 100% !important;
     max-width: 100% !important;
     overflow: hidden !important;
   }
-  .ad-slot > * { max-width: 100% !important; overflow: hidden !important; }
   .ad-slot ins {
+    display: block !important;
     width: 100% !important;
     max-width: 100% !important;
-    display: block !important;
     box-sizing: border-box !important;
+  }
+  .ad-slot ins * {
+    max-width: 100% !important;
+    box-sizing: border-box !important;
+  }
+  .ad-slot ins > * {
+    width: 100% !important;
+    max-width: 100% !important;
   }
   .ad-slot ins iframe,
   .ad-slot ins img,
@@ -552,11 +562,11 @@ const pageCSS = `
     width: 100% !important;
     max-width: 100% !important;
     height: auto !important;
-    box-sizing: border-box !important;
   }
   @media (min-width: 768px) {
     .ad-slot,
-    .ad-slot ins {
+    .ad-slot ins,
+    .ad-slot ins > * {
       max-width: 480px !important;
     }
   }

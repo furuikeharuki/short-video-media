@@ -392,21 +392,28 @@ const adBottomStyle: React.CSSProperties = {
 };
 
 const modalCSS = `
-  /* モーダル内 native 広告：スマホでも幅100%まで広げる */
+  /* モーダル内 native 広告 (ExoClick Recommendation Widget) を親幅まで広げる。
+     widget は ins の中に <div>/<a> を入れ子で生成し、内部 wrapper に
+     インライン style で固定 px 幅を当てるため、ins 直下の widget root と
+     入れ子全要素の max-width / width を強制する。 */
   .mm-ad-bottom .ad-slot {
     width: 100% !important;
     max-width: 100% !important;
     overflow: hidden !important;
   }
-  .mm-ad-bottom .ad-slot > * {
-    max-width: 100% !important;
-    overflow: hidden !important;
-  }
   .mm-ad-bottom .ad-slot ins {
+    display: block !important;
     width: 100% !important;
     max-width: 100% !important;
-    display: block !important;
     box-sizing: border-box !important;
+  }
+  .mm-ad-bottom .ad-slot ins * {
+    max-width: 100% !important;
+    box-sizing: border-box !important;
+  }
+  .mm-ad-bottom .ad-slot ins > * {
+    width: 100% !important;
+    max-width: 100% !important;
   }
   .mm-ad-bottom .ad-slot ins iframe,
   .mm-ad-bottom .ad-slot ins img,
@@ -415,11 +422,11 @@ const modalCSS = `
     width: 100% !important;
     max-width: 100% !important;
     height: auto !important;
-    box-sizing: border-box !important;
   }
   @media (min-width: 768px) {
     .mm-ad-bottom .ad-slot,
-    .mm-ad-bottom .ad-slot ins {
+    .mm-ad-bottom .ad-slot ins,
+    .mm-ad-bottom .ad-slot ins > * {
       max-width: 480px !important;
     }
   }

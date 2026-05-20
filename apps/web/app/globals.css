@@ -362,3 +362,60 @@ body.detail-page {
   overflow: auto !important;
   height: auto !important;
 }
+
+/* ━━━ ExoClick Recommendation Widget サイズ補正 ━━━━━━━━━━━━━━━━━━━
+   ExoClick の native (eas6a97888e20) ウィジェットは、ins の中に
+   <div>/<a>/<iframe>/<img> を挿入し、内部の grid wrapper に
+   インライン style で固定 px 幅 (例: width:300px) を当てるため、
+   親が 100% でも子が 300px に収まってモバイルで「広告だけ小さい」
+   見た目になる。
+
+   対策: .ad-slot 内のすべての子孫要素に対して max-width: 100% を
+   強制し、`<ins>` の直接子要素 (widget が生成する root wrapper)
+   には width: 100% も強制する。これでモバイルでも親コンテナ幅まで
+   広がるようになる。PC では 480px キャップで従来通り見え方を維持。
+
+   この CSS はサイト全体で適用される基盤。ページ側の scoped CSS
+   (.mdc-ad-bottom / .mm-ad-bottom / .feed-ad-slide 等) と
+   重複しても害はなく、cascade 上は後勝ち / 詳細度勝ちが共存できる。
+   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ */
+.ad-slot {
+  width: 100% !important;
+  max-width: 100% !important;
+  overflow: hidden !important;
+}
+.ad-slot ins {
+  display: block !important;
+  width: 100% !important;
+  max-width: 100% !important;
+  box-sizing: border-box !important;
+}
+/* ins 内の widget は <div> / <a> / <iframe> / <img> を入れ子で出力する。
+   どれもコンテナ幅を超えないよう max-width を強制。
+   さらに ins 直下要素 (widget root) と内部の <iframe>/<img>/<picture>/<video> は
+   親幅まで広げる。 */
+.ad-slot ins * {
+  max-width: 100% !important;
+  box-sizing: border-box !important;
+}
+.ad-slot ins > * {
+  width: 100% !important;
+  max-width: 100% !important;
+}
+.ad-slot ins iframe,
+.ad-slot ins img,
+.ad-slot ins picture,
+.ad-slot ins video {
+  width: 100% !important;
+  max-width: 100% !important;
+  height: auto !important;
+}
+
+@media (min-width: 768px) {
+  .ad-slot,
+  .ad-slot ins,
+  .ad-slot ins > * {
+    max-width: 480px !important;
+  }
+}
+

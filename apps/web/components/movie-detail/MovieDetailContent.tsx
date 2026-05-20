@@ -217,21 +217,31 @@ export default function MovieDetailContent({ movie }: Props) {
           box-sizing: border-box;
         }
 
-        /* native広告内部要素を親幅に封じつつ、スマホでは幅100%まで広げる */
+        /* native広告 (ExoClick Recommendation Widget) を親幅まで広げる。
+           widget は ins の中に <div>/<a> を入れ子で生成し、内部 wrapper に
+           インライン style で固定 px 幅 (300px 等) を当てるため、
+           ins 直下の widget root と、入れ子全要素の max-width を強制する。
+           グローバル globals.css の .ad-slot ルールと同等の内容をここでも
+           スコープ付きで重ねがけしているのは、CSS modules / styled-jsx 等で
+           globals が上書きされる事故を防ぐため。 */
         .mdc-ad-bottom .ad-slot {
           width: 100% !important;
           max-width: 100% !important;
           overflow: hidden !important;
         }
-        .mdc-ad-bottom .ad-slot > * {
-          max-width: 100% !important;
-          overflow: hidden !important;
-        }
         .mdc-ad-bottom .ad-slot ins {
+          display: block !important;
           width: 100% !important;
           max-width: 100% !important;
-          display: block !important;
           box-sizing: border-box !important;
+        }
+        .mdc-ad-bottom .ad-slot ins * {
+          max-width: 100% !important;
+          box-sizing: border-box !important;
+        }
+        .mdc-ad-bottom .ad-slot ins > * {
+          width: 100% !important;
+          max-width: 100% !important;
         }
         .mdc-ad-bottom .ad-slot ins iframe,
         .mdc-ad-bottom .ad-slot ins img,
@@ -240,11 +250,11 @@ export default function MovieDetailContent({ movie }: Props) {
           width: 100% !important;
           max-width: 100% !important;
           height: auto !important;
-          box-sizing: border-box !important;
         }
         @media (min-width: 768px) {
           .mdc-ad-bottom .ad-slot,
-          .mdc-ad-bottom .ad-slot ins {
+          .mdc-ad-bottom .ad-slot ins,
+          .mdc-ad-bottom .ad-slot ins > * {
             max-width: 480px !important;
           }
         }

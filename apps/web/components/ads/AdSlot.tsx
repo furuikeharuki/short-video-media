@@ -12,17 +12,20 @@ type Props = {
   context?: string;
   resetOnMount?: boolean;
   /**
-   * モーダルなど「他にも同じ zone の <ins> が既に DOM にある状況で開く AdSlot」
-   * 用のフラグ。true のとき:
-   *  - IntersectionObserver が intersecting と見なせないまま (スクロール下にある等)
-   *    でも mount 直後に serve を試みる。
-   *  - serve push の直前に、この AdSlot の <ins> 以外で同じ zoneid を持つ
-   *    `<ins>` の data-zoneid を一時的に退避し、provider がこの slot の <ins>
-   *    を優先的に拾うようにする。完了後すぐ復元する。
+   * モーダル等「同じ zoneid の他の <ins> が背後の DOM に残ったまま開かれる場面」用フラグ。
    *
-   * 用途: 詳細モーダルの広告。背後にフィードの FeedAdSlide が同じ zoneid で
-   *       いくつも残っているため、何もしないと provider がそちらに serve を
-   *       消費してしまいモーダルの <ins> が空のまま残る。
+   * priority=true のとき:
+   *   1. IntersectionObserver の交差判定を待たずに mount 直後 (rAF 後) に serve を発火する。
+   *      モーダル末尾の <ins> は初期描画時にスクロール下にあり、creative ロード前は
+   *      height=0 なため、IO が isIntersecting=true を発火しないことがある。
+   *   2. serve push の前に、この AdSlot の <ins> 以外で同じ zoneid を持つ <ins>
+   *      (例: フィードの FeedAdSlide) の data-zoneid を一時的に空に退避する。
+   *      provider はそのあいだ「埋まっていない同 zoneid の <ins>」がモーダル側
+   *      しかないように見えるため、フィード <ins> に serve を取られない。
+   *   3. 0ms / 1.0s / 2.5s の 3 段階で serve を再試行する (各回ごとに mask + restore)。
+   *      provider の DOM スキャンが遅延・空振りしても確実にモーダル枠を埋める。
+   *   4. sessionStorage に基づく "前回埋まっていたから minHeight 確保" の事前表示は
+   *      行わない (前のモーダル open で書かれた値で「広告」ラベルだけ先に出る問題を回避)。
    */
   priority?: boolean;
 };
@@ -48,9 +51,11 @@ function writeWasFilled(zone: AdZoneKey, context: string): void {
 /**
  * `selfIns` 以外で同じ zoneid を持つ `<ins>` を一時的に「provider から見えなく」する。
  *
- * 退避は data-zoneid を ad_zone_stash 属性に逃がし、data-zoneid を空にすることで行う。
- * 復元用の関数を返す。複数回呼ばれた場合に矛盾しないよう、stash 済みかどうかを
- * 個別に判定する。
+ * data-zoneid を data-ad-zone-stash に逃がし、data-zoneid を空にする。
+ * 復元用クロージャを返す。複数回呼ばれて二重 stash しないよう、すでに stash 済みの
+ * 要素はスキップする (二重 stash で本来値を失わないため)。
+ *
+ * 復元は冪等。stash されていない要素はそのまま。
  */
 function maskCompetingInsElements(
   zoneId: string,
@@ -63,7 +68,7 @@ function maskCompetingInsElements(
   const masked: HTMLElement[] = [];
   for (const el of all) {
     if (el === selfIns) continue;
-    if (el.dataset.adZoneStash != null) continue; // 既に他で stash 済み
+    if (el.dataset.adZoneStash != null) continue; // すでに stash 済み
     el.dataset.adZoneStash = zoneId;
     el.setAttribute("data-zoneid", "");
     masked.push(el);
@@ -92,7 +97,6 @@ export default function AdSlot({
 
   const [insKey, setInsKey] = useState(0);
   const [hasContent, setHasContent] = useState(false);
-  const [emptyGen, setEmptyGen] = useState(false);
 
   const hasContentRef = useRef(false);
   const lastBumpAtRef = useRef(0);
@@ -104,14 +108,22 @@ export default function AdSlot({
 
   useLayoutEffect(() => {
     if (!enabled) return;
+    // priority モード (モーダル経路) は前回 open の sessionStorage を信用しない。
+    // 信用すると「新しい <ins> がまだ空なのに minHeight だけ 250px 確保 + 『広告』
+    // ラベルが先に表示される」状態になり、provider のフィル前にユーザに「空の広告枠」
+    // が見えてしまうことがあるため。
+    if (priority) return;
     if (readWasFilled(zone, context)) {
       setHasContent(true);
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [zone, context, enabled]);
+  }, [zone, context, enabled, priority]);
 
   useEffect(() => {
     if (!enabled) return;
+    // priority モードでは AdIns 側で確実に serve を発火するので、外側の
+    // resetAndServeAd は呼ばない。global cooldown と二重 push の影響を避ける。
+    if (priority) return;
     const t = window.setTimeout(() => {
       resetAndServeAd(cfg.provider);
     }, 80);
@@ -130,7 +142,6 @@ export default function AdSlot({
       bumpScheduledRef.current = false;
       lastBumpAtRef.current = Date.now();
       servedThisGenRef.current = false;
-      setEmptyGen(false);
       setInsKey((k) => k + 1);
       if (withProviderReset) {
         resetAndServeAd(cfg.provider);
@@ -204,10 +215,6 @@ export default function AdSlot({
           hasContentRef.current = true;
           writeWasFilled(zone, context);
           setHasContent(true);
-          setEmptyGen(false);
-        }}
-        onEmpty={() => {
-          setEmptyGen(true);
         }}
         onBecameVisibleAgain={() => {
           requestBump(false);
@@ -223,7 +230,6 @@ function AdIns({
   servedThisGenRef,
   hasEnteredViewportRef,
   onContent,
-  onEmpty,
   onBecameVisibleAgain,
 }: {
   cfg: (typeof AD_ZONES)[AdZoneKey];
@@ -231,7 +237,6 @@ function AdIns({
   servedThisGenRef: React.MutableRefObject<boolean>;
   hasEnteredViewportRef: React.MutableRefObject<boolean>;
   onContent: () => void;
-  onEmpty: () => void;
   onBecameVisibleAgain: () => void;
 }) {
   const insRef = useRef<HTMLModElement | null>(null);
@@ -242,28 +247,9 @@ function AdIns({
 
     let cancelled = false;
     let contentSeen = false;
-    let emptyEmitted = false;
 
     const insHasAd = (): boolean =>
       !!el.querySelector("iframe, img, video, a, picture, canvas");
-
-    /**
-     * priority モードでは「この AdSlot の <ins> 以外で同じ zoneid を持つ <ins>」を
-     * 一時的に DOM 上で隠して serve を呼ぶ。これにより provider が背後のフィード
-     * AdSlot などに serve を取られるのを避け、モーダルの <ins> を確実に埋める。
-     * 復元は短い遅延 (250ms) のあとに行い、provider のスキャンが終わるのを待つ。
-     */
-    const tryServeOnce = () => {
-      if (servedThisGenRef.current) return;
-      servedThisGenRef.current = true;
-      if (priority) {
-        const restore = maskCompetingInsElements(cfg.zoneId, el);
-        serveAd(cfg.provider);
-        window.setTimeout(restore, 250);
-      } else {
-        serveAd(cfg.provider);
-      }
-    };
 
     const mo = new MutationObserver(() => {
       if (cancelled) return;
@@ -275,69 +261,58 @@ function AdIns({
     });
     mo.observe(el, { childList: true, subtree: true });
 
-    let serveStarted = false;
-    let collapseTimer: number | null = null;
-    let retryTimer: number | null = null;
-    let priorityRetryTimer: number | null = null;
-
-    const beginServeFlow = () => {
-      if (serveStarted) return;
-      serveStarted = true;
-      hasEnteredViewportRef.current = true;
-      tryServeOnce();
-      retryTimer = window.setTimeout(() => {
-        if (cancelled || contentSeen) return;
-        if (!insHasAd()) {
-          if (priority) {
-            const restore = maskCompetingInsElements(cfg.zoneId, el);
-            serveAd(cfg.provider);
-            window.setTimeout(restore, 250);
-          } else {
-            serveAd(cfg.provider);
-          }
-        }
-      }, 700);
-      collapseTimer = window.setTimeout(() => {
-        if (cancelled || contentSeen) return;
-        if (!insHasAd() && !emptyEmitted) {
-          emptyEmitted = true;
-          onEmpty();
-        }
-      }, 4000);
-    };
-
-    // priority モード: モーダルなど IntersectionObserver が intersecting と
-    // 認識しづらいレイアウト (スクロール下に置かれた <ins>、creative ロード前で
-    // height=0 等) でも確実に serve を発火させるため、mount 直後に
-    // requestAnimationFrame 2 回 (= レイアウト確定) を待ってから serve を開始する。
+    // ---- priority モード (モーダルなど): 多段リトライ + 競合 <ins> mask ----
     if (priority) {
-      let raf1 = 0;
-      let raf2 = 0;
-      raf1 = requestAnimationFrame(() => {
-        raf2 = requestAnimationFrame(() => {
+      const timers: number[] = [];
+      let rafA = 0;
+      let rafB = 0;
+
+      const serveWithMask = () => {
+        if (cancelled || contentSeen) return;
+        if (insHasAd()) {
+          if (!contentSeen) {
+            contentSeen = true;
+            onContent();
+          }
+          return;
+        }
+        const restore = maskCompetingInsElements(cfg.zoneId, el);
+        serveAd(cfg.provider);
+        // 250ms 経てば provider のスキャンはほぼ完了する。
+        // それ以前に restore してしまうと provider が他の <ins> を見つけて
+        // モーダル枠を素通りする可能性があるため。
+        const restoreId = window.setTimeout(restore, 250);
+        timers.push(restoreId);
+      };
+
+      hasEnteredViewportRef.current = true;
+      // rAF を 2 回挟んでブラウザのレイアウトを確定させてから serve する。
+      // モーダルのトランジション完了直後 (まだ <ins> が viewport 外) でも
+      // priority mode は IO を待たずに serve するので問題ない。
+      rafA = requestAnimationFrame(() => {
+        rafB = requestAnimationFrame(() => {
           if (cancelled) return;
-          beginServeFlow();
-          // それでも 1.2s で creative が来ていなければ「provider が別の <ins>
-          // に serve を消費した」可能性が高いので一度だけ再試行する。
-          priorityRetryTimer = window.setTimeout(() => {
-            if (cancelled || contentSeen) return;
-            if (!insHasAd()) {
-              const restore = maskCompetingInsElements(cfg.zoneId, el);
-              serveAd(cfg.provider);
-              window.setTimeout(restore, 250);
-            }
-          }, 1200);
+          serveWithMask();
+          // 1.0s / 2.5s の再試行。各回ごとに mask + restore。
+          // provider script のロード遅延、初回 push が他要素に取られた等の
+          // ケースをカバーする。content が来たら serveWithMask 内で no-op になる。
+          timers.push(window.setTimeout(serveWithMask, 1000));
+          timers.push(window.setTimeout(serveWithMask, 2500));
         });
       });
 
+      // priority モードでも IO は残しておく。一度 onEmpty に落ちて
+      // (本実装では明示的に onEmpty を出さないが) ユーザが再度この枠に
+      // スクロールしてきた等で再試行のチャンスにする用。
       const io = new IntersectionObserver(
         (entries) => {
-          if (cancelled) return;
+          if (cancelled || contentSeen) return;
           for (const entry of entries) {
             if (!entry.isIntersecting) continue;
-            if (emptyEmitted && !contentSeen) {
-              onBecameVisibleAgain();
-            }
+            // 既にリトライ予定はキューしてあるので追加 push は不要。
+            // 万一それらもタイミング外しで空振りした場合の最後の保険として
+            // ここでも serve を試みる。
+            serveWithMask();
           }
         },
         { rootMargin: "200px 0px", threshold: 0.01 },
@@ -354,13 +329,40 @@ function AdIns({
         cancelled = true;
         mo.disconnect();
         io.disconnect();
-        if (raf1) cancelAnimationFrame(raf1);
-        if (raf2) cancelAnimationFrame(raf2);
-        if (retryTimer != null) window.clearTimeout(retryTimer);
-        if (collapseTimer != null) window.clearTimeout(collapseTimer);
-        if (priorityRetryTimer != null) window.clearTimeout(priorityRetryTimer);
+        if (rafA) cancelAnimationFrame(rafA);
+        if (rafB) cancelAnimationFrame(rafB);
+        for (const t of timers) window.clearTimeout(t);
       };
     }
+
+    // ---- 非 priority (通常ページ): 従来通り IO で serve をゲートする ----
+    let serveStarted = false;
+    let collapseTimer: number | null = null;
+    let retryTimer: number | null = null;
+    let emptyEmitted = false;
+
+    const tryServeOnce = () => {
+      if (servedThisGenRef.current) return;
+      servedThisGenRef.current = true;
+      serveAd(cfg.provider);
+    };
+
+    const beginServeFlow = () => {
+      if (serveStarted) return;
+      serveStarted = true;
+      hasEnteredViewportRef.current = true;
+      tryServeOnce();
+      retryTimer = window.setTimeout(() => {
+        if (cancelled || contentSeen) return;
+        if (!insHasAd()) serveAd(cfg.provider);
+      }, 700);
+      collapseTimer = window.setTimeout(() => {
+        if (cancelled || contentSeen) return;
+        if (!insHasAd() && !emptyEmitted) {
+          emptyEmitted = true;
+        }
+      }, 4000);
+    };
 
     const io = new IntersectionObserver(
       (entries) => {

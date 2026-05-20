@@ -3,7 +3,7 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 
 import ActressBackButton from "@/components/ActressBackButton";
-import AdSlot from "@/components/ads/AdSlot";
+import NativeAdWithMobileFallback from "@/components/ads/NativeAdWithMobileFallback";
 import { getActressByName } from "@/lib/api/actresses";
 import HorizontalCardRow from "@/components/home/HorizontalCardRow";
 import MovieCardThumb from "@/components/home/MovieCardThumb";
@@ -286,7 +286,7 @@ export default async function ActressDetailPage({ params }: PageProps) {
 
         {/* 広告コンテナ */}
         <div style={styles.adBottom}>
-          <AdSlot zone="native" />
+          <NativeAdWithMobileFallback />
         </div>
       </div>
       <style>{pageCSS}</style>

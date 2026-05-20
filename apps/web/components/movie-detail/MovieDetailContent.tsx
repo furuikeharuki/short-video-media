@@ -3,7 +3,7 @@
 import { useRouter } from "next/navigation";
 import AffiliateLink from "@/components/analytics/affiliate-link";
 import ActressLink from "@/components/ActressLink";
-import AdSlot from "@/components/ads/AdSlot";
+import NativeAdWithMobileFallback from "@/components/ads/NativeAdWithMobileFallback";
 import { navigateRespectingModal } from "@/lib/modalNav";
 import type { MovieDetail } from "@/lib/api/movies";
 import type { MouseEvent } from "react";
@@ -139,7 +139,7 @@ export default function MovieDetailContent({ movie }: Props) {
         </div>
 
         <div className="mdc-ad-bottom">
-          <AdSlot zone="native" />
+          <NativeAdWithMobileFallback />
         </div>
       </div>
 

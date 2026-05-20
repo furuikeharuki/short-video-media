@@ -6,7 +6,7 @@ import { useEffect, useRef } from "react";
 import AffiliateLink from "@/components/analytics/affiliate-link";
 import DetailViewTracker from "@/components/analytics/detail-view-tracker";
 import ActressLink from "@/components/ActressLink";
-import AdSlot from "@/components/ads/AdSlot";
+import NativeAdWithMobileFallback from "@/components/ads/NativeAdWithMobileFallback";
 import type { MovieDetail } from "@/lib/api/movies";
 
 const NA = "----";
@@ -176,7 +176,7 @@ export default function MovieModal({ movie }: { movie: MovieDetail }) {
               背後ページの DOM が生きたまま追加された新しい <ins> を確実に拾わせる。
             */}
             <div className="mm-ad-bottom" style={adBottomStyle}>
-              <AdSlot zone="native" context="modal" resetOnMount />
+              <NativeAdWithMobileFallback context="modal" resetOnMount />
             </div>
           </div>
         </div>

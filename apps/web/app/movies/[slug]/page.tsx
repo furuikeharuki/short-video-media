@@ -6,7 +6,7 @@ import AffiliateLink from "@/components/analytics/affiliate-link";
 import DetailViewTracker from "@/components/analytics/detail-view-tracker";
 import BackButton from "@/components/BackButton";
 import ActressLink from "@/components/ActressLink";
-import AdSlot from "@/components/ads/AdSlot";
+import NativeAdWithMobileFallback from "@/components/ads/NativeAdWithMobileFallback";
 import { getMovieBySlug } from "@/lib/api/movies";
 
 const SITE_NAME = "AV Shorts";
@@ -202,7 +202,7 @@ export default async function MovieDetailPage({ params }: PageProps) {
 
             {/* 広告は最大300pxに制限しセンタリング */}
             <div style={styles.adBottom}>
-              <AdSlot zone="native" />
+              <NativeAdWithMobileFallback />
             </div>
           </div>
         </main>

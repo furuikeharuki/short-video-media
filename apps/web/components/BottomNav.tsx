@@ -1,9 +1,10 @@
 "use client";
 
 import Link from "next/link";
-import { usePathname } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useRef, useCallback, useState } from "react";
 import { markFeedStartUnmuted } from "@/lib/feedNav";
+import { navigateRespectingModal } from "@/lib/modalNav";
 
 // ショートボタンを押して /feed に遷移するときに、保存されているフィードのスナップショットを破棄して
 // ランダム再生を保証する。FeedClient 側は sessionStorage が空なら getFeed を新しい seed で取り直す。
@@ -90,6 +91,7 @@ const NAV_HIDDEN_PATHS = ["/age-gate", "/actresses", "/movies"];
 
 export default function BottomNav() {
   const pathname    = usePathname();
+  const router      = useRouter();
   const isShortPage = pathname === "/feed" || pathname.startsWith("/search/feed");
   const isHidden    = NAV_HIDDEN_PATHS.some((p) => pathname.startsWith(p));
 
@@ -187,16 +189,32 @@ export default function BottomNav() {
             </span>
           );
         }
+        const handleNavClick = (e: React.MouseEvent<HTMLAnchorElement>) => {
+          if (item.href === "/feed") {
+            resetFeedSession();
+          }
+          if (
+            e.defaultPrevented ||
+            e.button !== 0 ||
+            e.metaKey ||
+            e.ctrlKey ||
+            e.shiftKey ||
+            e.altKey
+          ) {
+            return;
+          }
+          e.preventDefault();
+          // 動画詳細モーダル中 (URL バーが /movies/ から始まる) は SPA 遷移すると
+          // MovieDetailModal の cleanup で router.push が打ち消されるため、
+          // ActressLink と同じくフルページ遷移に切り替える。
+          navigateRespectingModal(item.href, () => router.push(item.href));
+        };
         return (
           <Link
             key={item.href}
             href={item.href}
             className="bottom-nav-item"
-            onClick={
-              item.href === "/feed"
-                ? () => resetFeedSession()
-                : undefined
-            }
+            onClick={handleNavClick}
           >
             <span className="bottom-nav-icon">{icon}</span>
             <span className="bottom-nav-label">{item.label}</span>

@@ -2,6 +2,7 @@
 
 import { useRouter } from "next/navigation";
 import type { ReactNode, CSSProperties, MouseEvent } from "react";
+import { navigateRespectingModal } from "@/lib/modalNav";
 
 /**
  * 女優詳細ページへのリンク。
@@ -52,16 +53,7 @@ export default function ActressLink({ name, className, style, children }: Props)
     }
     e.preventDefault();
 
-    if (typeof window !== "undefined") {
-      // pushState で URL だけ書き換えられたモーダルの中にいるかを「実 URL バー」で判定
-      const realPath = window.location.pathname;
-      if (realPath.startsWith("/movies/")) {
-        window.location.assign(href);
-        return;
-      }
-    }
-
-    router.push(href);
+    navigateRespectingModal(href, () => router.push(href));
   };
 
   return (

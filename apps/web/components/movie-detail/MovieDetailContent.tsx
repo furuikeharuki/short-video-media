@@ -1,10 +1,12 @@
 "use client";
 
-import Link from "next/link";
+import { useRouter } from "next/navigation";
 import AffiliateLink from "@/components/analytics/affiliate-link";
 import ActressLink from "@/components/ActressLink";
 import AdSlot from "@/components/ads/AdSlot";
+import { navigateRespectingModal } from "@/lib/modalNav";
 import type { MovieDetail } from "@/lib/api/movies";
+import type { MouseEvent } from "react";
 
 const NA = "----";
 
@@ -20,22 +22,39 @@ interface Props {
 }
 
 export default function MovieDetailContent({ movie }: Props) {
+  const router = useRouter();
   const imgSrc = movie.image_url_large ?? movie.image_url_list ?? "";
   const price = movie.price_list?.sale_price ?? movie.price_list?.list_price ?? movie.price_min;
   const hasReview = movie.review_count > 0 && movie.review_average != null;
 
+  // モーダル中 (URL バーが /movies/ から始まる) では Next の <Link> や router.push を使うと
+  // MovieDetailModal の unmount 時に replaceState で URL が巻き戻されて遷移が打ち消される。
+  // ActressLink と同じく window.location.assign でフルページ遷移にすることで回避する。
   const fieldLink = (
     field: "director" | "maker" | "label" | "series",
     value: string,
-  ) => (
-    <Link
-      href={`/search?${field}=${encodeURIComponent(value)}`}
-      className="mdc-meta-link"
-      prefetch={false}
-    >
-      {value}
-    </Link>
-  );
+  ) => {
+    const href = `/search?${field}=${encodeURIComponent(value)}`;
+    const handleClick = (e: MouseEvent<HTMLAnchorElement>) => {
+      if (
+        e.defaultPrevented ||
+        e.button !== 0 ||
+        e.metaKey ||
+        e.ctrlKey ||
+        e.shiftKey ||
+        e.altKey
+      ) {
+        return;
+      }
+      e.preventDefault();
+      navigateRespectingModal(href, () => router.push(href));
+    };
+    return (
+      <a href={href} onClick={handleClick} className="mdc-meta-link">
+        {value}
+      </a>
+    );
+  };
 
   const actressLinks = (names: string[]): React.ReactNode => (
     <>

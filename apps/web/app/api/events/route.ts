@@ -9,6 +9,13 @@ const ALLOWED_EVENTS = new Set([
   "video_complete",
   "scroll_depth",
   "search",
+  // バックエンド共通語彙 (lib/analytics/analytics.ts の AnalyticsEventName と同期)。
+  // これらが allow リストにないと、フィード視聴 (view) / ホームカードタップ (play /
+  // detail_click) のたびに /api/events が 400 を返してしまい、ブラウザ console に
+  // ノイズが出続けるだけでなく、GA4 ビーコンも送られない。
+  "view",
+  "play",
+  "detail_click",
 ]);
 
 type EventPayload = {

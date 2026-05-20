@@ -144,11 +144,20 @@ export default function FeedViewer({
       prevItemsLenRef.current = items.length;
       const newSlides = appendSlides([], items, AD_FEED_INTERVAL, adEnabled);
       setSlides(newSlides);
-      const startIdx = 0;
+      // initialIndex は items (動画) ベースの index。slides は ads が間に挟まるため
+      // 該当する videoIndex を持つ slide を探してその位置から再生開始する。
+      const clampedVideoIdx = Math.min(
+        Math.max(initialIndex, 0),
+        Math.max(items.length - 1, 0),
+      );
+      const slideIdx = newSlides.findIndex(
+        (s) => s.kind === "video" && s.videoIndex === clampedVideoIdx,
+      );
+      const startIdx = slideIdx >= 0 ? slideIdx : 0;
       currentIdxRef.current = startIdx;
       setCurrentIndex(startIdx);
       updateWindow(startIdx, newSlides);
-      if (newSlides.length > 0 && items.length - startIdx <= 5) {
+      if (newSlides.length > 0 && items.length - clampedVideoIdx <= 5) {
         onNearEnd?.(startIdx);
       }
       return;

@@ -26,9 +26,16 @@ interface Props {
    * provider がモーダル側を確実に埋めるようにする。
    */
   adPriority?: boolean;
+  /**
+   * AdSlot をこのコンポーネント内で描画しない。
+   * モーダル親 (MovieDetailModal) が detail fetch 状態に関係なく常時 <ins> を
+   * マウントするために自身で AdSlot を描画する経路で使う。詳細ページ
+   * (/movies/[slug] や女優ページ) からの利用では従来通り内側で描画する。
+   */
+  hideAd?: boolean;
 }
 
-export default function MovieDetailContent({ movie, adPriority = false }: Props) {
+export default function MovieDetailContent({ movie, adPriority = false, hideAd = false }: Props) {
   const router = useRouter();
   const imgSrc = movie.image_url_large ?? movie.image_url_list ?? "";
   const price = movie.price_list?.sale_price ?? movie.price_list?.list_price ?? movie.price_min;
@@ -141,13 +148,15 @@ export default function MovieDetailContent({ movie, adPriority = false }: Props)
           <p className="mdc-description">{movie.description}</p>
         )}
 
-        <div className="mdc-ad-bottom">
-          <AdSlot
-            zone="mobileBanner300x250"
-            context={adPriority ? "modal" : "page"}
-            priority={adPriority}
-          />
-        </div>
+        {!hideAd && (
+          <div className="mdc-ad-bottom">
+            <AdSlot
+              zone="mobileBanner300x250"
+              context={adPriority ? "modal" : "page"}
+              priority={adPriority}
+            />
+          </div>
+        )}
 
         <div className="mdc-cta">
           <AffiliateLink href={movie.affiliate_url} slug={movie.slug} title={movie.title} />

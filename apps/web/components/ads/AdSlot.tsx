@@ -34,6 +34,31 @@ function makeStorageKey(zone: AdZoneKey, context: string) {
   return `ad_slot_filled_${zone}_${context}`;
 }
 
+/**
+ * `?adDebug=1` を URL に付ける or `localStorage.adDebug="1"` を設定すると
+ * priority モード AdSlot の serve タイミングを console に出す。
+ * 何も付けないときは完全に no-op (本番には何も出力されない)。
+ *
+ * モーダル広告が表示されない症状の調査で「ins が DOM にあるか / serve push が
+ * 走ったか / 競合 ins を mask したか」を後から見るために最小限のログだけ残す。
+ */
+function isAdDebugEnabled(): boolean {
+  if (typeof window === "undefined") return false;
+  try {
+    if (window.localStorage?.getItem("adDebug") === "1") return true;
+    const params = new URLSearchParams(window.location.search);
+    return params.get("adDebug") === "1";
+  } catch {
+    return false;
+  }
+}
+
+function adDebugLog(...args: unknown[]): void {
+  if (!isAdDebugEnabled()) return;
+  // eslint-disable-next-line no-console
+  console.log("[AdSlot]", ...args);
+}
+
 function readWasFilled(zone: AdZoneKey, context: string): boolean {
   try {
     return sessionStorage.getItem(makeStorageKey(zone, context)) === "1";
@@ -277,6 +302,11 @@ function AdIns({
           return;
         }
         const restore = maskCompetingInsElements(cfg.zoneId, el);
+        adDebugLog("priority serve push", {
+          zoneId: cfg.zoneId,
+          insInDom: !!el.isConnected,
+          dataZoneId: el.getAttribute("data-zoneid"),
+        });
         serveAd(cfg.provider);
         // 250ms 経てば provider のスキャンはほぼ完了する。
         // それ以前に restore してしまうと provider が他の <ins> を見つけて
@@ -286,6 +316,10 @@ function AdIns({
       };
 
       hasEnteredViewportRef.current = true;
+      adDebugLog("priority mount", {
+        zoneId: cfg.zoneId,
+        provider: cfg.provider,
+      });
       // rAF を 2 回挟んでブラウザのレイアウトを確定させてから serve する。
       // モーダルのトランジション完了直後 (まだ <ins> が viewport 外) でも
       // priority mode は IO を待たずに serve するので問題ない。

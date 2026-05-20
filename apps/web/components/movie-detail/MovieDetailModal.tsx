@@ -5,6 +5,7 @@ import { createPortal } from "react-dom";
 import type { MovieDetail } from "@/lib/api/movies";
 import MovieDetailContent from "./MovieDetailContent";
 import DetailViewTracker from "@/components/analytics/detail-view-tracker";
+import AdSlot from "@/components/ads/AdSlot";
 
 interface Props {
   slug: string;
@@ -200,11 +201,31 @@ export default function MovieDetailModal({ slug, onClose }: Props) {
                 フィード上で開かれる portal モーダル経路。背後のフィード DOM に
                 FeedAdSlide の <ins> (同一 zoneid) が残っているため、AdSlot を
                 priority モードで動かして provider がモーダル <ins> を確実に
-                埋めるようにする。
+                埋めるようにする。 AdSlot 自体は state に依存せずモーダルマウント
+                直後にこの下で常に描画される (詳細 fetch が遅延・失敗しても
+                provider への push が空振りしないようにするため)。
               */}
-              <MovieDetailContent movie={movie} adPriority />
+              <MovieDetailContent movie={movie} adPriority hideAd />
             </>
           )}
+
+          {/*
+            広告 <ins> はモーダルが開いた瞬間に常にマウントする。
+            これにより MovieDetail の fetch が遅延 / 失敗しても、provider への
+            最初の push 時点で <ins data-zoneid=5929910> が DOM に存在し、
+            「ホーム側 5929930 だけが Request にバッチされ、5929910 が一度も
+            push されない」という症状を防ぐ。
+            視覚的位置は MovieDetailContent と同様にコンテンツ末尾 (CTA の前)
+            を狙うが、ロード中でも幅 100% のスロットとして mdm-scroll の末尾に
+            描画される。
+          */}
+          <div className="mdm-ad-bottom">
+            <AdSlot
+              zone="mobileBanner300x250"
+              context="modal"
+              priority
+            />
+          </div>
         </div>
       </div>
 
@@ -285,6 +306,20 @@ export default function MovieDetailModal({ slug, onClose }: Props) {
         .mdm-error {
           display: flex; align-items: center; justify-content: center;
           height: 200px; color: rgba(255,255,255,0.5); font-size: 14px;
+        }
+
+        /* モーダル末尾の広告スロット位置。MovieDetailContent の .mdc-ad-bottom と
+           同等のレイアウト (中央寄せ・上マージン) を維持する。
+           detail fetch が ready になる前から DOM 上に <ins> を置いておくための
+           「常駐」スロットなので、ロード中はスクロール末尾の余白として見える。 */
+        .mdm-ad-bottom {
+          width: 100%;
+          display: flex;
+          justify-content: center;
+          margin-top: 24px;
+          margin-bottom: 24px;
+          padding: 0 16px;
+          box-sizing: border-box;
         }
       `}</style>
     </>,

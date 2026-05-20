@@ -85,15 +85,36 @@ declare global {
 // ナビゲーションを非表示にするパス。
 // - /age-gate: 年齢確認を通さずにショート/ホーム等へ遷移されないように
 // - /actresses, /movies: 詳細ページは没入型レイアウトのためボトムナビを隠す
-//   (フィード上のモーダル MovieDetailModal は /feed のまま pushState するだけなので
-//    ここではヒットせず、フルページの /movies/[slug] だけ這移したときに隠れる)
+//
+// 注意: Next.js 15 では window.history.pushState を usePathname が拾うため、
+// /feed 上で MovieDetailModal を開く (pushState で URL を /movies/<slug> に書き換える) と、
+// 上の "/movies" にヒットして BottomNav が一緒に消えてしまう。
+// それを防ぐため、MovieDetailModal が dispatch する "modal-open" / "modal-close" イベントを
+// 監視し、フィード上モーダル中は強制的に「/feed と同じ表示状態」を保つ。
 const NAV_HIDDEN_PATHS = ["/age-gate", "/actresses", "/movies"];
 
 export default function BottomNav() {
   const pathname    = usePathname();
   const router      = useRouter();
-  const isShortPage = pathname === "/feed" || pathname.startsWith("/search/feed");
-  const isHidden    = NAV_HIDDEN_PATHS.some((p) => pathname.startsWith(p));
+  // /feed 上で MovieDetailModal を開いている間 true。
+  // pushState によって pathname が /movies/<slug> に変わっても、BottomNav は
+  // フィード視聴中と同じ振る舞い (表示 + シークバー + ショートアクティブ) を維持する。
+  const [isFeedModalOpen, setIsFeedModalOpen] = useState(false);
+
+  useEffect(() => {
+    const onOpen  = () => setIsFeedModalOpen(true);
+    const onClose = () => setIsFeedModalOpen(false);
+    window.addEventListener("modal-open",  onOpen);
+    window.addEventListener("modal-close", onClose);
+    return () => {
+      window.removeEventListener("modal-open",  onOpen);
+      window.removeEventListener("modal-close", onClose);
+    };
+  }, []);
+
+  const isShortPage = pathname === "/feed" || pathname.startsWith("/search/feed") || isFeedModalOpen;
+  // フィード上モーダル中は pathname が /movies/<slug> でも「非表示パス」とは扱わない。
+  const isHidden    = !isFeedModalOpen && NAV_HIDDEN_PATHS.some((p) => pathname.startsWith(p));
 
   const trackRef   = useRef<HTMLDivElement>(null);
   const isDragging = useRef(false);

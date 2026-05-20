@@ -41,13 +41,25 @@ function makeStorageKey(zone: AdZoneKey, context: string) {
  *
  * モーダル広告が表示されない症状の調査で「ins が DOM にあるか / serve push が
  * 走ったか / 競合 ins を mask したか」を後から見るために最小限のログだけ残す。
+ *
+ * モーダルを開くと URL が変わって `?adDebug=1` が消えてしまうため、一度でも
+ * `?adDebug=1` を見たら localStorage に焼いて以降ずっと有効にする。`?adDebug=0`
+ * で明示的に解除できる。
  */
 function isAdDebugEnabled(): boolean {
   if (typeof window === "undefined") return false;
   try {
-    if (window.localStorage?.getItem("adDebug") === "1") return true;
     const params = new URLSearchParams(window.location.search);
-    return params.get("adDebug") === "1";
+    const fromQuery = params.get("adDebug");
+    if (fromQuery === "1") {
+      window.localStorage?.setItem("adDebug", "1");
+      return true;
+    }
+    if (fromQuery === "0") {
+      window.localStorage?.removeItem("adDebug");
+      return false;
+    }
+    return window.localStorage?.getItem("adDebug") === "1";
   } catch {
     return false;
   }

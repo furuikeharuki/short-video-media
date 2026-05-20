@@ -2,8 +2,15 @@ import Link from "next/link";
 import type { Metadata } from "next";
 
 export const metadata: Metadata = {
-  title: "プライバシーポリシー | Short Video Media",
-  description: "Short Video Media のプライバシーポリシーページです。",
+  title: "プライバシーポリシー",
+  description:
+    "AV Shorts のプライバシーポリシー。当サイトにおける個人情報・Cookieの取り扱いについて記載しています。",
+  alternates: { canonical: "/privacy" },
+  openGraph: {
+    title: "プライバシーポリシー",
+    description: "AV Shorts のプライバシーポリシー。",
+    url: "/privacy",
+  },
 };
 
 export default function PrivacyPage() {

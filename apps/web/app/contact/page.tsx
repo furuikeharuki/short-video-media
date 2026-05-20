@@ -1,7 +1,16 @@
 import Link from "next/link";
+import type { Metadata } from "next";
 
-export const metadata = {
-  title: "お問い合わせ | AVShorts",
+export const metadata: Metadata = {
+  title: "お問い合わせ",
+  description:
+    "AV Shorts へのお問い合わせ窓口。リンク切れ・不具合報告・その他ご連絡はこちらのページからメールでお送りください。",
+  alternates: { canonical: "/contact" },
+  openGraph: {
+    title: "お問い合わせ",
+    description: "AV Shorts へのお問い合わせ窓口。",
+    url: "/contact",
+  },
 };
 
 export default function ContactPage() {

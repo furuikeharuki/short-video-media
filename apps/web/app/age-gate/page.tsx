@@ -2,7 +2,9 @@ import AgeGateForm from "@/components/analytics/age-gate-form";
 import type { Metadata } from "next";
 
 export const metadata: Metadata = {
-  title: "年齢確認 | AV Shorts",
+  title: "年齢確認",
+  description: "AV Shorts は18歳以上を対象としたアダルトコンテンツを含みます。年齢確認のうえご利用ください。",
+  robots: { index: false, follow: false },
 };
 
 type AgeGatePageProps = {

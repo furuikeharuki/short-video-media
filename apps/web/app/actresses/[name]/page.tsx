@@ -7,9 +7,8 @@ import AdSlot from "@/components/ads/AdSlot";
 import { getActressByName } from "@/lib/api/actresses";
 import HorizontalCardRow from "@/components/home/HorizontalCardRow";
 import MovieCardThumb from "@/components/home/MovieCardThumb";
+import { SITE_NAME, SITE_URL, SITE_LOCALE } from "@/lib/config/seo";
 
-const SITE_NAME = "AV Shorts";
-const SITE_URL = "https://av-shorts.com";
 const NA = "----";
 
 type PageProps = {
@@ -60,7 +59,7 @@ export async function generateMetadata({ params }: PageProps): Promise<Metadata>
         description,
         images: image ? [{ url: image, alt: detail.profile.name }] : [],
         siteName: SITE_NAME,
-        locale: "ja_JP",
+        locale: SITE_LOCALE,
       },
       twitter: {
         card: "summary_large_image",
@@ -106,8 +105,36 @@ export default async function ActressDetailPage({ params }: PageProps) {
     { label: "趣味", value: profile.hobby ?? NA },
   ];
 
+  const canonical = `${SITE_URL}/actresses/${encodeURIComponent(profile.name)}`;
+  const personJsonLd = {
+    "@context": "https://schema.org",
+    "@type": "Person",
+    name: profile.name,
+    alternateName: profile.ruby ?? undefined,
+    image: heroImg || undefined,
+    birthDate: profile.birthday ?? undefined,
+    url: canonical,
+    nationality: profile.prefectures ?? undefined,
+  };
+  const breadcrumbJsonLd = {
+    "@context": "https://schema.org",
+    "@type": "BreadcrumbList",
+    itemListElement: [
+      { "@type": "ListItem", position: 1, name: "ホーム", item: SITE_URL },
+      { "@type": "ListItem", position: 2, name: profile.name, item: canonical },
+    ],
+  };
+
   return (
     <main style={styles.main}>
+      <script
+        type="application/ld+json"
+        dangerouslySetInnerHTML={{ __html: JSON.stringify(personJsonLd) }}
+      />
+      <script
+        type="application/ld+json"
+        dangerouslySetInnerHTML={{ __html: JSON.stringify(breadcrumbJsonLd) }}
+      />
       <div style={styles.topBar}>
         <ActressBackButton />
       </div>

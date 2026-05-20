@@ -11,7 +11,15 @@ export const revalidate = 0;
 
 export const metadata: Metadata = {
   title: "ホーム",
-  description: "本日配信開始の新作、日間/週間/月間ランキング、人気ジャンル別のショート動画を一覧でチェック。",
+  description:
+    "本日配信開始の新作、日間/週間/月間ランキング、人気ジャンル別のAVショート動画を一覧でチェック。気に入った作品はFANZAでそのまま購入できます。",
+  alternates: { canonical: "/" },
+  openGraph: {
+    title: "ホーム",
+    description:
+      "新作・ランキング・人気ジャンルのAVショート動画。気に入った作品はFANZAでそのまま購入できます。",
+    url: "/",
+  },
 };
 
 const RANKING_KEYS = new Set([
@@ -60,6 +68,7 @@ export default async function Page() {
 
   return (
     <PullToRefresh className="home-main">
+      <h1 className="home-h1-sr">AV Shorts｜AVショート動画メディア</h1>
       {sections.map((section, sectionIndex) => {
         const isRanking = RANKING_KEYS.has(section.key);
         const action = {
@@ -118,6 +127,18 @@ export default async function Page() {
 const pageStyles = `
   html { background: #000; }
   body { background: #000; }
+
+  /* H1 はスクリーンリーダー/検索エンジン向けの視覚的非表示。
+     UI のレイアウトは横スクロール行が主体なので画面上には表示しない。 */
+  .home-h1-sr {
+    position: absolute !important;
+    width: 1px; height: 1px;
+    padding: 0; margin: -1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+    border: 0;
+  }
 
   .home-main {
     position: fixed;

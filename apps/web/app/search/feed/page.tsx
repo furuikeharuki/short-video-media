@@ -1,5 +1,12 @@
+import type { Metadata } from "next";
 import { Suspense } from "react";
 import SearchFeedPage from "./SearchFeedPage";
+
+export const metadata: Metadata = {
+  title: "検索結果フィード",
+  description: "検索条件に合致するAVショート動画をフィード形式で連続再生します。",
+  robots: { index: false, follow: true },
+};
 
 export default function Page() {
   return (

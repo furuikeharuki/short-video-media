@@ -89,7 +89,7 @@ export default function MovieCardThumb({
             {/* eslint-disable-next-line @next/next/no-img-element */}
             <img
               src={imgSrc}
-              alt=""
+              alt={movie.title}
               loading="lazy"
               decoding="async"
               className="mct-thumb-img"

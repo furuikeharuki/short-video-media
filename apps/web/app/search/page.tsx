@@ -1,6 +1,53 @@
+import type { Metadata } from "next";
 import SearchInfiniteGrid from "./SearchInfiniteGrid";
 import SearchResultsHeader from "@/components/SearchResultsHeader";
 import type { AdvancedSearchInput, SortKey } from "@/lib/api/search";
+
+type MetadataProps = {
+  searchParams: Promise<Record<string, string | string[] | undefined>>;
+};
+
+export async function generateMetadata({
+  searchParams,
+}: MetadataProps): Promise<Metadata> {
+  const sp = await searchParams;
+  const q = typeof sp.q === "string" ? sp.q.trim() : "";
+  const genre = typeof sp.genre === "string" ? sp.genre.trim() : "";
+  const director = typeof sp.director === "string" ? sp.director.trim() : "";
+  const maker = typeof sp.maker === "string" ? sp.maker.trim() : "";
+  const label = typeof sp.label === "string" ? sp.label.trim() : "";
+  const series = typeof sp.series === "string" ? sp.series.trim() : "";
+
+  let title = "検索";
+  let description = "AVショート動画の作品を検索。キーワード・ジャンル・女優・メーカー・シリーズなどから絞り込めます。";
+
+  if (q) {
+    title = `「${q}」の検索結果`;
+    description = `「${q}」に一致するAVショート動画の検索結果。`;
+  } else if (genre) {
+    title = `#${genre} の動画`;
+    description = `ジャンル #${genre} のAVショート動画一覧。`;
+  } else if (director) {
+    title = `監督「${director}」の作品`;
+    description = `監督「${director}」のAVショート動画一覧。`;
+  } else if (maker) {
+    title = `メーカー「${maker}」の作品`;
+    description = `メーカー「${maker}」のAVショート動画一覧。`;
+  } else if (label) {
+    title = `レーベル「${label}」の作品`;
+    description = `レーベル「${label}」のAVショート動画一覧。`;
+  } else if (series) {
+    title = `シリーズ「${series}」の作品`;
+    description = `シリーズ「${series}」のAVショート動画一覧。`;
+  }
+
+  return {
+    title,
+    description,
+    // パラメータ無限の組合せが index されないようにする
+    robots: { index: false, follow: true },
+  };
+}
 
 type Props = {
   searchParams: Promise<{

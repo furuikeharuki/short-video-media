@@ -4,11 +4,14 @@ import BottomNav from "@/components/BottomNav";
 import SessionProvider from "@/components/SessionProvider";
 import SavedFilterEnforcer from "@/components/SavedFilterEnforcer";
 import FullpageInterstitial from "@/components/ads/FullpageInterstitial";
+import {
+  SITE_NAME,
+  SITE_URL,
+  SITE_DESCRIPTION,
+  SITE_KEYWORDS,
+  SITE_LOCALE,
+} from "@/lib/config/seo";
 import "./globals.css";
-
-const SITE_NAME = "AV Shorts";
-const SITE_URL = "https://av-shorts.com";
-const SITE_DESCRIPTION = "FANZAのAV作品をショート動画で試し見。気に入ったらそのまま購入できるアダルト動画メディア。";
 
 export const viewport: Viewport = {
   width: "device-width",
@@ -23,9 +26,12 @@ export const metadata: Metadata = {
     template: `%s | ${SITE_NAME}`,
   },
   description: SITE_DESCRIPTION,
-  keywords: ["AV", "ショート動画", "FANZA", "アダルト動画", "サンプル動画", "アフィリエイト"],
+  keywords: SITE_KEYWORDS,
   authors: [{ name: SITE_NAME }],
   creator: SITE_NAME,
+  publisher: SITE_NAME,
+  applicationName: SITE_NAME,
+  category: "entertainment",
   verification: {
     google: "yE_TjT7FgGV-2DYARJhuv3UOAm8-2QUJfSnZoIlVjiA",
     other: {
@@ -34,7 +40,7 @@ export const metadata: Metadata = {
   },
   openGraph: {
     type: "website",
-    locale: "ja_JP",
+    locale: SITE_LOCALE,
     url: SITE_URL,
     siteName: SITE_NAME,
     title: `${SITE_NAME} | AVショート動画メディア`,
@@ -70,12 +76,41 @@ export default function RootLayout({
 }) {
   const GA_ID = process.env.NEXT_PUBLIC_GA_MEASUREMENT_ID;
 
+  const websiteJsonLd = {
+    "@context": "https://schema.org",
+    "@type": "WebSite",
+    name: SITE_NAME,
+    url: SITE_URL,
+    description: SITE_DESCRIPTION,
+    inLanguage: "ja-JP",
+    potentialAction: {
+      "@type": "SearchAction",
+      target: `${SITE_URL}/search?q={search_term_string}`,
+      "query-input": "required name=search_term_string",
+    },
+  };
+
+  const orgJsonLd = {
+    "@context": "https://schema.org",
+    "@type": "Organization",
+    name: SITE_NAME,
+    url: SITE_URL,
+  };
+
   return (
     <html lang="ja">
       <head>
         <link rel="preconnect" href="https://cc3001.dmm.co.jp" />
         <link rel="preconnect" href="https://cc3001.dmm.co.jp" crossOrigin="anonymous" />
         <link rel="dns-prefetch" href="https://cc3001.dmm.co.jp" />
+        <script
+          type="application/ld+json"
+          dangerouslySetInnerHTML={{ __html: JSON.stringify(websiteJsonLd) }}
+        />
+        <script
+          type="application/ld+json"
+          dangerouslySetInnerHTML={{ __html: JSON.stringify(orgJsonLd) }}
+        />
         {GA_ID && (
           <>
             <script async src={`https://www.googletagmanager.com/gtag/js?id=${GA_ID}`} />

@@ -238,7 +238,7 @@ export default function BottomNav() {
           ) {
             return;
           }
-          // /feed (ショート動画画面) からの離脱は常にフルページ遷移にする。
+          // /feed (ショート動画画面) との出入りはどちら向きも常にフルページ遷移にする。
           //
           // フィード画面は以下が複雑に絡んでおり、SPA 遷移 (router.push / <Link>) では
           // 確実に動かない:
@@ -248,19 +248,22 @@ export default function BottomNav() {
           //      打ち消されることがある。
           //   2. @modal 並列ルート (/(.)movies/[slug]) のスロット状態が、フィード上での
           //      pushState/replaceState によって不整合を起こし、SPA 遷移が止まることがある。
-          //   3. FeedClient は <video>・sessionStorage・IntersectionObserver 等の副作用を
-          //      多数持ち、これらの cleanup と router.push が競合する。
+          //   3. FeedClient は <video>・sessionStorage・IntersectionObserver・useFeedPlayback
+          //      の自動再生 effect 等の副作用を多数持ち、SPA mount だと初回再生のための
+          //      ユーザージェスチャー context が失われて <video> が play() できず黒画面のまま
+          //      止まるケースがある (リロードなら直る = サーバ HTML から正規ロードされるため)。
           //
           // window.location.assign に統一すれば、ブラウザが新しい URL をフェッチして
-          // クリーンに遷移するため、上記いずれの状態にも左右されずホーム / マイページに
-          // 必ず遷移できる。フィードを離れる時点でフィードの全状態は再構築されるので、
-          // SPA 遷移にこだわる必要は薄い。
+          // クリーンに遷移するため、上記いずれの状態にも左右されず確実に動く。
+          // フィードを出入りする時点でフィードの全状態は再構築されるので、SPA 遷移に
+          // こだわる必要は薄い。
           const onShortFeed =
             pathname === "/feed" ||
             pathname.startsWith("/search/feed") ||
             pathname.startsWith("/movies/") ||
             isFeedModalOpen;
-          if (onShortFeed && item.href !== "/feed") {
+          const goingToFeed = item.href === "/feed";
+          if ((onShortFeed && item.href !== "/feed") || goingToFeed) {
             e.preventDefault();
             window.location.assign(item.href);
           }

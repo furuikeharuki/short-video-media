@@ -123,12 +123,48 @@ function dumpInsForZone(zoneId: string, label: string, insClass?: string): void 
       hasIframe: !!el.querySelector("iframe"),
       iframeSrc: el.querySelector("iframe")?.getAttribute("src") ?? null,
       childCount: el.children.length,
+      innerHTMLLength: el.innerHTML.length,
       rect: { x: rect.x, y: rect.y, w: rect.width, h: rect.height },
       parents,
     };
   });
+  // 「provider が iframe を <ins> の外 (= body / 別の DOM サブツリー) に
+  //  挿入してしまっている」ケースの検知用に、ページ全体の iframe を
+  //  ざっとスキャンして magsrv / exoclick 系を抽出する。
+  const adIframes = Array.from(document.querySelectorAll<HTMLIFrameElement>("iframe"))
+    .filter((f) => {
+      const src = f.getAttribute("src") ?? "";
+      return (
+        src.includes("magsrv.com") ||
+        src.includes("exoclick") ||
+        src.includes("exosrv") ||
+        src.includes("pemsrv") ||
+        src.includes("ad-") ||
+        src.includes("banner")
+      );
+    })
+    .map((f) => {
+      const rect = f.getBoundingClientRect();
+      const parentTag = f.parentElement
+        ? `${f.parentElement.tagName}${
+            f.parentElement.id ? "#" + f.parentElement.id : ""
+          }`
+        : null;
+      return {
+        src: f.getAttribute("src"),
+        parentTag,
+        parentIsIns: f.parentElement?.tagName === "INS",
+        parentInsAdId: f.parentElement?.dataset?.adInsId ?? null,
+        parentInsZone: f.parentElement?.getAttribute("data-zoneid") ?? null,
+        rect: { x: rect.x, y: rect.y, w: rect.width, h: rect.height },
+        connected: f.isConnected,
+      };
+    });
   // eslint-disable-next-line no-console
-  console.log(`[AdSlot:dump:${label}] zone=${zoneId} count=${all.length}`, dump);
+  console.log(
+    `[AdSlot:dump:${label}] zone=${zoneId} count=${all.length} adIframes=${adIframes.length}`,
+    { ins: dump, adIframes },
+  );
 }
 
 function readWasFilled(zone: AdZoneKey, context: string): boolean {
@@ -586,6 +622,33 @@ function AdIns({
           documentVisibility: typeof document !== "undefined" ? document.visibilityState : null,
         });
         serveAd(cfg.provider);
+        // serve push 直後は <ins> が空でも問題ない。 provider が iframe を
+        // 挿入するのに 数百ms〜数秒かかるため、 +0.5s / +1.5s / +3s で同じ
+        // <ins> の状態を再ダンプして「provider success 後の DOM 上で本当に
+        // iframe が来たか / 来たならどこに入ったか」を後追いする。
+        // contentSeen / cancelled なら no-op。 timers に積んでおき unmount で
+        // 確実にキャンセル。
+        for (const delay of [500, 1500, 3000]) {
+          const id = window.setTimeout(() => {
+            if (cancelled || contentSeen) return;
+            const rect2 = el.getBoundingClientRect();
+            adDebugLog("priority post-serve snapshot", {
+              source,
+              delayMs: delay,
+              adInsId: insIdRef.current,
+              servePushCount,
+              insConnected: el.isConnected,
+              hasIframe: !!el.querySelector("iframe"),
+              hasImg: !!el.querySelector("img"),
+              childCount: el.children.length,
+              innerHTMLLength: el.innerHTML.length,
+              dataZoneId: el.getAttribute("data-zoneid"),
+              rect: { x: rect2.x, y: rect2.y, w: rect2.width, h: rect2.height },
+            });
+            dumpInsForZone(cfg.zoneId, `post-serve+${delay}ms`, cfg.insClass);
+          }, delay);
+          timers.push(id);
+        }
       };
 
       // contentSeen を「retry timer 起点」でも検知できるよう、各 retry の

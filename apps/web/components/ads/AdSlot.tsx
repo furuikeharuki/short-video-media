@@ -448,6 +448,13 @@ function AdIns({
       const timers: number[] = [];
       let rafA = 0;
       let rafB = 0;
+      // 自分の <ins> が viewport に入ったら true。 ExoClick の creative iframe は
+      // ロード直後に自前の IntersectionObserver / Page Visibility API で
+      // 「Visibility: hidden」と判定したら polling を止めて二度と再開しない実装
+      // が観測されているため、iframe がロードされる瞬間に <ins> が viewport に
+      // 入っている必要がある。モーダル末尾の <ins> はモーダルを開いた直後は
+      // スクロール下にあるので、IO の交差を待ってから serve push を出す。
+      let firstServeStarted = false;
 
       // mask の累積復元クロージャ。
       // 以前は serveWithMask の各回で「250ms 後に復元」していたが、provider の
@@ -494,6 +501,14 @@ function AdIns({
         }
         const restore = maskCompetingInsElements(cfg.zoneId, cfg.insClass, el);
         restoreFns.push(restore);
+        // serve 時の `<ins>` の見え方を全てログに残す。 creative iframe が
+        // 「Visibility: hidden」で polling を止める症状の調査に必要。
+        const rect = el.getBoundingClientRect();
+        const cs = typeof window !== "undefined" ? window.getComputedStyle(el) : null;
+        const parentRect = el.parentElement?.getBoundingClientRect();
+        const parentCs = el.parentElement && typeof window !== "undefined"
+          ? window.getComputedStyle(el.parentElement)
+          : null;
         adDebugLog("priority serve push", {
           zoneId: cfg.zoneId,
           insClass: cfg.insClass,
@@ -505,6 +520,16 @@ function AdIns({
           sameClassInsCount: document.querySelectorAll(
             `ins.${cfg.insClass}`,
           ).length,
+          rect: { x: rect.x, y: rect.y, w: rect.width, h: rect.height },
+          inViewportY: rect.bottom > 0 && rect.top < window.innerHeight,
+          insStyle: cs ? { display: cs.display, visibility: cs.visibility, opacity: cs.opacity } : null,
+          parentRect: parentRect
+            ? { x: parentRect.x, y: parentRect.y, w: parentRect.width, h: parentRect.height }
+            : null,
+          parentStyle: parentCs
+            ? { display: parentCs.display, visibility: parentCs.visibility, opacity: parentCs.opacity, overflow: parentCs.overflow }
+            : null,
+          documentVisibility: typeof document !== "undefined" ? document.visibilityState : null,
         });
         serveAd(cfg.provider);
       };
@@ -517,48 +542,101 @@ function AdIns({
         insClass: cfg.insClass,
       });
       dumpInsForZone(cfg.zoneId, "mount", cfg.insClass);
-      // rAF を 2 回挟んでブラウザのレイアウトを確定させてから serve する。
-      // モーダルのトランジション完了直後 (まだ <ins> が viewport 外) でも
-      // priority mode は IO を待たずに serve するので問題ない。
+
+      // <ins> が viewport に入ってから serve push を出すフロー。
+      //
+      // 背景: 直近のリアル端末ログで「Request 成功 → banner.js 初期化 → iframe
+      // model fetch 成功 → [Banner Debug] Visibility: hidden → Stopping polling」
+      // の流れが観測されている。 modal 末尾の <ins> はモーダルを開いた直後は
+      // スクロール下 (viewport の外) にあるため、 creative の self-visibility
+      // 判定 (IntersectionObserver / Page Visibility API ベース) が「自分は
+      // hidden」と判断し、 polling を恒久停止してしまう。
+      //
+      // 対策: <ins> が viewport に入った瞬間に最初の serve push を出す。
+      // この時点で creative iframe がロードされても自分は表示中なので
+      // hidden 判定にならない。 8 秒経っても viewport に入らなかった場合は
+      // 「ユーザが modal 内をスクロールせず閉じる」ケースとみなして
+      // フォールバックで push する (serve イベント自体はカウントしておきたい)。
+      const beginPriorityServe = (reason: string) => {
+        if (cancelled || contentSeen || firstServeStarted) return;
+        firstServeStarted = true;
+        adDebugLog("priority first serve", { reason, adInsId: insIdRef.current });
+        serveWithMask();
+        // 1.0s / 2.5s / 4.0s の再試行。各回 serveWithMask で mask が
+        // 累積復元キューに積まれ、contentSeen で一括 restore される。
+        // provider script のロード遅延、初回 push が他要素に取られた等の
+        // ケースをカバーする。
+        timers.push(window.setTimeout(serveWithMask, 1000));
+        timers.push(window.setTimeout(serveWithMask, 2500));
+        timers.push(window.setTimeout(serveWithMask, 4000));
+        // モーダル広告 unfilled でも背後 `<ins>` をいつまでも mask した
+        // ままにすると、modal close 後にフィード広告が空になる。最大 8s
+        // でフォールバック restore する (provider がこの時間内に inject
+        // しないなら今回の serve は諦め、フィード側は通常動作に戻す)。
+        timers.push(window.setTimeout(() => {
+          adDebugLog("priority mask fallback restore");
+          restoreAll();
+        }, 8000));
+      };
+
+      // モーダル open 直後でも、 mdm-scroll の縦サイズが充分大きく
+      // <ins> がたまたま viewport 内に入る可能性 (タブレット等) や、
+      // ユーザがすでにフィード側で同 zone を見ていて scroll 0 から
+      // <ins> が見えるケースもあるため、 mount 直後の rect で
+      // 一度判定する。
+      const isInViewportNow = (): boolean => {
+        const r = el.getBoundingClientRect();
+        const vh =
+          window.innerHeight || document.documentElement.clientHeight || 0;
+        const vw =
+          window.innerWidth || document.documentElement.clientWidth || 0;
+        // rect が 0x0 の場合は「まだレイアウト前」とみなして false。
+        if (r.width === 0 && r.height === 0) return false;
+        return r.bottom > 0 && r.top < vh && r.right > 0 && r.left < vw;
+      };
+
       rafA = requestAnimationFrame(() => {
         rafB = requestAnimationFrame(() => {
           if (cancelled) return;
-          serveWithMask();
-          // 1.0s / 2.5s / 4.0s の再試行。各回 serveWithMask で mask が
-          // 累積復元キューに積まれ、contentSeen で一括 restore される。
-          // provider script のロード遅延、初回 push が他要素に取られた等の
-          // ケースをカバーする。
-          timers.push(window.setTimeout(serveWithMask, 1000));
-          timers.push(window.setTimeout(serveWithMask, 2500));
-          timers.push(window.setTimeout(serveWithMask, 4000));
-          // モーダル広告 unfilled でも背後 `<ins>` をいつまでも mask した
-          // ままにすると、modal close 後にフィード広告が空になる。最大 8s
-          // でフォールバック restore する (provider がこの時間内に inject
-          // しないなら今回の serve は諦め、フィード側は通常動作に戻す)。
-          timers.push(window.setTimeout(() => {
-            adDebugLog("priority mask fallback restore");
-            restoreAll();
-          }, 8000));
+          if (isInViewportNow()) {
+            beginPriorityServe("in-viewport-on-mount");
+          }
         });
       });
 
-      // priority モードでも IO は残しておく。一度 onEmpty に落ちて
-      // (本実装では明示的に onEmpty を出さないが) ユーザが再度この枠に
-      // スクロールしてきた等で再試行のチャンスにする用。
+      // IntersectionObserver。 <ins> が viewport に入った瞬間に serve push。
+      // rootMargin は「下から少し早めに」拾う程度 (50px) に抑える。 200px だと
+      // ユーザがまだ <ins> を見ていない段階で creative iframe をロードして
+      // しまい、結局 hidden 判定で polling を止められるリスクがある。
       const io = new IntersectionObserver(
         (entries) => {
-          if (cancelled || contentSeen) return;
+          if (cancelled) return;
           for (const entry of entries) {
             if (!entry.isIntersecting) continue;
-            // 既にリトライ予定はキューしてあるので追加 push は不要。
-            // 万一それらもタイミング外しで空振りした場合の最後の保険として
-            // ここでも serve を試みる。
-            serveWithMask();
+            if (!firstServeStarted) {
+              beginPriorityServe("intersection");
+            } else if (!contentSeen) {
+              // 既に serve 済みでまだ埋まっていない場合、 viewport に
+              // 再び入ったタイミングで最後の保険として serveWithMask を呼ぶ。
+              serveWithMask();
+            }
           }
         },
-        { rootMargin: "200px 0px", threshold: 0.01 },
+        { rootMargin: "50px 0px", threshold: 0.01 },
       );
       io.observe(el);
+
+      // ユーザがモーダル内を全くスクロールせずに閉じるケースのフォールバック。
+      // 8 秒経っても viewport に入らなければ強制的に serve する (この場合は
+      // creative が hidden 判定で polling を止める可能性があるが、 request は
+      // 発生させておきたい)。
+      timers.push(
+        window.setTimeout(() => {
+          if (!firstServeStarted) {
+            beginPriorityServe("fallback-8s");
+          }
+        }, 8000),
+      );
 
       if (insHasAd() || containerHasAd()) {
         contentSeen = true;

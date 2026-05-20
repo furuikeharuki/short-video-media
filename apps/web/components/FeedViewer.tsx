@@ -17,14 +17,17 @@ const RAPID_SETTLE_MS = 350;
 // BottomNav の高さ。タッチ終端がここより下なら BottomNav 操作として扱う。
 const BOTTOM_NAV_H = 56;
 
+/**
+ * スワイプと確定するまでの縦移動量のしきい値 (px)。
+ * この距離を超えて初めて縦スクロール抑止 (preventDefault) を呼ぶ。
+ * それ未満の移動量（タップ）では呼ばず、ブラウザの click イベント発火を妨げない。
+ */
+const SWIPE_LOCK_THRESHOLD = 8;
+
 type FeedSlide =
   | { kind: "video"; movie: MovieCard; videoIndex: number }
   | { kind: "ad"; adIndex: number; key: string };
 
-/**
- * 新しく追加された movies だけを slides に追記する。
- * 全再計算しないので広告位置がズれない。
- */
 function appendSlides(
   prev: FeedSlide[],
   newMovies: MovieCard[],
@@ -32,16 +35,12 @@ function appendSlides(
   adEnabled: boolean,
 ): FeedSlide[] {
   if (newMovies.length === 0) return prev;
-
-  // 既存の動画数・広告数を計算
   let videoCount = prev.filter(s => s.kind === "video").length;
   let adCount    = prev.filter(s => s.kind === "ad").length;
-
   const added: FeedSlide[] = [];
   for (const movie of newMovies) {
     added.push({ kind: "video", movie, videoIndex: videoCount });
     videoCount++;
-    // adEnabled かつ interval の倍数に達したら広告を挿入
     if (adEnabled && interval > 0 && videoCount % interval === 0) {
       added.push({ kind: "ad", adIndex: adCount, key: `ad-${adCount}` });
       adCount++;
@@ -50,7 +49,6 @@ function appendSlides(
   return [...prev, ...added];
 }
 
-/** タッチ開始点が BottomNav 領域かどうかを判定する */
 function isTouchInBottomNav(clientY: number): boolean {
   return clientY >= window.innerHeight - BOTTOM_NAV_H;
 }
@@ -79,8 +77,6 @@ export default function FeedViewer({
   const [slides, setSlides] = useState<FeedSlide[]>([]);
   const [windowSlides, setWindowSlides] = useState<FeedSlide[]>([]);
   const windowStartRef = useRef(0);
-
-  // 前回の items 長さを記憶して追記分だけ処理する
   const prevItemsLenRef = useRef(0);
 
   const [isRapidSwiping, setIsRapidSwiping] = useState(false);
@@ -99,12 +95,14 @@ export default function FeedViewer({
   );
 
   const [dragPx, setDragPx] = useState(0);
-  const dragStartY       = useRef(0);
-  const dragStartYForEnd = useRef(0);
-  const dragStartTime    = useRef(0);
-  const isDragging       = useRef(false);
-  // BottomNav 上で始まったタッチはスワイプとして扱わない
-  const touchStartedInNavRef = useRef(false);
+  const dragStartY         = useRef(0);
+  const dragStartYForEnd   = useRef(0);
+  const dragStartTime      = useRef(0);
+  const isDragging         = useRef(false);
+  /** BottomNav 上で始まったタッチ → スワイプ処理・preventDefault をスキップ */
+  const touchStartedInNavRef  = useRef(false);
+  /** touchmove で一度でも SWIPE_LOCK_THRESHOLD を超えたか */
+  const swipeLockedRef        = useRef(false);
 
   useEffect(() => {
     const now = Date.now();
@@ -142,7 +140,6 @@ export default function FeedViewer({
   const didInitRef = useRef(false);
   useEffect(() => {
     if (!didInitRef.current) {
-      // 初回マウント
       didInitRef.current = true;
       prevItemsLenRef.current = items.length;
       const newSlides = appendSlides([], items, AD_FEED_INTERVAL, adEnabled);
@@ -156,14 +153,12 @@ export default function FeedViewer({
       }
       return;
     }
-    // 2回目以降: 追記分のみ追加
     const prevLen = prevItemsLenRef.current;
-    if (items.length <= prevLen) return; // 変化なし
+    if (items.length <= prevLen) return;
     prevItemsLenRef.current = items.length;
     const newMovies = items.slice(prevLen);
     setSlides((prev) => {
       const next = appendSlides(prev, newMovies, AD_FEED_INTERVAL, adEnabled);
-      // window も更新
       const clamped = Math.min(currentIdxRef.current, next.length - 1);
       updateWindow(clamped, next);
       return next;
@@ -202,51 +197,65 @@ export default function FeedViewer({
   useEffect(() => {
     const el = containerRef.current;
     if (!el) return;
+
     const onTouchStart = (e: TouchEvent) => {
       if (modalOpenRef.current) return;
       const startY = e.touches[0].clientY;
-      // BottomNav 上タッチはフィードスワイプとして扱わない
       if (isTouchInBottomNav(startY)) {
         touchStartedInNavRef.current = true;
         return;
       }
       touchStartedInNavRef.current = false;
+      swipeLockedRef.current = false;
       isDragging.current = true;
       dragStartY.current = startY;
       dragStartYForEnd.current = startY;
       dragStartTime.current = Date.now();
       setDragPx(0);
     };
+
     const onTouchMove = (e: TouchEvent) => {
       if (modalOpenRef.current) return;
-      // BottomNav 上タッチは preventDefault しない
       if (touchStartedInNavRef.current) return;
-      e.preventDefault();
       if (!isDragging.current) return;
-      const dy    = e.touches[0].clientY - dragStartY.current;
+
+      const dy = e.touches[0].clientY - dragStartY.current;
+
+      // SWIPE_LOCK_THRESHOLD を超えて初めてスクロール抑止する。
+      // それ未満（タップ）では preventDefault を呼ばずブラウザの click を生かす。
+      if (!swipeLockedRef.current) {
+        if (Math.abs(dy) < SWIPE_LOCK_THRESHOLD) return;
+        swipeLockedRef.current = true;
+      }
+      e.preventDefault();
+
       const atEnd = currentIdxRef.current >= slides.length - 1;
       const atTop = currentIdxRef.current <= 0;
       setDragPx((dy > 0 && atTop) || (dy < 0 && atEnd) ? dy * 0.35 : dy);
     };
+
     const onTouchEnd = (e: TouchEvent) => {
       if (modalOpenRef.current) { isDragging.current = false; return; }
-      // BottomNav 上タッチはスワイプ処理をスキップ
       if (touchStartedInNavRef.current) {
         touchStartedInNavRef.current = false;
         return;
       }
       if (!isDragging.current) return;
       isDragging.current = false;
+      swipeLockedRef.current = false;
       setDragPx(0);
       const dy = e.changedTouches[0].clientY - dragStartYForEnd.current;
       const dt = Date.now() - dragStartTime.current;
       if (Math.abs(dy) > 60 && dt < 1000) { if (dy < 0) goNext(); else goPrev(); }
     };
+
     const onTouchCancel = () => {
       isDragging.current = false;
+      swipeLockedRef.current = false;
       touchStartedInNavRef.current = false;
       setDragPx(0);
     };
+
     const onWheel = (e: WheelEvent) => {
       if (modalOpenRef.current) return;
       e.preventDefault();
@@ -255,6 +264,7 @@ export default function FeedViewer({
       setTimeout(() => { wheelLockRef.current = false; }, 300);
       if (e.deltaY > 0) goNext(); else goPrev();
     };
+
     el.addEventListener("touchstart",  onTouchStart,  { passive: true });
     el.addEventListener("touchmove",   onTouchMove,   { passive: false });
     el.addEventListener("touchend",    onTouchEnd,    { passive: true });

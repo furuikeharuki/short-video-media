@@ -11,6 +11,20 @@ type Props = {
   label?: string | null;
   context?: string;
   resetOnMount?: boolean;
+  /**
+   * モーダルなど「他にも同じ zone の <ins> が既に DOM にある状況で開く AdSlot」
+   * 用のフラグ。true のとき:
+   *  - IntersectionObserver が intersecting と見なせないまま (スクロール下にある等)
+   *    でも mount 直後に serve を試みる。
+   *  - serve push の直前に、この AdSlot の <ins> 以外で同じ zoneid を持つ
+   *    `<ins>` の data-zoneid を一時的に退避し、provider がこの slot の <ins>
+   *    を優先的に拾うようにする。完了後すぐ復元する。
+   *
+   * 用途: 詳細モーダルの広告。背後にフィードの FeedAdSlide が同じ zoneid で
+   *       いくつも残っているため、何もしないと provider がそちらに serve を
+   *       消費してしまいモーダルの <ins> が空のまま残る。
+   */
+  priority?: boolean;
 };
 
 function makeStorageKey(zone: AdZoneKey, context: string) {
@@ -31,12 +45,47 @@ function writeWasFilled(zone: AdZoneKey, context: string): void {
   } catch { /* ignore */ }
 }
 
+/**
+ * `selfIns` 以外で同じ zoneid を持つ `<ins>` を一時的に「provider から見えなく」する。
+ *
+ * 退避は data-zoneid を ad_zone_stash 属性に逃がし、data-zoneid を空にすることで行う。
+ * 復元用の関数を返す。複数回呼ばれた場合に矛盾しないよう、stash 済みかどうかを
+ * 個別に判定する。
+ */
+function maskCompetingInsElements(
+  zoneId: string,
+  selfIns: HTMLElement | null,
+): () => void {
+  if (typeof document === "undefined" || !zoneId) return () => {};
+  const all = Array.from(
+    document.querySelectorAll<HTMLElement>(`ins[data-zoneid="${zoneId}"]`),
+  );
+  const masked: HTMLElement[] = [];
+  for (const el of all) {
+    if (el === selfIns) continue;
+    if (el.dataset.adZoneStash != null) continue; // 既に他で stash 済み
+    el.dataset.adZoneStash = zoneId;
+    el.setAttribute("data-zoneid", "");
+    masked.push(el);
+  }
+  return () => {
+    for (const el of masked) {
+      const original = el.dataset.adZoneStash;
+      if (original) {
+        el.setAttribute("data-zoneid", original);
+        delete el.dataset.adZoneStash;
+      }
+    }
+  };
+}
+
 export default function AdSlot({
   zone,
   className,
   style,
   label = "広告",
   context = "page",
+  priority = false,
 }: Props) {
   const cfg = AD_ZONES[zone];
   const wrapperRef = useRef<HTMLElement | null>(null);
@@ -148,6 +197,7 @@ export default function AdSlot({
       <AdIns
         key={insKey}
         cfg={cfg}
+        priority={priority}
         servedThisGenRef={servedThisGenRef}
         hasEnteredViewportRef={hasEnteredViewportRef}
         onContent={() => {
@@ -169,6 +219,7 @@ export default function AdSlot({
 
 function AdIns({
   cfg,
+  priority,
   servedThisGenRef,
   hasEnteredViewportRef,
   onContent,
@@ -176,6 +227,7 @@ function AdIns({
   onBecameVisibleAgain,
 }: {
   cfg: (typeof AD_ZONES)[AdZoneKey];
+  priority: boolean;
   servedThisGenRef: React.MutableRefObject<boolean>;
   hasEnteredViewportRef: React.MutableRefObject<boolean>;
   onContent: () => void;
@@ -195,10 +247,22 @@ function AdIns({
     const insHasAd = (): boolean =>
       !!el.querySelector("iframe, img, video, a, picture, canvas");
 
+    /**
+     * priority モードでは「この AdSlot の <ins> 以外で同じ zoneid を持つ <ins>」を
+     * 一時的に DOM 上で隠して serve を呼ぶ。これにより provider が背後のフィード
+     * AdSlot などに serve を取られるのを避け、モーダルの <ins> を確実に埋める。
+     * 復元は短い遅延 (250ms) のあとに行い、provider のスキャンが終わるのを待つ。
+     */
     const tryServeOnce = () => {
       if (servedThisGenRef.current) return;
       servedThisGenRef.current = true;
-      serveAd(cfg.provider);
+      if (priority) {
+        const restore = maskCompetingInsElements(cfg.zoneId, el);
+        serveAd(cfg.provider);
+        window.setTimeout(restore, 250);
+      } else {
+        serveAd(cfg.provider);
+      }
     };
 
     const mo = new MutationObserver(() => {
@@ -214,6 +278,7 @@ function AdIns({
     let serveStarted = false;
     let collapseTimer: number | null = null;
     let retryTimer: number | null = null;
+    let priorityRetryTimer: number | null = null;
 
     const beginServeFlow = () => {
       if (serveStarted) return;
@@ -222,7 +287,15 @@ function AdIns({
       tryServeOnce();
       retryTimer = window.setTimeout(() => {
         if (cancelled || contentSeen) return;
-        if (!insHasAd()) serveAd(cfg.provider);
+        if (!insHasAd()) {
+          if (priority) {
+            const restore = maskCompetingInsElements(cfg.zoneId, el);
+            serveAd(cfg.provider);
+            window.setTimeout(restore, 250);
+          } else {
+            serveAd(cfg.provider);
+          }
+        }
       }, 700);
       collapseTimer = window.setTimeout(() => {
         if (cancelled || contentSeen) return;
@@ -232,6 +305,62 @@ function AdIns({
         }
       }, 4000);
     };
+
+    // priority モード: モーダルなど IntersectionObserver が intersecting と
+    // 認識しづらいレイアウト (スクロール下に置かれた <ins>、creative ロード前で
+    // height=0 等) でも確実に serve を発火させるため、mount 直後に
+    // requestAnimationFrame 2 回 (= レイアウト確定) を待ってから serve を開始する。
+    if (priority) {
+      let raf1 = 0;
+      let raf2 = 0;
+      raf1 = requestAnimationFrame(() => {
+        raf2 = requestAnimationFrame(() => {
+          if (cancelled) return;
+          beginServeFlow();
+          // それでも 1.2s で creative が来ていなければ「provider が別の <ins>
+          // に serve を消費した」可能性が高いので一度だけ再試行する。
+          priorityRetryTimer = window.setTimeout(() => {
+            if (cancelled || contentSeen) return;
+            if (!insHasAd()) {
+              const restore = maskCompetingInsElements(cfg.zoneId, el);
+              serveAd(cfg.provider);
+              window.setTimeout(restore, 250);
+            }
+          }, 1200);
+        });
+      });
+
+      const io = new IntersectionObserver(
+        (entries) => {
+          if (cancelled) return;
+          for (const entry of entries) {
+            if (!entry.isIntersecting) continue;
+            if (emptyEmitted && !contentSeen) {
+              onBecameVisibleAgain();
+            }
+          }
+        },
+        { rootMargin: "200px 0px", threshold: 0.01 },
+      );
+      io.observe(el);
+
+      if (insHasAd()) {
+        contentSeen = true;
+        onContent();
+        mo.disconnect();
+      }
+
+      return () => {
+        cancelled = true;
+        mo.disconnect();
+        io.disconnect();
+        if (raf1) cancelAnimationFrame(raf1);
+        if (raf2) cancelAnimationFrame(raf2);
+        if (retryTimer != null) window.clearTimeout(retryTimer);
+        if (collapseTimer != null) window.clearTimeout(collapseTimer);
+        if (priorityRetryTimer != null) window.clearTimeout(priorityRetryTimer);
+      };
+    }
 
     const io = new IntersectionObserver(
       (entries) => {

@@ -172,11 +172,15 @@ export default function MovieModal({ movie }: { movie: MovieDetail }) {
             {/*
               context="modal" でページの AdSlot (context="page") と
               sessionStorage キーを分離し、状態が混在しないようにする。
-              resetOnMount=true でモーダル open 直後に provider をリセットし、
-              背後ページの DOM が生きたまま追加された新しい <ins> を確実に拾わせる。
+              priority=true で:
+               - IntersectionObserver の交差判定を待たずに mount 直後に serve を発火し
+                 (モーダルの <ins> は最初スクロール下にあるため intersecting にならない)
+               - serve push 直前に、背後フィードに残っている同じ zoneid の <ins>
+                 (FeedAdSlide) の data-zoneid を退避することで、provider がフィード側に
+                 serve を取られてモーダル <ins> が空のまま残るのを防ぐ。
             */}
             <div className="mm-ad-bottom" style={adBottomStyle}>
-              <AdSlot zone="mobileBanner300x250" context="modal" resetOnMount />
+              <AdSlot zone="mobileBanner300x250" context="modal" priority />
             </div>
           </div>
         </div>

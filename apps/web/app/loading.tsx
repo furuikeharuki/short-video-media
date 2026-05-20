@@ -1,74 +1,82 @@
+/**
+ * ルートロード画面。
+ *
+ * ホーム (`/`) など、独自の loading.tsx を持たないルート全般で表示される。
+ * 以前はフィードと同じフルスクリーンのスケルトンを出していたが、
+ * ホームでは過剰だったため検索一覧と同じトーンのグリッド・シマー型スケルトンに統一する。
+ * フィード専用のフルスクリーンスケルトンは `app/feed/loading.tsx` に分離してある。
+ */
 export default function Loading() {
+  const skeletons = Array.from({ length: 18 });
+
   return (
-    <main style={styles.main}>
-      {Array.from({ length: 3 }).map((_, i) => (
-        <div key={i} style={styles.item}>
-          <div style={styles.thumb} />
-          <div style={styles.overlay}>
-            <div style={{ ...styles.bar, width: '60px', height: '20px', marginBottom: '10px', borderRadius: '999px' }} />
-            <div style={{ ...styles.bar, width: '75%', height: '22px', marginBottom: '8px' }} />
-            <div style={{ ...styles.bar, width: '45%', height: '16px', marginBottom: '20px', opacity: 0.5 }} />
-            <div style={styles.buttons}>
-              <div style={{ ...styles.bar, flex: 1, height: '44px', borderRadius: '10px' }} />
-              <div style={{ ...styles.bar, flex: 1, height: '44px', borderRadius: '10px' }} />
-            </div>
+    <main style={mainStyle}>
+      <div style={metaStyle} />
+      <div className="home-loading-grid">
+        {skeletons.map((_, i) => (
+          <div key={i} className="skeleton-card">
+            <div className="skeleton-inner" />
           </div>
-        </div>
-      ))}
-      <style>{shimmerCSS}</style>
+        ))}
+      </div>
+      <style>{css}</style>
     </main>
   );
 }
 
-const styles: Record<string, React.CSSProperties> = {
-  main: {
-    height: '100dvh',
-    overflowY: 'hidden',
-    background: '#000',
-    scrollbarWidth: 'none',
-  },
-  item: {
-    position: 'relative',
-    width: '100%',
-    height: '100dvh',
-    background: '#111',
-    overflow: 'hidden',
-  },
-  thumb: {
-    position: 'absolute',
-    inset: 0,
-    background: '#1a1a1a',
-    animation: 'shimmer 1.5s ease-in-out infinite',
-  },
-  overlay: {
-    position: 'absolute',
-    bottom: 0,
-    left: 0,
-    right: 0,
-    padding: '0 16px 32px',
-    background: 'linear-gradient(to bottom, transparent 0%, rgba(0,0,0,0.9) 60%)',
-  },
-  bar: {
-    background: 'rgba(255,255,255,0.1)',
-    borderRadius: '6px',
-    animation: 'shimmer 1.5s ease-in-out infinite',
-  },
-  buttons: {
-    display: 'flex',
-    gap: '10px',
-  },
+const mainStyle: React.CSSProperties = {
+  position: "fixed",
+  top: "var(--header-h, 52px)" as unknown as string,
+  left: 0,
+  right: 0,
+  bottom: "var(--bottom-nav-h, 56px)" as unknown as string,
+  overflowY: "auto",
+  background: "#0a0a0a",
 };
 
-const shimmerCSS = `
-  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
-  html, body { background: #000 !important; overflow: hidden !important; }
+const metaStyle: React.CSSProperties = {
+  height: "36px",
+};
 
+const css = `
+  .home-loading-grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 8px;
+    padding: 8px;
+  }
+  @media (min-width: 640px)  { .home-loading-grid { grid-template-columns: repeat(5, 1fr); } }
+  @media (min-width: 1024px) {
+    .home-loading-grid {
+      grid-template-columns: repeat(7, 1fr);
+      max-width: 1200px;
+      margin: 0 auto;
+    }
+  }
+  .skeleton-card {
+    position: relative;
+    aspect-ratio: 9 / 13;
+    background: #1a1a1a;
+    overflow: hidden;
+    border-radius: 10px;
+  }
+  .skeleton-inner {
+    position: absolute;
+    inset: 0;
+    background: linear-gradient(
+      105deg,
+      transparent 40%,
+      rgba(255,255,255,0.07) 50%,
+      transparent 60%
+    );
+    background-size: 200% 100%;
+    animation: shimmer 1.4s ease-in-out infinite;
+  }
   @keyframes shimmer {
-    0%   { opacity: 0.4; }
-    50%  { opacity: 0.8; }
-    100% { opacity: 0.4; }
+    0%   { background-position: 200% 0; }
+    100% { background-position: -200% 0; }
   }
   @media (prefers-reduced-motion: reduce) {
-    * { animation: none !important; }
+    .skeleton-inner { animation: none !important; }
   }
 `;

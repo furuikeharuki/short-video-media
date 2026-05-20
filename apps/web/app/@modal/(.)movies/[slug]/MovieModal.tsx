@@ -6,7 +6,7 @@ import { useEffect, useRef } from "react";
 import AffiliateLink from "@/components/analytics/affiliate-link";
 import DetailViewTracker from "@/components/analytics/detail-view-tracker";
 import ActressLink from "@/components/ActressLink";
-import NativeAdWithMobileFallback from "@/components/ads/NativeAdWithMobileFallback";
+import AdSlot from "@/components/ads/AdSlot";
 import type { MovieDetail } from "@/lib/api/movies";
 
 const NA = "----";
@@ -176,7 +176,7 @@ export default function MovieModal({ movie }: { movie: MovieDetail }) {
               背後ページの DOM が生きたまま追加された新しい <ins> を確実に拾わせる。
             */}
             <div className="mm-ad-bottom" style={adBottomStyle}>
-              <NativeAdWithMobileFallback context="modal" resetOnMount />
+              <AdSlot zone="mobileBanner300x250" context="modal" resetOnMount />
             </div>
           </div>
         </div>
@@ -386,49 +386,14 @@ const ctaStyle: React.CSSProperties = {
 const adBottomStyle: React.CSSProperties = {
   marginTop: "24px",
   width: "100%",
-  maxWidth: "100%",
-  overflow: "hidden",
-  boxSizing: "border-box",
+  display: "flex",
+  justifyContent: "center",
 };
 
 const modalCSS = `
-  /* モーダル内 native 広告 (ExoClick Recommendation Widget) を親幅まで広げる。
-     widget は ins の中に <div>/<a> を入れ子で生成し、内部 wrapper に
-     インライン style で固定 px 幅を当てるため、ins 直下の widget root と
-     入れ子全要素の max-width / width を強制する。 */
-  .mm-ad-bottom .ad-slot {
-    width: 100% !important;
-    max-width: 100% !important;
-    overflow: hidden !important;
-  }
-  .mm-ad-bottom .ad-slot ins {
-    display: block !important;
-    width: 100% !important;
-    max-width: 100% !important;
-    box-sizing: border-box !important;
-  }
-  .mm-ad-bottom .ad-slot ins * {
-    max-width: 100% !important;
-    box-sizing: border-box !important;
-  }
-  .mm-ad-bottom .ad-slot ins > * {
-    width: 100% !important;
-    max-width: 100% !important;
-  }
-  .mm-ad-bottom .ad-slot ins iframe,
-  .mm-ad-bottom .ad-slot ins img,
-  .mm-ad-bottom .ad-slot ins picture,
-  .mm-ad-bottom .ad-slot ins video {
-    width: 100% !important;
-    max-width: 100% !important;
-    height: auto !important;
-  }
-  @media (min-width: 768px) {
-    .mm-ad-bottom .ad-slot,
-    .mm-ad-bottom .ad-slot ins,
-    .mm-ad-bottom .ad-slot ins > * {
-      max-width: 480px !important;
-    }
+  .mm-ad-bottom {
+    display: flex;
+    justify-content: center;
   }
   .affiliate-btn {
     display: flex;

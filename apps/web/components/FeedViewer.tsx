@@ -71,7 +71,7 @@ export default function FeedViewer({
   const wheelLockRef  = useRef(false);
   const modalOpenRef  = useRef(false);
 
-  const adEnabled = isAdZoneEnabled("feedNative") && AD_FEED_INTERVAL > 0;
+  const adEnabled = isAdZoneEnabled("mobileBanner300x250") && AD_FEED_INTERVAL > 0;
 
   const [currentIndex, setCurrentIndex] = useState(0);
   const [slides, setSlides] = useState<FeedSlide[]>([]);

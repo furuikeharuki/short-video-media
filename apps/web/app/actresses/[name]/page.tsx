@@ -3,7 +3,7 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 
 import ActressBackButton from "@/components/ActressBackButton";
-import NativeAdWithMobileFallback from "@/components/ads/NativeAdWithMobileFallback";
+import AdSlot from "@/components/ads/AdSlot";
 import { getActressByName } from "@/lib/api/actresses";
 import HorizontalCardRow from "@/components/home/HorizontalCardRow";
 import MovieCardThumb from "@/components/home/MovieCardThumb";
@@ -286,7 +286,7 @@ export default async function ActressDetailPage({ params }: PageProps) {
 
         {/* 広告コンテナ */}
         <div style={styles.adBottom}>
-          <NativeAdWithMobileFallback />
+          <AdSlot zone="mobileBanner300x250" />
         </div>
       </div>
       <style>{pageCSS}</style>
@@ -522,54 +522,14 @@ const styles: Record<string, React.CSSProperties> = {
     marginTop: "16px",
     marginBottom: "8px",
     width: "100%",
-    maxWidth: "100%",
-    overflow: "hidden",
-    boxSizing: "border-box" as const,
+    display: "flex",
+    justifyContent: "center" as const,
   },
 };
 
 const pageCSS = `
   *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
   html, body { background: #0a0a0a !important; overflow: hidden !important; }
-
-  /* native広告 (ExoClick Recommendation Widget) を親幅まで広げる。
-     widget は ins の中に <div>/<a> を入れ子で生成し、内部 wrapper に
-     インライン style で固定 px 幅を当てる場合があるため、ins 直下の
-     widget root と入れ子全要素の max-width / width を強制する。 */
-  .ad-slot {
-    width: 100% !important;
-    max-width: 100% !important;
-    overflow: hidden !important;
-  }
-  .ad-slot ins {
-    display: block !important;
-    width: 100% !important;
-    max-width: 100% !important;
-    box-sizing: border-box !important;
-  }
-  .ad-slot ins * {
-    max-width: 100% !important;
-    box-sizing: border-box !important;
-  }
-  .ad-slot ins > * {
-    width: 100% !important;
-    max-width: 100% !important;
-  }
-  .ad-slot ins iframe,
-  .ad-slot ins img,
-  .ad-slot ins picture,
-  .ad-slot ins video {
-    width: 100% !important;
-    max-width: 100% !important;
-    height: auto !important;
-  }
-  @media (min-width: 768px) {
-    .ad-slot,
-    .ad-slot ins,
-    .ad-slot ins > * {
-      max-width: 480px !important;
-    }
-  }
 
   .goods-grid {
     display: grid;

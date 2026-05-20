@@ -3,7 +3,7 @@
 import { useRouter } from "next/navigation";
 import AffiliateLink from "@/components/analytics/affiliate-link";
 import ActressLink from "@/components/ActressLink";
-import NativeAdWithMobileFallback from "@/components/ads/NativeAdWithMobileFallback";
+import AdSlot from "@/components/ads/AdSlot";
 import { navigateRespectingModal } from "@/lib/modalNav";
 import type { MovieDetail } from "@/lib/api/movies";
 import type { MouseEvent } from "react";
@@ -139,7 +139,7 @@ export default function MovieDetailContent({ movie }: Props) {
         </div>
 
         <div className="mdc-ad-bottom">
-          <NativeAdWithMobileFallback />
+          <AdSlot zone="mobileBanner300x250" />
         </div>
       </div>
 
@@ -212,51 +212,8 @@ export default function MovieDetailContent({ movie }: Props) {
         .mdc-ad-bottom {
           margin-top: 24px;
           width: 100%;
-          max-width: 100%;
-          overflow: hidden;
-          box-sizing: border-box;
-        }
-
-        /* native広告 (ExoClick Recommendation Widget) を親幅まで広げる。
-           widget は ins の中に <div>/<a> を入れ子で生成し、内部 wrapper に
-           インライン style で固定 px 幅 (300px 等) を当てるため、
-           ins 直下の widget root と、入れ子全要素の max-width を強制する。
-           グローバル globals.css の .ad-slot ルールと同等の内容をここでも
-           スコープ付きで重ねがけしているのは、CSS modules / styled-jsx 等で
-           globals が上書きされる事故を防ぐため。 */
-        .mdc-ad-bottom .ad-slot {
-          width: 100% !important;
-          max-width: 100% !important;
-          overflow: hidden !important;
-        }
-        .mdc-ad-bottom .ad-slot ins {
-          display: block !important;
-          width: 100% !important;
-          max-width: 100% !important;
-          box-sizing: border-box !important;
-        }
-        .mdc-ad-bottom .ad-slot ins * {
-          max-width: 100% !important;
-          box-sizing: border-box !important;
-        }
-        .mdc-ad-bottom .ad-slot ins > * {
-          width: 100% !important;
-          max-width: 100% !important;
-        }
-        .mdc-ad-bottom .ad-slot ins iframe,
-        .mdc-ad-bottom .ad-slot ins img,
-        .mdc-ad-bottom .ad-slot ins picture,
-        .mdc-ad-bottom .ad-slot ins video {
-          width: 100% !important;
-          max-width: 100% !important;
-          height: auto !important;
-        }
-        @media (min-width: 768px) {
-          .mdc-ad-bottom .ad-slot,
-          .mdc-ad-bottom .ad-slot ins,
-          .mdc-ad-bottom .ad-slot ins > * {
-            max-width: 480px !important;
-          }
+          display: flex;
+          justify-content: center;
         }
 
         .affiliate-btn {

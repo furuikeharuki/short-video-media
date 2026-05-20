@@ -87,13 +87,13 @@ async function fetchPage(
 }
 
 function FeedNativeAd({ adIndex }: { adIndex: number }) {
-  if (!isAdZoneEnabled("feedNative")) {
+  if (!isAdZoneEnabled("mobileBanner300x250")) {
     return null;
   }
   return (
     <div className="search-grid-ad">
       <AdSlot
-        zone="feedNative"
+        zone="mobileBanner300x250"
         context={`feed-${adIndex}`}
         label="広告"
       />
@@ -285,21 +285,9 @@ const pageCSS = `
   .search-grid > .mct { width: 100%; min-width: 0; }
   .search-grid-ad {
     grid-column: 1 / -1;
-    width: 100%;
-    max-width: 100%;
-    overflow: hidden;
-    box-sizing: border-box;
+    display: flex;
+    justify-content: center;
     padding: 4px 0;
-  }
-  .search-grid-ad .ad-slot {
-    width: 100% !important;
-    max-width: 100% !important;
-  }
-  .search-grid-ad .ad-slot ins,
-  .search-grid-ad .ad-slot iframe,
-  .search-grid-ad .ad-slot img {
-    max-width: 100% !important;
-    box-sizing: border-box !important;
   }
   @media (min-width: 640px) {
     .search-grid { grid-template-columns: repeat(5, minmax(0, 1fr)); }

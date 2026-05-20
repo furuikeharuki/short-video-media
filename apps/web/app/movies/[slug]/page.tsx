@@ -6,7 +6,7 @@ import AffiliateLink from "@/components/analytics/affiliate-link";
 import DetailViewTracker from "@/components/analytics/detail-view-tracker";
 import BackButton from "@/components/BackButton";
 import ActressLink from "@/components/ActressLink";
-import NativeAdWithMobileFallback from "@/components/ads/NativeAdWithMobileFallback";
+import AdSlot from "@/components/ads/AdSlot";
 import { getMovieBySlug } from "@/lib/api/movies";
 
 const SITE_NAME = "AV Shorts";
@@ -202,7 +202,7 @@ export default async function MovieDetailPage({ params }: PageProps) {
 
             {/* 広告は最大300pxに制限しセンタリング */}
             <div style={styles.adBottom}>
-              <NativeAdWithMobileFallback />
+              <AdSlot zone="mobileBanner300x250" />
             </div>
           </div>
         </main>
@@ -291,9 +291,8 @@ const styles: Record<string, React.CSSProperties> = {
   adBottom: {
     marginTop: '24px',
     width: '100%',
-    maxWidth: '100%',
-    overflow: 'hidden',
-    boxSizing: 'border-box' as const,
+    display: 'flex',
+    justifyContent: 'center' as const,
   },
 };
 
@@ -303,44 +302,6 @@ const pageCSS = `
     background: #0a0a0a !important;
     overflow: visible !important;
     height: auto !important;
-  }
-  /* 広告 (ExoClick Recommendation Widget) を親幅まで広げる。
-     widget は ins の中に <div>/<a> を入れ子で生成し、内部 wrapper に
-     インライン style で固定 px 幅を当てる場合があるため、ins 直下の
-     widget root と入れ子全要素の max-width / width を強制する。 */
-  .ad-slot {
-    width: 100% !important;
-    max-width: 100% !important;
-    overflow: hidden !important;
-  }
-  .ad-slot ins {
-    display: block !important;
-    width: 100% !important;
-    max-width: 100% !important;
-    box-sizing: border-box !important;
-  }
-  .ad-slot ins * {
-    max-width: 100% !important;
-    box-sizing: border-box !important;
-  }
-  .ad-slot ins > * {
-    width: 100% !important;
-    max-width: 100% !important;
-  }
-  .ad-slot ins iframe,
-  .ad-slot ins img,
-  .ad-slot ins picture,
-  .ad-slot ins video {
-    width: 100% !important;
-    max-width: 100% !important;
-    height: auto !important;
-  }
-  @media (min-width: 768px) {
-    .ad-slot,
-    .ad-slot ins,
-    .ad-slot ins > * {
-      max-width: 480px !important;
-    }
   }
   .affiliate-btn {
     display: flex; align-items: center; justify-content: center;

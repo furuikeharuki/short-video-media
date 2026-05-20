@@ -306,14 +306,27 @@ function GlobalFilterButtonInner() {
       const nextUrl = qs ? `${basePath}?${qs}` : basePath;
 
       setOpen(false);
-      // 同一 URL でも navigation を強制したいので、現在の URL と差分が無い場合は
-      // hard navigation (window.location.assign) で確実に状態をクリア&再フェッチさせる。
+      // /feed (ショート動画) から適用したときは、必ずフルページ遷移で再ロードする。
+      // 理由: /feed は @modal 並列ルート / pushState / <video> ライフサイクル副作用で
+      // SPA 遷移時の searchParams 反映が不安定で、適用ボタンを押しても新条件で
+      // ロードし直されない (= 即時反映されない) ことが起きていた。
+      // ユーザ要望 "ショート動画画面をリロードでいいかも" に合わせて、/feed では
+      // 常に window.location.assign で確実にフィードを再起動させる。
+      const isFeed = pathname === "/feed" || pathname.startsWith("/feed/");
+      if (isFeed) {
+        if (typeof window !== "undefined") {
+          window.location.assign(nextUrl);
+        } else {
+          router.replace(nextUrl);
+        }
+        return;
+      }
+
+      // /search 系: 同一 URL でも navigation を強制したいので、現在の URL と差分が
+      // 無い場合は hard navigation で確実に状態をクリア&再フェッチさせる。
       const currentSearch = urlKey ? `?${urlKey}` : "";
       const currentUrl = `${pathname}${currentSearch}`;
       if (nextUrl === currentUrl) {
-        // クリア → 適用 で同一 URL のままになるケース。
-        // router.replace でも searchParams は変わるが、SSR 経路 (search) ではサーバ
-        // コンポーネントの再描画が始まらない/遅いことがあるので、確実に再フェッチさせる。
         if (typeof window !== "undefined") {
           window.location.assign(nextUrl);
         } else {

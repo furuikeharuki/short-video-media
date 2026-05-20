@@ -27,9 +27,17 @@ function isAllowedKey(key: string): key is Exclude<HomeSectionKey, "genre"> {
 export async function generateMetadata({ params }: Props): Promise<Metadata> {
   const { key } = await params;
   const title = KEY_TITLES[key] ?? "一覧";
+  const known = key in KEY_TITLES;
   return {
     title,
-    description: `${title}の作品一覧。`,
+    description: `${title}のAVショート動画作品一覧。FANZAで配信中の人気・新着・ランキング作品をまとめてチェックできます。`,
+    alternates: known ? { canonical: `/list/${key}` } : undefined,
+    openGraph: {
+      title,
+      description: `${title}のAVショート動画作品一覧。`,
+      url: known ? `/list/${key}` : undefined,
+    },
+    robots: known ? undefined : { index: false, follow: true },
   };
 }
 

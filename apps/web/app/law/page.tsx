@@ -2,8 +2,15 @@ import Link from "next/link";
 import type { Metadata } from "next";
 
 export const metadata: Metadata = {
-  title: "特定商取引法に基づく表記 | AVShorts",
-  description: "AVShorts の特定商取引法に基づく表記ページです。",
+  title: "特定商取引法に基づく表記",
+  description:
+    "AV Shorts の特定商取引法に基づく表記。販売事業者・問い合わせ先・年齢制限・返品キャンセル等に関する事項を記載しています。",
+  alternates: { canonical: "/law" },
+  openGraph: {
+    title: "特定商取引法に基づく表記",
+    description: "AV Shorts の特定商取引法に基づく表記。",
+    url: "/law",
+  },
 };
 
 export default function LawPage() {

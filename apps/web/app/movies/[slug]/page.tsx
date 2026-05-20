@@ -8,9 +8,7 @@ import BackButton from "@/components/BackButton";
 import ActressLink from "@/components/ActressLink";
 import AdSlot from "@/components/ads/AdSlot";
 import { getMovieBySlug } from "@/lib/api/movies";
-
-const SITE_NAME = "AV Shorts";
-const SITE_URL = "https://av-shorts.com";
+import { SITE_NAME, SITE_URL, SITE_LOCALE } from "@/lib/config/seo";
 
 type PageProps = {
   params: Promise<{ slug: string }>;
@@ -38,7 +36,7 @@ export async function generateMetadata({ params }: PageProps): Promise<Metadata>
         description,
         images: imageUrl ? [{ url: imageUrl, width: 720, height: 1280, alt: movie.title }] : [],
         siteName: SITE_NAME,
-        locale: "ja_JP",
+        locale: SITE_LOCALE,
       },
       twitter: {
         card: "summary_large_image",
@@ -108,36 +106,64 @@ export default async function MovieDetailPage({ params }: PageProps) {
       { label: "メーカー品番", value: movie.maker_product ?? NA },
     ];
 
-    const jsonLd = {
+    const uploadDate = movie.delivery_date ?? movie.release_date ?? undefined;
+    const videoJsonLd = {
       "@context": "https://schema.org",
       "@type": "VideoObject",
       name: movie.title,
       description: movie.description ?? `${movie.actresses.join("・")}出演作品`,
-      thumbnailUrl: imgSrc,
-      uploadDate: movie.delivery_date ?? movie.release_date ?? "",
+      thumbnailUrl: imgSrc || undefined,
+      uploadDate,
       duration: movie.volume ? `PT${movie.volume}M` : undefined,
       contentUrl: canonical,
       embedUrl: canonical,
+      genre: movie.genres.length > 0 ? movie.genres : undefined,
+      actor:
+        movie.actresses.length > 0
+          ? movie.actresses.map((name) => ({ "@type": "Person", name }))
+          : undefined,
+      director: movie.director_name
+        ? { "@type": "Person", name: movie.director_name }
+        : undefined,
       author: {
         "@type": "Organization",
         name: movie.maker_name ?? SITE_NAME,
       },
-      aggregateRating: hasReview ? {
-        "@type": "AggregateRating",
-        ratingValue: movie.review_average,
-        reviewCount: movie.review_count,
-        bestRating: 5,
-        worstRating: 1,
-      } : undefined,
+      aggregateRating: hasReview
+        ? {
+            "@type": "AggregateRating",
+            ratingValue: movie.review_average,
+            reviewCount: movie.review_count,
+            bestRating: 5,
+            worstRating: 1,
+          }
+        : undefined,
+    };
+
+    const breadcrumbJsonLd = {
+      "@context": "https://schema.org",
+      "@type": "BreadcrumbList",
+      itemListElement: [
+        { "@type": "ListItem", position: 1, name: "ホーム", item: SITE_URL },
+        {
+          "@type": "ListItem",
+          position: 2,
+          name: movie.title,
+          item: canonical,
+        },
+      ],
     };
 
     return (
       <>
         <script
           type="application/ld+json"
-          dangerouslySetInnerHTML={{ __html: JSON.stringify(jsonLd) }}
+          dangerouslySetInnerHTML={{ __html: JSON.stringify(videoJsonLd) }}
         />
-        <link rel="canonical" href={canonical} />
+        <script
+          type="application/ld+json"
+          dangerouslySetInnerHTML={{ __html: JSON.stringify(breadcrumbJsonLd) }}
+        />
         <main style={styles.main}>
           <DetailViewTracker slug={movie.slug} title={movie.title} />
 

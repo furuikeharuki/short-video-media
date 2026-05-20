@@ -1,6 +1,5 @@
 import type { MetadataRoute } from "next";
-
-const SITE_URL = "https://av-shorts.com";
+import { SITE_URL } from "@/lib/config/seo";
 
 export default function robots(): MetadataRoute.Robots {
   return {
@@ -8,9 +7,19 @@ export default function robots(): MetadataRoute.Robots {
       {
         userAgent: "*",
         allow: "/",
-        disallow: ["/api/", "/age-gate/"],
+        disallow: [
+          "/api/",
+          "/age-gate",
+          "/age-gate/",
+          "/mypage",
+          "/mypage/",
+          "/auth/",
+          "/search",
+          "/search/",
+        ],
       },
     ],
     sitemap: `${SITE_URL}/sitemap.xml`,
+    host: SITE_URL,
   };
 }

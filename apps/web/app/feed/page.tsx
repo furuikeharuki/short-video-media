@@ -3,7 +3,15 @@ import FeedClient from "@/app/FeedClient";
 
 export const metadata: Metadata = {
   title: "ショートフィード",
-  description: "AVをショート動画で試し見。気に入ったらFANZAでそのまま購入できるアダルト動画メディア。",
+  description:
+    "縦スクロールで次々と試し見できるAVショート動画フィード。気に入った作品はFANZAでそのまま購入できます。",
+  alternates: { canonical: "/feed" },
+  openGraph: {
+    title: "ショートフィード",
+    description:
+      "縦スクロールで次々と試し見できるAVショート動画フィード。",
+    url: "/feed",
+  },
 };
 
 export default function FeedPage() {

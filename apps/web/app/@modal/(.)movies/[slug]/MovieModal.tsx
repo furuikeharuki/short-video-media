@@ -6,7 +6,7 @@ import { useEffect, useMemo, useRef } from "react";
 import AffiliateLink from "@/components/analytics/affiliate-link";
 import DetailViewTracker from "@/components/analytics/detail-view-tracker";
 import ActressLink from "@/components/ActressLink";
-import AdSlot from "@/components/ads/AdSlot";
+import ModalAdPortal from "@/components/ads/ModalAdPortal";
 import type { MovieDetail } from "@/lib/api/movies";
 
 const NA = "----";
@@ -175,28 +175,17 @@ export default function MovieModal({ movie }: { movie: MovieDetail }) {
                 title={movie.title}
               />
             </div>
-
-            {/*
-              context="modal" でページの AdSlot (context="page") と
-              sessionStorage キーを分離し、状態が混在しないようにする。
-              priority=true で:
-               - IntersectionObserver の交差判定を待たずに mount 直後に serve を発火し
-                 (モーダルの <ins> は最初スクロール下にあるため intersecting にならない)
-               - serve push 直前に、背後フィードに残っている同じ zoneid の <ins>
-                 (FeedAdSlide) の data-zoneid を退避することで、provider がフィード側に
-                 serve を取られてモーダル <ins> が空のまま残るのを防ぐ。
-            */}
-            <div className="mm-ad-bottom" style={adBottomStyle}>
-              <AdSlot
-                key={`home-modal-ad-${movie.slug}-${openInstanceId}`}
-                zone="mobileBanner300x250"
-                context="modal"
-                priority
-              />
-            </div>
           </div>
         </div>
       </div>
+
+      {/*
+        モーダル広告は modalStyle (position:fixed + 子要素のスクロール) の *外* に
+        分離して描画する。creative iframe が transform / overflow:auto 祖先内で
+        「Visibility: hidden」になり polling を止める症状を避けるため。詳細は
+        ModalAdPortal の JSDoc 参照。
+      */}
+      <ModalAdPortal adKey={`home-modal-ad-${movie.slug}-${openInstanceId}`} />
 
       <style>{modalCSS}</style>
     </>
@@ -285,7 +274,10 @@ const backBtnStyle: React.CSSProperties = {
 
 const contentStyle: React.CSSProperties = {
   padding: "20px 16px",
-  paddingBottom: "calc(var(--bottom-nav-h, 56px) + env(safe-area-inset-bottom, 0px) + 10px)" as unknown as string,
+  // ModalAdPortal が画面下に固定枠で重なるため、その分の余白を確保する
+  // (300x250 + 上下 padding + bottom-nav + safe-area)。
+  paddingBottom:
+    "calc(290px + var(--bottom-nav-h, 56px) + env(safe-area-inset-bottom, 0px))" as unknown as string,
   width: "100%",
   boxSizing: "border-box",
 };
@@ -399,18 +391,7 @@ const ctaStyle: React.CSSProperties = {
   gap: "12px",
 };
 
-const adBottomStyle: React.CSSProperties = {
-  marginTop: "24px",
-  width: "100%",
-  display: "flex",
-  justifyContent: "center",
-};
-
 const modalCSS = `
-  .mm-ad-bottom {
-    display: flex;
-    justify-content: center;
-  }
   .affiliate-btn {
     display: flex;
     align-items: center;

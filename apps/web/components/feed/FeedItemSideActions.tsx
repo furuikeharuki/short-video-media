@@ -202,12 +202,18 @@ export default function FeedItemSideActions({
       </button>
 
       <a
-        href={item.affiliate_url}
+        href={item.affiliate_url || "#"}
         target="_blank"
-        rel="noopener noreferrer"
+        // FANZA アフィリエイト遷移なので sponsored を付ける (Google ガイドライン)。
+        rel="noopener noreferrer sponsored"
         className="side-btn side-btn--buy"
         aria-label="購入する"
-        onClick={(e) => e.stopPropagation()}
+        aria-disabled={item.affiliate_url ? undefined : true}
+        onClick={(e) => {
+          e.stopPropagation();
+          // affiliate_url が空のレコード (データ欠落) は不本意な同一ページ遷移を防ぐ
+          if (!item.affiliate_url) e.preventDefault();
+        }}
         onTouchStart={buyOnTouchStart}
         onTouchEnd={buyOnTouchEnd}
       >

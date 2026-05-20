@@ -124,6 +124,17 @@ export default function FeedViewer({
   const touchStartedOnInteractiveRef = useRef(false);
   /** touchmove で一度でも SWIPE_LOCK_THRESHOLD を超えたか */
   const swipeLockedRef        = useRef(false);
+  /**
+   * `slides.length` を ref で持つ。touch listener の effect から slides を依存に
+   * 取ると、fetchMore で setSlides されるたびに addEventListener / removeEventListener
+   * が走り、もしユーザが進行中のスワイプを持っていたとき touchend が新旧どちらの
+   * リスナーで処理されるか不安定になって「下に進めなくなる」状態になる。
+   * ref 化することで listener は一度しか attach せず、最新値だけ参照する。
+   */
+  const slidesLengthRef = useRef(0);
+
+  // touch listener が参照するための ref を毎レンダー同期 (再 attach しないため)
+  slidesLengthRef.current = slides.length;
 
   useEffect(() => {
     const now = Date.now();
@@ -270,7 +281,7 @@ export default function FeedViewer({
       }
       e.preventDefault();
 
-      const atEnd = currentIdxRef.current >= slides.length - 1;
+      const atEnd = currentIdxRef.current >= slidesLengthRef.current - 1;
       const atTop = currentIdxRef.current <= 0;
       setDragPx((dy > 0 && atTop) || (dy < 0 && atEnd) ? dy * 0.35 : dy);
     };
@@ -311,19 +322,40 @@ export default function FeedViewer({
       if (e.deltaY > 0) goNext(); else goPrev();
     };
 
+    // タブ切り替え / 戻る / 別ページ遷移 等でジェスチャ refs が "進行中" の
+    // まま残ると、復帰後の最初のスワイプが効かない/方向が反転する症状になる。
+    // visibilitychange と pagehide で確実にリセットする。
+    const resetGesture = () => {
+      isDragging.current = false;
+      swipeLockedRef.current = false;
+      touchStartedInNavRef.current = false;
+      touchStartedOnInteractiveRef.current = false;
+      wheelLockRef.current = false;
+      setDragPx(0);
+    };
+    const onVisibilityChange = () => {
+      if (document.visibilityState === "hidden") resetGesture();
+    };
+
     el.addEventListener("touchstart",  onTouchStart,  { passive: true });
     el.addEventListener("touchmove",   onTouchMove,   { passive: false });
     el.addEventListener("touchend",    onTouchEnd,    { passive: true });
     el.addEventListener("touchcancel", onTouchCancel, { passive: true });
     el.addEventListener("wheel",       onWheel,       { passive: false });
+    document.addEventListener("visibilitychange", onVisibilityChange);
+    window.addEventListener("pagehide", resetGesture);
     return () => {
       el.removeEventListener("touchstart",  onTouchStart);
       el.removeEventListener("touchmove",   onTouchMove);
       el.removeEventListener("touchend",    onTouchEnd);
       el.removeEventListener("touchcancel", onTouchCancel);
       el.removeEventListener("wheel",       onWheel);
+      document.removeEventListener("visibilitychange", onVisibilityChange);
+      window.removeEventListener("pagehide", resetGesture);
     };
-  }, [goNext, goPrev, slides]);
+    // touch listener は一度だけ attach する。slides の変化は slidesLengthRef で吸収。
+    // goNext / goPrev も useCallback で安定参照だが、念のためデップに含める。
+  }, [goNext, goPrev]);
 
   return (
     <div ref={containerRef} className="feed-container">

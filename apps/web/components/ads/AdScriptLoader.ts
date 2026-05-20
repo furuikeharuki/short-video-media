@@ -99,47 +99,32 @@ export function serveAd(provider: Provider): void {
 }
 
 /**
- * provider の状態を完全リセットしてから serve を呼び直す。
+ * provider に「もう一度 serve をかけて DOM を rescan させる」よう依頼する。
  *
  * 用途: ホームに戻ってきた直後など「現在 DOM にいる <ins> 群を一括で拾い直したい」
  *      タイミングで呼ぶ。クールダウン (RESET_COOLDOWN_MS) を入れてあるので、複数の
  *      AdSlot が同時に呼んでも 1 回しか効かない。
  *
- * 実装:
- *   1) 既存の <script data-ad-provider="..."> を削除
- *   2) window.AdProvider を空配列に置き直し (現 push 実装を捨てる)
- *   3) scriptInjected[provider]=false にして次回 ensureProviderScript で再注入
- *   4) 即時 push({serve:{}}) (ロード前ならキューに溜まり、ロード後の初期
- *      スキャンで未処理 <ins> 群と一緒に処理される)
+ * 以前は「<script> を削除 → \`window.AdProvider = []\` で push 実装を破棄 →
+ *  再注入 → push」という destructive reset を行っていたが、これが原因で
+ *  ad-provider.js 内部の setTimeout ループが破棄済みの内部キューを参照し
+ *  \`Cannot read properties of null (reading 'length')\` を連発させていた。
+ *  provider はロード後に自前で DOM を再スキャンするので、明示 push だけで十分。
+ *  destructive reset は廃止する。
  */
 export function resetAndServeAd(provider: Provider): void {
   if (typeof window === "undefined") return;
   const now = Date.now();
-  // lastResetAt を window に持たせる。
-  // モジュールレベル変数は Next.js の Hot Module Replacement でリセットされないが、
-  // window はページ遷移でリセットされるためクールダウンも正しくリセットされる。
   const WIN_KEY = `__adResetAt_${provider}` as keyof Window;
   const lastReset = (window[WIN_KEY] as number | undefined) ?? 0;
   if (now - lastReset < RESET_COOLDOWN_MS) {
     // 直近で reset 済み。並行した他 AdSlot からの呼び出しの場合は何もしない。
-    // (既に reset 後の serve が走っているので追加 serveAd 不要)
     return;
   }
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   (window as any)[WIN_KEY] = now;
 
-  const scripts = document.querySelectorAll<HTMLScriptElement>(
-    `script[data-ad-provider="${provider}"]`,
-  );
-  scripts.forEach((s) => s.parentNode?.removeChild(s));
-  window.AdProvider = [];
-  scriptInjected[provider] = false;
-
-  ensureGlobal();
-  ensureProviderScript(provider);
-  try {
-    window.AdProvider!.push({ serve: {} });
-  } catch {
-    /* ignore */
-  }
+  // <script> や window.AdProvider は触らない (provider 内部の状態を壊さないため)。
+  // 単純に再 serve を依頼するだけ。
+  serveAd(provider);
 }

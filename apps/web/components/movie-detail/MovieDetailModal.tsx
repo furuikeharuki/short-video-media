@@ -5,7 +5,7 @@ import { createPortal } from "react-dom";
 import type { MovieDetail } from "@/lib/api/movies";
 import MovieDetailContent from "./MovieDetailContent";
 import DetailViewTracker from "@/components/analytics/detail-view-tracker";
-import AdSlot from "@/components/ads/AdSlot";
+import ModalAdPortal from "@/components/ads/ModalAdPortal";
 
 interface Props {
   slug: string;
@@ -212,45 +212,24 @@ export default function MovieDetailModal({ slug, onClose }: Props) {
             <>
               <DetailViewTracker slug={movie.slug} title={movie.title} />
               {/*
-                フィード上で開かれる portal モーダル経路。背後のフィード DOM に
-                FeedAdSlide の <ins> (同一 zoneid) が残っているため、AdSlot を
-                priority モードで動かして provider がモーダル <ins> を確実に
-                埋めるようにする。 AdSlot 自体は state に依存せずモーダルマウント
-                直後にこの下で常に描画される (詳細 fetch が遅延・失敗しても
-                provider への push が空振りしないようにするため)。
+                モーダル内では AdSlot をコンテンツ内に描画しない。 ExoClick の
+                creative iframe が transform / overflow:auto 祖先で「Visibility:
+                hidden」と誤判定し polling を止める症状を避けるため、広告は
+                ModalAdPortal で document.body 直下の固定枠に分離して描画する。
               */}
-              <MovieDetailContent movie={movie} adPriority hideAd />
+              <MovieDetailContent movie={movie} hideAd />
             </>
           )}
-
-          {/*
-            広告 <ins> はモーダルが開いた瞬間に常にマウントする。
-            これにより MovieDetail の fetch が遅延 / 失敗しても、provider への
-            最初の push 時点で <ins data-zoneid=5929910> が DOM に存在し、
-            「ホーム側 5929930 だけが Request にバッチされ、5929910 が一度も
-            push されない」という症状を防ぐ。
-
-            さらに `key={slug}` で modal を開くごとに AdSlot を完全に remount する。
-            provider 内部に前回 modal の `<ins>` 参照が残っていたり、serve 済み
-            フラグが立っていても、新しい React tree + 新しい DOM ノードで毎回
-            やり直しになるため、「初回モーダルは出るが 2 回目以降は出ない」
-            (provider が 2 回目の `<ins>` に iframe を入れていても背後の古い
-             ノードに入っていた等の) ケースを抑止する。
-
-            視覚的位置は MovieDetailContent と同様にコンテンツ末尾 (CTA の前)
-            を狙うが、ロード中でも幅 100% のスロットとして mdm-scroll の末尾に
-            描画される。
-          */}
-          <div className="mdm-ad-bottom">
-            <AdSlot
-              key={`modal-ad-${slug}-${openInstanceId}`}
-              zone="mobileBanner300x250"
-              context="modal"
-              priority
-            />
-          </div>
         </div>
       </div>
+
+      {/*
+        モーダル広告は mdm-sheet (transform 含む) と mdm-scroll (overflow:auto) の
+        *外* に分離して描画する。詳細は ModalAdPortal の JSDoc を参照。
+        key にモーダル open 毎の openInstanceId を含めることで、毎回新しい <ins>
+        として mount し、provider 内部に残った前回 <ins> 参照との衝突を避ける。
+      */}
+      <ModalAdPortal adKey={`modal-ad-${slug}-${openInstanceId}`} />
 
       <style>{`
         .mdm-backdrop {
@@ -311,6 +290,9 @@ export default function MovieDetailModal({ slug, onClose }: Props) {
           overflow-y: auto;
           -webkit-overflow-scrolling: touch;
           overscroll-behavior: contain;
+          /* ModalAdPortal が画面下部に固定枠で重なるため、その分の余白を確保する。
+             300x250 + 上下 padding + bottom-nav 分を見込んだ高めの値。 */
+          padding-bottom: calc(290px + var(--bottom-nav-h, 0px) + env(safe-area-inset-bottom, 0px));
         }
 
         .mdm-loading {
@@ -329,20 +311,6 @@ export default function MovieDetailModal({ slug, onClose }: Props) {
         .mdm-error {
           display: flex; align-items: center; justify-content: center;
           height: 200px; color: rgba(255,255,255,0.5); font-size: 14px;
-        }
-
-        /* モーダル末尾の広告スロット位置。MovieDetailContent の .mdc-ad-bottom と
-           同等のレイアウト (中央寄せ・上マージン) を維持する。
-           detail fetch が ready になる前から DOM 上に <ins> を置いておくための
-           「常駐」スロットなので、ロード中はスクロール末尾の余白として見える。 */
-        .mdm-ad-bottom {
-          width: 100%;
-          display: flex;
-          justify-content: center;
-          margin-top: 24px;
-          margin-bottom: 24px;
-          padding: 0 16px;
-          box-sizing: border-box;
         }
       `}</style>
     </>,

@@ -196,13 +196,13 @@ export default async function MovieDetailPage({ params }: PageProps) {
             {movie.description && (
               <p style={styles.description}>{movie.description}</p>
             )}
-            <div style={styles.ctaArea}>
-              <AffiliateLink href={movie.affiliate_url} slug={movie.slug} title={movie.title} />
-            </div>
-
             {/* 広告は最大300pxに制限しセンタリング */}
             <div style={styles.adBottom}>
               <AdSlot zone="mobileBanner300x250" />
+            </div>
+
+            <div style={styles.ctaArea}>
+              <AffiliateLink href={movie.affiliate_url} slug={movie.slug} title={movie.title} />
             </div>
           </div>
         </main>
@@ -290,6 +290,7 @@ const styles: Record<string, React.CSSProperties> = {
   ctaArea: { display: 'flex', flexDirection: 'column' as const, gap: '12px' },
   adBottom: {
     marginTop: '24px',
+    marginBottom: '10px',
     width: '100%',
     display: 'flex',
     justifyContent: 'center' as const,

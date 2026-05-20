@@ -134,12 +134,12 @@ export default function MovieDetailContent({ movie }: Props) {
           <p className="mdc-description">{movie.description}</p>
         )}
 
-        <div className="mdc-cta">
-          <AffiliateLink href={movie.affiliate_url} slug={movie.slug} title={movie.title} />
-        </div>
-
         <div className="mdc-ad-bottom">
           <AdSlot zone="mobileBanner300x250" />
+        </div>
+
+        <div className="mdc-cta">
+          <AffiliateLink href={movie.affiliate_url} slug={movie.slug} title={movie.title} />
         </div>
       </div>
 
@@ -211,6 +211,7 @@ export default function MovieDetailContent({ movie }: Props) {
         .mdc-cta { display: flex; flex-direction: column; gap: 12px; }
         .mdc-ad-bottom {
           margin-top: 24px;
+          margin-bottom: 10px;
           width: 100%;
           display: flex;
           justify-content: center;

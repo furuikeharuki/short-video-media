@@ -102,8 +102,11 @@ export default function BottomNav() {
   const [isFeedModalOpen, setIsFeedModalOpen] = useState(false);
 
   useEffect(() => {
-    const onOpen  = () => setIsFeedModalOpen(true);
-    const onClose = () => setIsFeedModalOpen(false);
+    // 同値の setState は React がスケジューラ段階で bail-out するが、
+    // 「modal-open / modal-close が連続で来る」シーンを明示的に no-op にしておく
+    // (StrictMode 二重実行や、親側でモーダルを再 mount したときの安全弁)。
+    const onOpen  = () => setIsFeedModalOpen((prev) => (prev ? prev : true));
+    const onClose = () => setIsFeedModalOpen((prev) => (prev ? false : prev));
     window.addEventListener("modal-open",  onOpen);
     window.addEventListener("modal-close", onClose);
     return () => {
@@ -120,16 +123,29 @@ export default function BottomNav() {
   const isDragging = useRef(false);
   const [progress, setProgress] = useState(0);
 
+  // 「ショートページにいるかどうか」を ref にミラーして、video-progress リスナを
+  // useEffect の依存に乗せずに済むようにする。依存に isShortPage を載せていた以前の
+  // 実装では、modal-open/close で isFeedModalOpen が変化するたびに effect cleanup →
+  // setup が走り、video-progress (60fps) との組合せで稀に React の更新スタック
+  // (Maximum update depth exceeded) を踏むケースがあった。リスナはマウント中
+  // 1 度だけ登録し、ハンドラ内で ref を見て setState するか判断する。
+  const isShortPageRef = useRef(isShortPage);
   useEffect(() => {
-    if (!isShortPage) return;
+    isShortPageRef.current = isShortPage;
+  }, [isShortPage]);
+
+  useEffect(() => {
     const handler = (e: CustomEvent<{ progress: number }>) => {
-      if (!isDragging.current) {
-        setProgress(e.detail.progress);
-      }
+      if (!isShortPageRef.current) return;
+      if (isDragging.current) return;
+      const next = e.detail.progress;
+      // 同値で setState すると React は bail-out するが、念のため明示的にガードして
+      // 不要な再レンダーを完全に避ける。
+      setProgress((prev) => (prev === next ? prev : next));
     };
     window.addEventListener("video-progress", handler);
     return () => window.removeEventListener("video-progress", handler);
-  }, [isShortPage]);
+  }, []);
 
   const seek = useCallback((clientX: number) => {
     const track = trackRef.current;

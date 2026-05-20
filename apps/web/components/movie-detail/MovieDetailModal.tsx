@@ -57,11 +57,15 @@ export default function MovieDetailModal({ slug, onClose }: Props) {
     return () => { cancelled = true; };
   }, [slug]);
 
+  // 依存配列なしの useEffect は毎レンダー再実行されてイベントリスナの登録/解除を繰り返す。
+  // ここでは Escape 押下時に handleClose を呼びたいだけなので、ref 経由で最新の handleClose
+  // を参照し、リスナはマウント中 1 回だけ登録する。
+  const handleCloseRef = useRef<() => void>(() => {});
   useEffect(() => {
-    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") handleClose(); };
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") handleCloseRef.current(); };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  });
+  }, []);
 
   useEffect(() => {
     const prev = window.location.pathname + window.location.search;
@@ -100,6 +104,11 @@ export default function MovieDetailModal({ slug, onClose }: Props) {
     setVisible(false);
     setTimeout(onClose, 300);
   }, [onClose]);
+
+  // keydown / popstate ハンドラから常に最新の handleClose を呼べるように ref を同期する。
+  useEffect(() => {
+    handleCloseRef.current = handleClose;
+  }, [handleClose]);
 
   const onTouchStart = useCallback((e: React.TouchEvent<HTMLDivElement>) => {
     const scroll = scrollRef.current;

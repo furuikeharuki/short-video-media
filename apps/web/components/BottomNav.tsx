@@ -1,10 +1,9 @@
 "use client";
 
 import Link from "next/link";
-import { usePathname, useRouter } from "next/navigation";
+import { usePathname } from "next/navigation";
 import { useEffect, useRef, useCallback, useState } from "react";
 import { markFeedStartUnmuted } from "@/lib/feedNav";
-import { navigateRespectingModal } from "@/lib/modalNav";
 
 // ショートボタンを押して /feed に遷移するときに、保存されているフィードのスナップショットを破棄して
 // ランダム再生を保証する。FeedClient 側は sessionStorage が空なら getFeed を新しい seed で取り直す。
@@ -95,7 +94,6 @@ const NAV_HIDDEN_PATHS = ["/age-gate", "/actresses", "/movies"];
 
 export default function BottomNav() {
   const pathname    = usePathname();
-  const router      = useRouter();
   // /feed 上で MovieDetailModal を開いている間 true。
   // pushState によって pathname が /movies/<slug> に変わっても、BottomNav は
   // フィード視聴中と同じ振る舞い (表示 + シークバー + ショートアクティブ) を維持する。
@@ -240,11 +238,33 @@ export default function BottomNav() {
           ) {
             return;
           }
-          e.preventDefault();
-          // 動画詳細モーダル中 (URL バーが /movies/ から始まる) は SPA 遷移すると
-          // MovieDetailModal の cleanup で router.push が打ち消されるため、
-          // ActressLink と同じくフルページ遷移に切り替える。
-          navigateRespectingModal(item.href, () => router.push(item.href));
+          // /feed (ショート動画画面) からの離脱は常にフルページ遷移にする。
+          //
+          // フィード画面は以下が複雑に絡んでおり、SPA 遷移 (router.push / <Link>) では
+          // 確実に動かない:
+          //   1. MovieDetailModal が window.history.pushState で URL を /movies/<slug> に
+          //      書き換え、unmount 時に replaceState で戻す。Next.js 15 のパッチ済 history
+          //      API はこれを usePathname に反映するが、cleanup のタイミングで router.push が
+          //      打ち消されることがある。
+          //   2. @modal 並列ルート (/(.)movies/[slug]) のスロット状態が、フィード上での
+          //      pushState/replaceState によって不整合を起こし、SPA 遷移が止まることがある。
+          //   3. FeedClient は <video>・sessionStorage・IntersectionObserver 等の副作用を
+          //      多数持ち、これらの cleanup と router.push が競合する。
+          //
+          // window.location.assign に統一すれば、ブラウザが新しい URL をフェッチして
+          // クリーンに遷移するため、上記いずれの状態にも左右されずホーム / マイページに
+          // 必ず遷移できる。フィードを離れる時点でフィードの全状態は再構築されるので、
+          // SPA 遷移にこだわる必要は薄い。
+          const onShortFeed =
+            pathname === "/feed" ||
+            pathname.startsWith("/search/feed") ||
+            pathname.startsWith("/movies/") ||
+            isFeedModalOpen;
+          if (onShortFeed && item.href !== "/feed") {
+            e.preventDefault();
+            window.location.assign(item.href);
+          }
+          // それ以外は <Link> のデフォルト挙動 (Next の SPA 遷移) に任せる。
         };
         return (
           <Link

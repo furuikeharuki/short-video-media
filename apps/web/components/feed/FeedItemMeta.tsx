@@ -1,25 +1,21 @@
 "use client";
 
-import { useRouter } from "next/navigation";
 import type { MovieCard } from "@/lib/api/feed";
 import { logEvent } from "@/lib/api/events";
-import { navigateRespectingModal } from "@/lib/modalNav";
 
 interface Props {
   item: MovieCard;
 }
 
 export default function FeedItemMeta({ item }: Props) {
-  const router = useRouter();
-
   const handleTagClick = (tag: string) => {
     // タグタップも「検索」として集計 (検索数ランキングに反映させる)
     logEvent({ event_type: "search", search_query: tag });
-    // モーダル中 (URL バーが /movies/ から始まる) は MovieDetailModal の
-    // replaceState で router.push が打ち消されるためフルページ遷移に切り替える。
-    // それ以外 (フィード本体) は通常通り SPA 遷移。
+    // /feed (ショート動画画面) からの遷移はフルページ遷移にして確実に動かす。
+    // BottomNav と同じ理由: pushState/replaceState・@modal 並列ルート・<video> 等の
+    // 副作用が SPA 遷移を不安定にするため。
     const href = `/search?genre=${encodeURIComponent(tag)}`;
-    navigateRespectingModal(href, () => router.push(href));
+    window.location.assign(href);
   };
 
   return (

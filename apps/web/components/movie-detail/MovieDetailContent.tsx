@@ -19,9 +19,16 @@ function formatDate(dateStr: string | null): string {
 
 interface Props {
   movie: MovieDetail;
+  /**
+   * 同じ zoneid の `<ins>` (フィードの FeedAdSlide 等) が背後の DOM に残っている
+   * モーダル経路で描画される場合に true を渡す。AdSlot が IntersectionObserver を
+   * 待たずに mount 直後で serve を発火し、競合する `<ins>` を一時的に隠して
+   * provider がモーダル側を確実に埋めるようにする。
+   */
+  adPriority?: boolean;
 }
 
-export default function MovieDetailContent({ movie }: Props) {
+export default function MovieDetailContent({ movie, adPriority = false }: Props) {
   const router = useRouter();
   const imgSrc = movie.image_url_large ?? movie.image_url_list ?? "";
   const price = movie.price_list?.sale_price ?? movie.price_list?.list_price ?? movie.price_min;
@@ -135,7 +142,11 @@ export default function MovieDetailContent({ movie }: Props) {
         )}
 
         <div className="mdc-ad-bottom">
-          <AdSlot zone="mobileBanner300x250" />
+          <AdSlot
+            zone="mobileBanner300x250"
+            context={adPriority ? "modal" : "page"}
+            priority={adPriority}
+          />
         </div>
 
         <div className="mdc-cta">

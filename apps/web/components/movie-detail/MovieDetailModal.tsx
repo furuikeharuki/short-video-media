@@ -196,7 +196,13 @@ export default function MovieDetailModal({ slug, onClose }: Props) {
           {state === "ready" && movie && (
             <>
               <DetailViewTracker slug={movie.slug} title={movie.title} />
-              <MovieDetailContent movie={movie} />
+              {/*
+                フィード上で開かれる portal モーダル経路。背後のフィード DOM に
+                FeedAdSlide の <ins> (同一 zoneid) が残っているため、AdSlot を
+                priority モードで動かして provider がモーダル <ins> を確実に
+                埋めるようにする。
+              */}
+              <MovieDetailContent movie={movie} adPriority />
             </>
           )}
         </div>

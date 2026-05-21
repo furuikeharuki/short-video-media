@@ -22,12 +22,14 @@ export const viewport: Viewport = {
 export const metadata: Metadata = {
   metadataBase: new URL(SITE_URL),
   // - default: 子ページが title を指定しなかったとき (= ホーム "/") の <title>。
-  //   Google は検索結果でサイト名を自動付与する仕様 (重複 "| AV Shorts | AV Shorts"
-  //   になりがち) のため、ここではブランド名のみにする。
-  // - template: 子ページが title を指定したときの組み立て (例: "ホーム | AV Shorts")。
+  //   Google は検索結果で og:site_name / applicationName 等からサイト名を自動付与する。
+  //   そのため <title> 側でも "| AV Shorts" を付けると重複 ("年齢確認 | AV Shorts |
+  //   AV Shorts") になってしまう。
+  // - template: 子ページが title を指定したときは、その文字列だけを <title> に出す
+  //   (例: "年齢確認")。サイト名は Google 側が自動で付与する。
   title: {
     default: SITE_NAME,
-    template: `%s | ${SITE_NAME}`,
+    template: "%s",
   },
   description: SITE_DESCRIPTION,
   keywords: SITE_KEYWORDS,

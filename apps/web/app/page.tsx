@@ -64,8 +64,18 @@ export default async function Page() {
 
   // セクション間広告は横長バナー（300x100）固定。
   // native（縦型カード）は横スクロール行間には不自然なので使わない。
+  //
+  // 広告の挿入位置は「特定セクションの直下」で固定する (= section.key で判定する)。
+  // - "popular"          : 人気 (= 上位 3 番目相当) の直下
+  // - "ranking_monthly"  : 月間ランキングの直下
+  //
+  // 過去はフィルタ後の配列 index に対する `(i+1) % 3 === 0` で判定していたが、
+  // 「本日配信 (new)」「新着 (recent)」が空でフィルタされると挿入位置が後ろの
+  // セクションに玉突きで動いてしまい、本来 人気 / 月間ランキング の下にあった
+  // 広告が別の場所に出てしまっていた。key 固定にすることで、上位セクションが
+  // 表示されなくても 人気 / 月間ランキング の下に必ず広告が並ぶようにする。
   const bannerEnabled = isAdZoneEnabled("mobileBanner300x100");
-  const SECTION_AD_EVERY = 3;
+  const AD_AFTER_KEYS = new Set(["popular", "ranking_monthly"]);
 
   return (
     <PullToRefresh className="home-main">
@@ -81,10 +91,12 @@ export default async function Page() {
           ? { kind: "section" as const, key: "genre", genre: section.genre }
           : { kind: "section" as const, key: section.key };
 
+        // ad は section.key で固定。最終セクション直下には出さない (フッターが
+        // すぐ続くので見栄えが悪いため)。
         const showAdAfter =
           bannerEnabled &&
           sectionIndex < sections.length - 1 &&
-          (sectionIndex + 1) % SECTION_AD_EVERY === 0;
+          AD_AFTER_KEYS.has(section.key);
 
         return (
           <div key={section.key}>
@@ -153,15 +165,13 @@ const pageStyles = `
     color: #fff;
   }
   .home-footer-spacer { height: 24px; }
-  /* セクション間広告。
-     - AdSlot 自体は <ins> が空のあいだ min-height:1px なので、wrapper に固定の
-       padding を与えると広告未充填時に「無意味な 16px 程度の空白」が残り、
-       本日配信 / 新着 など上位セクションが空になったときにスペーシングが
-       不自然に見える原因になる。
-     - そのため wrapper は padding 0 にして、広告が充填されたときだけ
-       高さを持つようにする。隣接セクションの間隔は既存の .hcr の
-       padding (上 18px / 下 8px) でリズムが取れる。 */
+  /* セクション間広告。広告が充填されたときに上下に 8px の余白を取って隣接
+     セクションと視覚的に分離する。AdSlot が isAdZoneEnabled=false で null を
+     返したケースでもラッパーが空になるだけで害はないが、念のため :empty では
+     非表示にしておく (page.tsx 側でも showAdAfter で出し分けているので普段は
+     ここまで来ない)。 */
   .home-section-ad {
+    padding: 8px 0;
     display: flex;
     justify-content: center;
     width: 100%;

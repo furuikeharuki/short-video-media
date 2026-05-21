@@ -153,8 +153,15 @@ const pageStyles = `
     color: #fff;
   }
   .home-footer-spacer { height: 24px; }
+  /* セクション間広告。
+     - AdSlot 自体は <ins> が空のあいだ min-height:1px なので、wrapper に固定の
+       padding を与えると広告未充填時に「無意味な 16px 程度の空白」が残り、
+       本日配信 / 新着 など上位セクションが空になったときにスペーシングが
+       不自然に見える原因になる。
+     - そのため wrapper は padding 0 にして、広告が充填されたときだけ
+       高さを持つようにする。隣接セクションの間隔は既存の .hcr の
+       padding (上 18px / 下 8px) でリズムが取れる。 */
   .home-section-ad {
-    padding: 8px 0;
     display: flex;
     justify-content: center;
     width: 100%;
@@ -162,6 +169,7 @@ const pageStyles = `
     overflow: hidden;
     box-sizing: border-box;
   }
+  .home-section-ad:empty { display: none; }
   .home-section-ad .ad-slot {
     width: 100% !important;
     max-width: 100% !important;

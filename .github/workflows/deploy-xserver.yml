@@ -1,0 +1,131 @@
+# ============================================================================
+# .github/workflows/deploy-xserver.yml
+# ----------------------------------------------------------------------------
+# main へ push されたら、apps/api / apps/jobs / infra/xserver / scripts への
+# 変更がある場合に Xserver VPS へ SSH 経由でデプロイする。
+#
+# 必要な GitHub Secrets:
+#   XSERVER_SSH_HOST       : VPS の IP / ホスト名
+#   XSERVER_SSH_USER       : SSH ユーザー (docker グループ所属が望ましい)
+#   XSERVER_SSH_PORT       : SSH ポート (任意, デフォルト 22)
+#   XSERVER_SSH_KEY        : Ed25519 秘密鍵 (BEGIN OPENSSH PRIVATE KEY... 全文)
+#   XSERVER_KNOWN_HOSTS    : ssh-keyscan -p <port> <host> の出力 (1行以上)
+#   XSERVER_REPO_DIR       : VPS 上のリポジトリパス (例: /opt/short-video-media)
+#
+# (任意) Secrets:
+#   XSERVER_BUILD_OPTS     : "--no-cache" 等。空でよい。
+#   XSERVER_GIT_REF        : デプロイする ref (デフォルト: github.sha)
+#
+# セキュリティ:
+#   - 秘密鍵は ssh-agent に流し込み、Action ログには出さない
+#   - actions/checkout は使うが VPS には git pull させる方式 (ビルドは VPS 上)
+#   - api / jobs CI が成功した場合のみ deploy ジョブを走らせる (workflow_run)
+#
+# 手動デプロイ:
+#   - Actions → "Deploy (Xserver VPS)" → Run workflow で任意の ref を流せる
+# ============================================================================
+name: Deploy (Xserver VPS)
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "apps/api/**"
+      - "apps/jobs/**"
+      - "infra/xserver/**"
+      - "scripts/deploy-xserver.sh"
+      - "scripts/backup-postgres.sh"
+      - ".github/workflows/deploy-xserver.yml"
+  workflow_dispatch:
+    inputs:
+      git_ref:
+        description: "Git ref to deploy (branch / tag / sha). Defaults to current."
+        required: false
+        default: ""
+
+concurrency:
+  group: deploy-xserver
+  cancel-in-progress: false  # デプロイ中の上書きは危険なのでキャンセルしない
+
+jobs:
+  deploy:
+    name: deploy to Xserver VPS
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+
+    # 環境名を渡しておくと、Repo settings の Environments で
+    # required reviewers 等を後付けできる。
+    environment: production
+
+    steps:
+      - name: Checkout (metadata only)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Resolve git_ref
+        id: ref
+        run: |
+          ref="${{ github.event.inputs.git_ref }}"
+          if [ -z "$ref" ]; then
+            ref="${{ github.sha }}"
+          fi
+          # 値は echo に出すが、これは sha なので機微情報ではない。
+          echo "git_ref=${ref}" >> "$GITHUB_OUTPUT"
+
+      - name: Set up SSH
+        # 公式アクションではなく素の ssh-agent + known_hosts セットアップを使う。
+        # 外部アクションを増やさず監査範囲を狭く保つため。
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.XSERVER_SSH_KEY }}
+          KNOWN_HOSTS: ${{ secrets.XSERVER_KNOWN_HOSTS }}
+        run: |
+          set -euo pipefail
+          mkdir -p ~/.ssh
+          chmod 700 ~/.ssh
+          # 秘密鍵をディスクに置かず agent 経由で渡す。
+          eval "$(ssh-agent -s)"
+          # printenv で出力すると set -x にかかってもキー本体は表示されない。
+          printenv SSH_PRIVATE_KEY | ssh-add - >/dev/null
+          # agent socket / PID は後続ステップにも引き継ぐ。
+          echo "SSH_AUTH_SOCK=$SSH_AUTH_SOCK" >> "$GITHUB_ENV"
+          echo "SSH_AGENT_PID=$SSH_AGENT_PID" >> "$GITHUB_ENV"
+          printf '%s\n' "$KNOWN_HOSTS" > ~/.ssh/known_hosts
+          chmod 600 ~/.ssh/known_hosts
+
+      - name: Deploy via SSH
+        env:
+          HOST: ${{ secrets.XSERVER_SSH_HOST }}
+          USER: ${{ secrets.XSERVER_SSH_USER }}
+          PORT: ${{ secrets.XSERVER_SSH_PORT }}
+          REPO_DIR: ${{ secrets.XSERVER_REPO_DIR }}
+          BUILD_OPTS: ${{ secrets.XSERVER_BUILD_OPTS }}
+          GIT_REF: ${{ steps.ref.outputs.git_ref }}
+        run: |
+          set -euo pipefail
+          : "${HOST:?XSERVER_SSH_HOST not set}"
+          : "${USER:?XSERVER_SSH_USER not set}"
+          : "${REPO_DIR:?XSERVER_REPO_DIR not set}"
+          PORT_OPT=""
+          if [ -n "${PORT}" ]; then
+            PORT_OPT="-p ${PORT}"
+          fi
+
+          # heredoc で送る変数は引用符付きで明示。BUILD_OPTS は空でも安全に。
+          # set -x は使わない (env が漏れる)。
+          ssh ${PORT_OPT} -o BatchMode=yes "${USER}@${HOST}" bash -s <<EOF
+          set -euo pipefail
+          cd "${REPO_DIR}"
+          export REPO_DIR="${REPO_DIR}"
+          export GIT_REF="${GIT_REF}"
+          export BUILD_OPTS="${BUILD_OPTS}"
+          ./scripts/deploy-xserver.sh
+          EOF
+
+      - name: Tear down ssh-agent
+        if: always()
+        run: |
+          if [ -n "${SSH_AGENT_PID:-}" ]; then
+            kill "$SSH_AGENT_PID" 2>/dev/null || true
+          fi
+          rm -f ~/.ssh/known_hosts

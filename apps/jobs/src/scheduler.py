@@ -275,13 +275,44 @@ async def _amain() -> None:
         datetime.now(TZ).isoformat(timespec="seconds"),
     )
 
-    # DATABASE_URL を簡易検査 (internal でなければ警告)
+    # DATABASE_URL を簡易検査。DEPLOY_TARGET によって望ましいホスト名が異なる:
+    #   railway : *.railway.internal  (Private Network 経由で egress 課金回避)
+    #   xserver : compose サービス名 (db / postgres) or 同一 VPS 内 loopback
+    #   aws     : *.rds.amazonaws.com もしくは VPC 内プライベート IP
+    #   それ以外 : 検査しない (development 等)
+    deploy_target = os.getenv("DEPLOY_TARGET", "railway").lower()
     db_url = os.getenv("DATABASE_URL", "")
-    if "railway.internal" not in db_url:
-        logger.warning(
-            "DATABASE_URL does NOT use Railway internal network "
-            "(no 'railway.internal' substring). Egress charges may apply. "
-            "Use 'postgres.railway.internal:5432' in production."
+    if deploy_target == "railway":
+        if "railway.internal" not in db_url:
+            logger.warning(
+                "DEPLOY_TARGET=railway but DATABASE_URL does NOT use "
+                "Railway private network ('railway.internal' missing). "
+                "Egress charges may apply. "
+                "Use 'postgres.railway.internal:5432' in production."
+            )
+    elif deploy_target == "xserver":
+        # Compose ネットワーク内 (db / postgres) or 同一 VPS の 127.0.0.1 / unix socket。
+        # それ以外は設定ミスの可能性が高いが、外部 DB 利用も将来あり得るので
+        # warning だけに留めて起動は止めない。
+        if not any(
+            token in db_url
+            for token in ("@db:", "@postgres:", "@db/", "@postgres/", "127.0.0.1", "localhost", "/var/run")
+        ):
+            logger.warning(
+                "DEPLOY_TARGET=xserver but DATABASE_URL host does not look "
+                "like a local Postgres (expected '@db', '@postgres', "
+                "'127.0.0.1', 'localhost', or unix socket)."
+            )
+    elif deploy_target == "aws":
+        if "localhost" in db_url or "127.0.0.1" in db_url:
+            logger.warning(
+                "DEPLOY_TARGET=aws but DATABASE_URL points to localhost. "
+                "Use an RDS / Aurora endpoint or a VPC private IP."
+            )
+    else:
+        logger.info(
+            "DEPLOY_TARGET=%s: skipping DATABASE_URL host validation",
+            deploy_target,
         )
 
     scheduler = AsyncIOScheduler(timezone=TZ)

@@ -1,0 +1,155 @@
+# ============================================================================
+# infra/xserver/docker-compose.yml
+# ----------------------------------------------------------------------------
+# Xserver VPS 上で api / jobs-worker / postgres / Caddy を起動するための
+# Compose ファイル。Vercel (web) は外部にあるため対象外。
+#
+# 既存の apps/resolver (同一 VPS で稼働) とはネットワーク的に独立。
+# api → resolver は HTTP (RESOLVER_BASE_URL) で叩く想定。
+# 同一 VPS なら http://127.0.0.1:8080 または http://host.docker.internal:8080 を指す。
+#
+# 起動:
+#   cd infra/xserver
+#   cp .env.example .env  # 値を埋める
+#   docker compose pull   # (任意) ベースイメージ更新
+#   docker compose build
+#   docker compose up -d
+#
+# ログ:
+#   docker compose logs -f api
+#   docker compose logs -f jobs-worker
+#
+# 停止:
+#   docker compose down            # コンテナ停止
+#   docker compose down -v         # ボリュームごと削除 (DB消える、要バックアップ)
+# ============================================================================
+name: short-video-media-xserver
+
+# Compose ファイル形式は v2 以降 (Docker Engine 25+) 想定。
+# version: ... フィールドは削除済み。
+
+services:
+  # --------------------------------------------------------------------------
+  # PostgreSQL 16
+  # --------------------------------------------------------------------------
+  # 同一 docker network 内で 'db' という名前で解決される。
+  # 外部公開はしない (ports を開けない)。バックアップは backup-postgres.sh で実施。
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+      # データ消失リスクを下げるため synchronous_commit はデフォルト (on) のまま。
+      # tuning は postgresql.conf を別途マウントすること。
+      TZ: Asia/Tokyo
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      # 初回起動用 init スクリプトが必要ならここに追加:
+      # - ./initdb:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+    # メモリリミット (Xserver VPS の最小プランでも安定するように)。
+    # 必要に応じて調整。
+    deploy:
+      resources:
+        limits:
+          memory: 1024M
+
+  # --------------------------------------------------------------------------
+  # API (FastAPI)
+  # --------------------------------------------------------------------------
+  api:
+    build:
+      context: ../..
+      dockerfile: apps/api/Dockerfile
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    env_file:
+      - .env
+    environment:
+      # docker network 内では db サービスがそのまま名前解決される。
+      # localhost と書かないこと (production チェックに引っかかる)。
+      DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}
+      APP_ENV: production
+      DEPLOY_TARGET: xserver
+      PORT: "8000"
+      TZ: Asia/Tokyo
+    # /healthz が無ければ簡易的に / を叩く。後で /healthz を実装してもよい。
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0) if urllib.request.urlopen('http://127.0.0.1:8000/', timeout=3).status < 500 else sys.exit(1)"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    # api 自身は外部に直接公開せず、Caddy 経由でのみ受ける。
+    # デバッグで直接叩きたい時は ports: - "127.0.0.1:8000:8000" を一時的に有効化。
+    expose:
+      - "8000"
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+
+  # --------------------------------------------------------------------------
+  # jobs worker (APScheduler 常駐)
+  # --------------------------------------------------------------------------
+  # Railway の jobs-worker サービスを Xserver に持ってきたもの。
+  # cron は内部の APScheduler に任せる (GitHub Actions cron は不要)。
+  jobs-worker:
+    build:
+      context: ../..
+      dockerfile: apps/jobs/Dockerfile.worker
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}
+      APP_ENV: production
+      DEPLOY_TARGET: xserver
+      TZ: Asia/Tokyo
+      # 起動直後の bootstrap は誤発火を避けるためデフォルト false。
+      # 初回データ取り込みが必要な時だけ .env で true にすること。
+      SCHEDULER_BOOTSTRAP: ${SCHEDULER_BOOTSTRAP:-false}
+      SCHEDULER_RUN_ON_START: ${SCHEDULER_RUN_ON_START:-false}
+    deploy:
+      resources:
+        limits:
+          memory: 768M
+
+  # --------------------------------------------------------------------------
+  # Caddy (reverse proxy + 自動 Let's Encrypt)
+  # --------------------------------------------------------------------------
+  # 既存の apps/resolver が 80/443 を握っている場合は、本サービスを起動せず
+  # Caddyfile を resolver 側に統合するか、別ポート (8443) で待ち受けること。
+  # Compose 内には常に置いておき、用途に応じて profiles で起動制御する。
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    profiles: ["proxy"]
+    depends_on:
+      - api
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    environment:
+      API_DOMAIN: ${API_DOMAIN:-api.example.com}
+
+volumes:
+  postgres_data:
+  caddy_data:
+  caddy_config:

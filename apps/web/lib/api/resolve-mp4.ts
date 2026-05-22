@@ -43,6 +43,84 @@ type CacheEntry = {
 
 const resolveCache = new Map<string, CacheEntry>();
 
+/**
+ * resolver は uncached で ~8.6s かかるため、ブラウザから同時に多数のリクエストを
+ * 投げると上流 (Cloudflare / API) で 504 が出やすい。並列度を上限 8 に絞ることで
+ * バーストを抑制する (resolver / jobs-worker 側も実測で 8 が最適という前提)。
+ *
+ * 上限内: 即座に fetch を発火。
+ * 上限超過: FIFO で待機し、空きが出たら起動。待機中に AbortController が
+ *           abort された場合は fetch せずに諦める。
+ *
+ * デデュープキャッシュ (resolveCache) は同一 slug の同時要求を 1 本にまとめる
+ * 役割で、別 slug 同士の同時実行はここで絞る。
+ */
+const MAX_CONCURRENT_FETCHES = 8;
+let activeFetches = 0;
+const waiters: Array<() => void> = [];
+
+function acquireSlot(signal: AbortSignal): Promise<boolean> {
+  if (signal.aborted) return Promise.resolve(false);
+  if (activeFetches < MAX_CONCURRENT_FETCHES) {
+    activeFetches += 1;
+    return Promise.resolve(true);
+  }
+  return new Promise<boolean>((resolve) => {
+    const onWake = () => {
+      signal.removeEventListener("abort", onAbort);
+      if (signal.aborted) {
+        // 起こされたが既に abort 済み → 次の waiter に渡す
+        releaseSlot();
+        resolve(false);
+        return;
+      }
+      resolve(true);
+    };
+    const onAbort = () => {
+      const idx = waiters.indexOf(onWake);
+      if (idx >= 0) waiters.splice(idx, 1);
+      signal.removeEventListener("abort", onAbort);
+      resolve(false);
+    };
+    signal.addEventListener("abort", onAbort, { once: true });
+    waiters.push(onWake);
+  });
+}
+
+function releaseSlot(): void {
+  const next = waiters.shift();
+  if (next) {
+    // activeFetches は据え置きで次のリクエストに引き継ぐ
+    next();
+  } else {
+    activeFetches = Math.max(0, activeFetches - 1);
+  }
+}
+
+/** 504 / ネットワークエラーに対するリトライ待ち時間 (1.5〜3.0s ジッタ)。 */
+function pickRetryDelayMs(): number {
+  return 1500 + Math.floor(Math.random() * 1500);
+}
+
+function sleep(ms: number, signal: AbortSignal): Promise<void> {
+  return new Promise<void>((resolve) => {
+    if (signal.aborted) {
+      resolve();
+      return;
+    }
+    const timer = setTimeout(() => {
+      signal.removeEventListener("abort", onAbort);
+      resolve();
+    }, ms);
+    const onAbort = () => {
+      clearTimeout(timer);
+      signal.removeEventListener("abort", onAbort);
+      resolve();
+    };
+    signal.addEventListener("abort", onAbort, { once: true });
+  });
+}
+
 export async function resolveMp4Url(
   slug: string,
   options: { force?: boolean; signal?: AbortSignal } = {},
@@ -69,27 +147,49 @@ export async function resolveMp4Url(
 
   const controller = new AbortController();
   const promise: Promise<ResolveMp4Response | null> = (async () => {
-    try {
-      const res = await fetch(url, {
-        method: "GET",
-        // クライアントから直接叩くため Next.js のキャッシュは無効。
-        // API 側で DB キャッシュを持っているのでここでキャッシュする必要はない。
-        cache: "no-store",
-        // 全 consumer が abort されたら fetch も中断する。
-        signal: controller.signal,
-      });
-      if (!res.ok) {
-        // 404 / 502 / 504 はサムネフォールバック (UX 上は同じ扱い)
-        return null;
+    // 1 度だけリトライ可能。504 / ネットワーク (タイムアウト含む) のときに発火。
+    let attempt = 0;
+    while (true) {
+      const acquired = await acquireSlot(controller.signal);
+      if (!acquired) return null; // 全 consumer abort
+      let shouldRetry = false;
+      let result: ResolveMp4Response | null = null;
+      try {
+        const res = await fetch(url, {
+          method: "GET",
+          // クライアントから直接叩くため Next.js のキャッシュは無効。
+          // API 側で DB キャッシュを持っているのでここでキャッシュする必要はない。
+          cache: "no-store",
+          // 全 consumer が abort されたら fetch も中断する。
+          signal: controller.signal,
+        });
+        if (res.ok) {
+          const data = (await res.json()) as ResolveMp4Response;
+          if (data && typeof data.mp4_url === "string" && data.mp4_url) {
+            result = data;
+          }
+        } else if (
+          // 504 (Gateway Timeout) / 502 (Bad Gateway) はバースト由来の可能性が高い
+          // ので 1 度だけリトライ。それ以外 (404 など) は即サムネ。
+          (res.status === 504 || res.status === 502) &&
+          attempt === 0
+        ) {
+          shouldRetry = true;
+        }
+      } catch {
+        // ネットワークエラー / タイムアウト / abort
+        if (!controller.signal.aborted && attempt === 0) {
+          shouldRetry = true;
+        }
+      } finally {
+        // sleep に入る前に必ずスロットを返し、他の slug がそのスロットを使えるようにする。
+        releaseSlot();
       }
-      const data = (await res.json()) as ResolveMp4Response;
-      if (!data || typeof data.mp4_url !== "string" || !data.mp4_url) {
-        return null;
-      }
-      return data;
-    } catch {
-      // ネットワークエラー / abort
-      return null;
+
+      if (!shouldRetry) return result;
+      attempt += 1;
+      await sleep(pickRetryDelayMs(), controller.signal);
+      if (controller.signal.aborted) return null;
     }
   })();
 

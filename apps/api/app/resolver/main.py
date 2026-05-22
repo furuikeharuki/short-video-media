@@ -1,4 +1,13 @@
-"""FastAPI エントリポイント。
+"""resolver 専用 FastAPI app のエントリポイント。
+
+このモジュールは **resolver イメージでのみ** 起動される。通常 API
+コンテナ (apps/api Dockerfile) はこのファイルを import しない。
+
+旧 ``apps/resolver/src/main.py`` を ``apps/api`` パッケージへ移したもので、
+ロジックは互換 (POST /resolve, GET /health, Bearer 認証, エラーマッピング)。
+
+起動:
+    uvicorn app.resolver.main:app --host 0.0.0.0 --port 8080 --workers 1
 
 エンドポイント:
     POST /resolve  : MP4 直リンクを抽出して返す (Bearer 認証必須)
@@ -6,12 +15,6 @@
 
 認証:
     Authorization: Bearer <RESOLVER_API_KEY>
-
-エラーマッピング:
-    ResolveNotFound  → 404
-    ResolveTimeout   → 504
-    ResolveUpstream  → 502
-    Auth 失敗        → 401
 """
 from __future__ import annotations
 
@@ -24,7 +27,7 @@ from pydantic import BaseModel, Field
 
 from .browser_pool import BrowserPool
 from .config import settings
-from .resolver import (
+from .extractor import (
     ResolveNotFound,
     ResolveTimeout,
     ResolveUpstream,
@@ -57,7 +60,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="short-video-media resolver",
     description="DMM litevideo iframe から MP4 直リンクを抽出するサービス",
-    version="0.1.0",
+    version="0.2.0",
     lifespan=lifespan,
 )
 

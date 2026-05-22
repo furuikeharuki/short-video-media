@@ -1,8 +1,14 @@
 """Playwright Chromium ブラウザを 1 度だけ起動して使い回すためのプール。
 
-FastAPI の lifespan で `start()` / `stop()` を呼び、リクエストごとに `get_browser()`
-で同じインスタンスを返す。Browser の new_context() / new_page() は軽量なので、
-リクエストごとに作って閉じる前提で OK (Browser 自体の起動は重い)。
+旧 ``apps/resolver/src/browser_pool.py`` を ``apps/api`` パッケージへ
+移動したもの。Playwright は遅延 import しているため、本モジュール自体は
+Playwright 未インストールの環境 (通常の apps/api コンテナ) でも import
+可能。``start()`` を呼んだ瞬間に初めて Playwright を読み込む。
+
+FastAPI の lifespan で ``start()`` / ``stop()`` を呼び、リクエストごとに
+``get_browser()`` で同じインスタンスを返す。Browser の new_context() /
+new_page() は軽量なので、リクエストごとに作って閉じる前提で OK
+(Browser 自体の起動は重い)。
 
 同時実行は asyncio.Semaphore で制御する (CPU/メモリリソースの保護)。
 """
@@ -26,7 +32,8 @@ class BrowserPool:
 
     async def start(self) -> None:
         """Playwright と Chromium を起動する。"""
-        # 遅延 import: テスト時に Playwright 未インストールでもモジュール読込できるように
+        # 遅延 import: 通常 API コンテナでは Playwright を入れていないため、
+        # モジュールロード時点で import するとそちらが落ちる。
         from playwright.async_api import async_playwright
 
         async with self._lock:

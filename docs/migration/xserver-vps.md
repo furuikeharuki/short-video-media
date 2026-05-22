@@ -29,22 +29,73 @@ Railway 上で稼働している `apps/api` と `apps/jobs` (worker) を Xserver
 │                ┌────────────────────────────┐           │
 │                │   db (Postgres 18)         │           │
 │                └────────────────────────────┘           │
-│                                                         │
-│  ┌──────────────────────────────────────────────────┐   │
-│  │ apps/resolver  (既存 / 別 compose)               │   │
-│  │ http://host.docker.internal:8080                 │   │
-│  └──────────────────────────────────────────────────┘   │
+│                       │                                 │
+│                       │ HTTP (内部 docker network)      │
+│                       ▼                                 │
+│           ┌─────────────────────────────┐               │
+│           │ resolver (8080)             │               │
+│           │ FastAPI + Playwright/Chrome │               │
+│           │ (apps/api/Dockerfile.       │               │
+│           │  resolver からビルド)       │               │
+│           └─────────────────────────────┘               │
 └─────────────────────────────────────────────────────────┘
        ▲
        │ HTTPS (Vercel から)
    apps/web (Vercel)
 ```
 
-- api / jobs-worker / db は `infra/xserver/docker-compose.yml` で起動する
-  別 compose project (`short-video-media-xserver`)。
-- 既存 resolver の compose とはネットワーク的に隔離されているため、
-  api → resolver は `host.docker.internal` (Linux では明示的に
-  `extra_hosts` 設定が必要) もしくは VPS の外向き IP 経由で叩く。
+- api / resolver / jobs-worker / db は `infra/xserver/docker-compose.yml`
+  で起動する単一 compose project (`short-video-media-xserver`)。
+- resolver は以前 `apps/resolver` として独立した FastAPI サービスだったが、
+  `apps/api` パッケージへ統合済み (`app.resolver`)。本 compose 内で
+  `apps/api/Dockerfile.resolver` (Playwright base ~2GB) からビルドして
+  起動する。
+- api / jobs-worker → resolver の通信は同 docker network 内の
+  `http://resolver:8080` で完結する (host.docker.internal は不要)。
+
+---
+
+## 1.1 Resolver の統合 / 切替手順
+
+旧 `apps/resolver` を VPS 上で別 compose / 単体コンテナとして動かしていた
+場合は、新 compose を `up -d` する前に止めること。新 compose の `resolver`
+サービスは expose のみで host ポートを開けない (`8080` を bind しない)
+ため、ポート競合自体はほぼ起きないが、Chromium プロセスとメモリの
+重複を避けるため必ず停止する。
+
+```bash
+ssh deploy@<VPS-HOST>
+
+# 1) 旧 resolver を停止
+#    docker run で立てていた場合:
+docker stop resolver && docker rm resolver
+#    旧 compose で立てていた場合 (パスは環境による):
+# cd /opt/old-resolver && docker compose down
+
+# 2) 統合後のコードに更新
+cd /opt/short-video-media
+git pull --ff-only
+# infra/xserver/.env の RESOLVER_BASE_URL は基本的に削除して良い
+# (docker-compose.yml の environment が http://resolver:8080 を強制する)
+
+# 3) build & up
+docker compose -f infra/xserver/docker-compose.yml build api resolver jobs-worker
+docker compose -f infra/xserver/docker-compose.yml up -d
+
+# 4) 動作確認
+docker compose -f infra/xserver/docker-compose.yml ps
+# resolver: healthy になるまで 30〜60 秒程度 (Chromium 起動分)
+docker compose -f infra/xserver/docker-compose.yml exec api \
+  python -c "import urllib.request,json; \
+  print(urllib.request.urlopen('http://resolver:8080/health', timeout=5).read().decode())"
+# → {"status":"ok","browser_running":true}
+
+# (任意) 旧イメージのクリーンアップ
+docker image prune -f
+```
+
+`RESOLVER_API_KEY` は旧 resolver と同じ値を `.env` に残しておけば、
+キャッシュ済み MP4 URL も含めて挙動は完全互換になる。
 
 ---
 

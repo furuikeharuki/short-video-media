@@ -1,4 +1,8 @@
-"""resolver の設定。環境変数から Pydantic Settings で読み込む。
+"""resolver サービス側 (FastAPI app) の設定。
+
+旧 ``apps/resolver/src/config.py`` を ``apps/api`` パッケージへ移動したもの。
+``app.core.config.Settings`` とは関心が異なる (resolver は Playwright だけ
+気にする / api は DB / 認証 / CORS 等) ため、Settings は分けたままにする。
 
 環境変数:
     RESOLVER_API_KEY              : POST /resolve の Bearer 認証キー (必須)
@@ -13,8 +17,8 @@ from __future__ import annotations
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
-class Settings(BaseSettings):
-    """環境変数から読み込む設定。"""
+class ResolverServiceSettings(BaseSettings):
+    """resolver FastAPI app 用の環境変数。"""
 
     model_config = SettingsConfigDict(
         env_file=".env",
@@ -22,22 +26,12 @@ class Settings(BaseSettings):
         extra="ignore",
     )
 
-    # 認証
     resolver_api_key: str = ""
-
-    # DMM
     dmm_affiliate_id: str = ""
-
-    # 同時実行制御
     resolver_concurrency: int = 2
-
-    # Playwright タイムアウト
     resolver_nav_timeout_ms: int = 15000
     resolver_wait_video_timeout_ms: int = 8000
-
-    # ログ
     resolver_log_level: str = "INFO"
 
 
-# シングルトンとして読み込む
-settings = Settings()
+settings = ResolverServiceSettings()

@@ -10,6 +10,7 @@ from app.api.v1.endpoints.me import router as me_router
 from app.api.v1.endpoints.movies import router as movies_router
 from app.api.v1.endpoints.rankings import router as rankings_router
 from app.api.v1.endpoints.search import router as search_router
+from app.api.v1.endpoints.sitemap import router as sitemap_router
 from app.api.v1.endpoints.tags import router as tags_router
 
 api_router = APIRouter()
@@ -24,3 +25,4 @@ api_router.include_router(home_router, tags=["home"])
 api_router.include_router(auth_router, tags=["auth"])
 api_router.include_router(me_router, tags=["me"])
 api_router.include_router(actresses_router, tags=["actresses"])
+api_router.include_router(sitemap_router, tags=["sitemap"])

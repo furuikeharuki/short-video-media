@@ -35,7 +35,11 @@ services:
   # 同一 docker network 内で 'db' という名前で解決される。
   # 外部公開はしない (ports を開けない)。バックアップは backup-postgres.sh で実施。
   db:
-    image: postgres:16-alpine
+    # Railway Postgres が 18.3 で稼働しているため、pg_dump/restore のバージョン
+    # 整合上 VPS 側も Postgres 18 系に揃える。
+    # 既に 16 系で空の volume を作っていた場合は `docker compose down -v` で
+    # ボリュームを削除してから再作成すること (PGDATA フォーマット非互換)。
+    image: postgres:18-alpine
     restart: unless-stopped
     environment:
       POSTGRES_USER: ${POSTGRES_USER}

@@ -27,7 +27,7 @@ Railway 上で稼働している `apps/api` と `apps/jobs` (worker) を Xserver
 │                       │ TCP            │ TCP            │
 │                       ▼                ▼                │
 │                ┌────────────────────────────┐           │
-│                │   db (Postgres 16)         │           │
+│                │   db (Postgres 18)         │           │
 │                └────────────────────────────┘           │
 │                                                         │
 │  ┌──────────────────────────────────────────────────┐   │
@@ -128,26 +128,91 @@ Railway 上で稼働している `apps/api` と `apps/jobs` (worker) を Xserver
 
 ### 3.1 Railway からのデータ移行 (DB)
 
-Railway 側で DB がある状態を前提に、VPS の新しい Postgres にデータを移す。
+> ⚠️ **Postgres バージョン整合 (重要)**
+>
+> Railway 側 Postgres は **18.3** で稼働中。pg_dump は server より古い
+> メジャーでは `aborting because of server version mismatch` で失敗するため、
+> 以下を **18 系に揃える** こと:
+>
+> - VPS 側 `db` サービス: `infra/xserver/docker-compose.yml` → `postgres:18-alpine` (本リポジトリで既に設定済み)
+> - 移行スクリプト内の pg_dump/pg_restore イメージ: 既定で `postgres:18-alpine`。
+>   別バージョンに切替が必要なら `POSTGRES_TOOLS_IMAGE=postgres:18-alpine` で上書き
+>
+> 既に `postgres:16-alpine` の VPS db で空の volume を作成していた場合は、
+> PGDATA がメジャー間で非互換なため **ボリュームごと作り直し** が必要:
+>
+> ```bash
+> # まだ本番データを入れていない前提 (中身を消してよい場合のみ)
+> cd /opt/short-video-media
+> docker compose -f infra/xserver/docker-compose.yml down -v
+> # ↑ -v で postgres_data ボリュームも削除される
+> git pull --ff-only
+> docker compose -f infra/xserver/docker-compose.yml up -d db
+> docker compose -f infra/xserver/docker-compose.yml exec db postgres -V
+> # → "postgres (PostgreSQL) 18.x" であることを確認
+> ```
+
+VPS 上で **`scripts/migrate-from-railway.sh`** を実行すれば、
+Railway Postgres から VPS の `db` コンテナへ pg_dump (custom format) →
+pg_restore を一括で実施できる。Railway DATABASE_URL はコマンドライン引数では
+受け取らず、環境変数 or 無エコー stdin で渡す設計になっている。
 
 ```bash
-# (a) Railway 側で論理ダンプを取得 (PC や Railway CLI 経由)
-railway run -- pg_dump $RAILWAY_DATABASE_URL \
-  --no-owner --clean --if-exists \
-  > shortvideo-from-railway.sql
-
-# (b) VPS にコピー
-scp shortvideo-from-railway.sql deploy@<HOST>:/tmp/
-
-# (c) VPS 上で db コンテナだけ先に起動
+# VPS 上で
 ssh deploy@<HOST>
 cd /opt/short-video-media
-docker compose -f infra/xserver/docker-compose.yml up -d db
 
-# (d) ダンプを流し込む
-docker compose -f infra/xserver/docker-compose.yml exec -T db \
-  psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" < /tmp/shortvideo-from-railway.sql
+# 事前に infra/xserver/.env を用意しておくこと (POSTGRES_* が必要)
+ls infra/xserver/.env
+
+# (推奨) 対話入力で実行: URL は画面に表示されない / シェル履歴に残らない
+./scripts/migrate-from-railway.sh
+# プロンプトで Railway DATABASE_URL を貼り付け Enter
+# その後 "yes" で続行確認
+
+# (非対話) 環境変数経由。CI / 自動化用。シェル履歴を別途消すこと。
+# RAILWAY_DATABASE_URL=postgresql://... ./scripts/migrate-from-railway.sh
+# ※ 非対話で動かすには ASSUME_YES=yes も指定が必要
 ```
+
+スクリプトの主な挙動:
+
+1. `infra/xserver/.env` から `POSTGRES_USER` / `POSTGRES_DB` /
+   `POSTGRES_PASSWORD` を読み取り、不足していれば停止
+2. Railway DATABASE_URL を環境変数 or 無エコー入力で受け取る
+   (argv / log には残さない)
+3. `~/db-migration/` (`DUMP_DIR` で上書き可) に
+   `railway-<DB>-<UTC>.dump` を **custom format (`-Fc`)** で保存。
+   ディレクトリ権限は `700`、ファイル権限は `600` に固定
+4. compose の `db` サービスを起動 + healthcheck 待機
+5. dump を `db` コンテナの `pg_restore` に流し込む。
+   - デフォルトは `RESTORE_MODE=append` (`--no-owner --no-privileges --exit-on-error`)
+   - 既存テーブルを削除して入れ替えたい時は `RESTORE_MODE=clean` を指定。
+     `--clean --if-exists` が付くため、続行前に **二段階の "yes" 確認**を要求する
+
+オプション環境変数:
+
+| 変数 | 用途 | デフォルト |
+|------|------|-----------|
+| `DUMP_DIR` | dump 保存先 | `~/db-migration` |
+| `DUMP_FILE` | 既存 dump を再利用 (相対なら DUMP_DIR 配下) | 新規生成 |
+| `SKIP_DUMP` | `yes` で dump を取らず既存を再利用 | `no` |
+| `RESTORE_MODE` | `append` or `clean` | `append` |
+| `ASSUME_YES` | `yes` で対話確認を全スキップ (非対話 CI 用、推奨しない) | `no` |
+| `POSTGRES_TOOLS_IMAGE` | pg_dump / pg_restore 用 docker イメージ。**Railway の Postgres メジャー (現在 18.3) に揃えること** | `postgres:18-alpine` |
+| `PG_DUMP_IMAGE` | 旧変数名。`POSTGRES_TOOLS_IMAGE` 未設定時のフォールバックとして引き続き受理 | (未設定) |
+| `COMPOSE_FILE` | compose ファイルパス | `infra/xserver/docker-compose.yml` |
+
+> 🔐 **dump ファイルの取り扱い**
+> dump はユーザーデータを含む機微情報。VPS 上で動作確認が済んだら必ず
+> `shred -u ~/db-migration/railway-*.dump` で安全削除すること。
+> `~/db-migration` 自体も用途を終えたら `rm -rf` で消す。
+
+> ⚠️ **移行後に必ず実施すること**
+> - `infra/xserver/.env` の `SCHEDULER_BOOTSTRAP=false` を確認 (true のままだと
+>   jobs-worker 起動直後に 2008-2026 の full sync が走り、Railway 移行直後の
+>   DB へ膨大な INSERT を行ってしまう)
+> - **Railway 側のセキュリティ後処理** (詳細は §8)
 
 ### 3.2 API / jobs-worker をビルド・起動
 
@@ -269,3 +334,110 @@ DB スキーマを巻き戻す必要があるなら別途 `alembic downgrade <re
   当面は分離運用のままにする。
 - **Caddy の自動証明書取得**は 80/443 が外部から到達できる必要がある。
   Cloudflare 等の前段プロキシを挟む場合は DNS-01 challenge を有効化すること。
+
+---
+
+## 8. Railway 後処理 (DB 移行が完了したら)
+
+### 8.1 jobs-worker のブートストラップを止める
+
+移行直後に `infra/xserver/.env` の `SCHEDULER_BOOTSTRAP=true` が残っていると、
+jobs-worker 起動時に 2008-2026 年分の DMM 同期 + resolve + actress が走り、
+**Railway から持ち込んだデータに対して大量の INSERT / UPDATE をかける**ため
+DB に強い負荷がかかる。次の手順で確実に止める:
+
+```bash
+# VPS 上
+cd /opt/short-video-media
+grep -E '^SCHEDULER_BOOTSTRAP=' infra/xserver/.env
+# → SCHEDULER_BOOTSTRAP=false であることを確認 (true なら書き換え)
+
+# 必要なら jobs-worker を再起動して反映
+docker compose -f infra/xserver/docker-compose.yml up -d jobs-worker
+docker compose -f infra/xserver/docker-compose.yml logs --tail=50 jobs-worker
+# "scheduler started. registered jobs:" の直後に bootstrap が起動して
+# いないことをログで確認
+```
+
+通常運用は APScheduler の cron (`sync_catalog` 2 時間ごと等) に任せる。
+過去全件再取得が必要な場合のみ、**意図的に** `SCHEDULER_BOOTSTRAP=true` に
+戻して 1 度だけ走らせ、完了したらすぐ false に戻して redeploy する。
+
+### 8.2 Railway 側 DB の認証情報をローテーション / 停止
+
+移行スクリプトに渡した `RAILWAY_DATABASE_URL` には URL ベタ書きの
+パスワードが含まれている。スクリプト側では argv / ログに出さない設計だが、
+**この値が漏れた瞬間 Railway の DB に外部から接続可能**になるため、
+動作確認が済んだら必ず以下を実施する:
+
+1. **Railway DB のパスワードをローテーション**
+   - Railway ダッシュボード → Project → Postgres サービス
+   - "Variables" タブで `POSTGRES_PASSWORD` を再生成
+   - もしくは Railway CLI: `railway variables --service postgres --set POSTGRES_PASSWORD=<new>`
+   - 旧パスワードは即時無効化されるので、移行スクリプトを再実行する予定が
+     あるなら**ローテ前に**もう一度走らせる
+2. **Railway 側 api / jobs-worker サービスを停止または削除**
+   - 旧 api が走っていると Vercel から切り替え漏れで二重書き込みが起きる
+   - Railway の "Settings" → "Danger" → "Remove Service" もしくは "Pause"
+3. **Railway DATABASE_URL を含む手元シェル履歴 / クリップボードを破棄**
+   - bash: `history -c && history -w` (RAILWAY_DATABASE_URL を export した
+     セッションで実施)
+   - zsh: `LC_ALL=C sed -i '' '/RAILWAY_DATABASE_URL/d' ~/.zsh_history`
+   - VPS の `~/.bash_history` も一度 grep して該当行を削除
+4. **dump ファイルの安全削除**
+   ```bash
+   shred -u ~/db-migration/railway-*.dump
+   rmdir ~/db-migration   # 中身が空になったら
+   ```
+5. **GitHub / Vercel 側に Railway URL が残っていないか確認**
+   - GitHub Repository Settings → Secrets で `DATABASE_URL` / `RAILWAY_*`
+     系の Secret が残っていれば削除
+   - Vercel プロジェクトの Environment Variables も同様に整理
+
+> 補足: パスワードローテだけで Railway DB 本体を残すと、しばらく後に
+> 古い URL が `.env` 等にコピペで残っていて誤接続する事故が起きやすい。
+> **データ移行が完了し動作確認が済んだら Railway DB 自体を削除する**
+> のが最も安全。
+
+---
+
+## 9. トラブルシュート
+
+### 9.1 `pg_dump: error: aborting because of server version mismatch`
+
+```
+pg_dump: error: aborting because of server version mismatch
+pg_dump: detail: server version: 18.3; pg_dump version: 16.x
+```
+
+pg_dump のメジャーが Railway 側より古い時に出る。原因と対処:
+
+- 原因: `POSTGRES_TOOLS_IMAGE` (旧 `PG_DUMP_IMAGE`) が `postgres:16-alpine` のままになっている。
+- 対処: 既定の `postgres:18-alpine` を使う (本リポジトリの既定)。
+  既に環境変数で 16 を渡している場合は `unset PG_DUMP_IMAGE POSTGRES_TOOLS_IMAGE` するか
+  `POSTGRES_TOOLS_IMAGE=postgres:18-alpine` を明示。
+
+### 9.2 db コンテナが Postgres 16 のまま起動してしまう
+
+`docker compose up -d db` 後に `postgres -V` で確認したらまだ 16 だった場合:
+
+- 原因: 既存の `postgres_data` ボリュームが 16 系の PGDATA で初期化されている
+  (PGDATA 内の `PG_VERSION` ファイルがメジャー一致しないと 18 のコンテナは起動しない)。
+- 対処 (本番データ未投入の前提):
+  ```bash
+  cd /opt/short-video-media
+  docker compose -f infra/xserver/docker-compose.yml down -v
+  git pull --ff-only
+  docker compose -f infra/xserver/docker-compose.yml up -d db
+  docker compose -f infra/xserver/docker-compose.yml exec db postgres -V
+  ```
+- 既に本番データが入っているなら、`down -v` する前に必ず
+  `scripts/backup-postgres.sh` で dump を取り、新ボリュームで `pg_restore` で戻す。
+
+### 9.3 Railway 側のメジャーが将来上がった場合
+
+- `infra/xserver/docker-compose.yml` の `db.image`
+- 既定の `POSTGRES_TOOLS_IMAGE`
+- `scripts/backup-postgres.sh` で使うクライアントメジャー (現状は db コンテナ内の pg_dump を使うため自動追随)
+
+の 3 点を同じメジャーに揃える。pg_dump のクライアントは **server と同じか新しい** メジャーであれば動くため、サーバ側を先に上げてからクライアント側を追従させる順序が安全。

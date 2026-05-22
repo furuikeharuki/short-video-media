@@ -441,3 +441,28 @@ pg_dump のメジャーが Railway 側より古い時に出る。原因と対処
 - `scripts/backup-postgres.sh` で使うクライアントメジャー (現状は db コンテナ内の pg_dump を使うため自動追随)
 
 の 3 点を同じメジャーに揃える。pg_dump のクライアントは **server と同じか新しい** メジャーであれば動くため、サーバ側を先に上げてからクライアント側を追従させる順序が安全。
+
+### 9.4 `chmod: ... 許可されていない操作です` (dump ファイルが root 所有)
+
+```
+chmod: '/home/deploy/db-migration/railway-shortvideo-...dump' のパーミッションを変更しています: 許可されていない操作です
+```
+
+過去のバージョンの `scripts/migrate-from-railway.sh` で `docker run` に
+`--user` 指定を入れていなかったため、コンテナ内 root で dump が書き出され、
+ホスト側 `deploy` ユーザーから `chmod` / `mv` できなくなる事象。
+
+- **修正済み**: 現行スクリプトは `docker run --user "$(id -u):$(id -g)"` を
+  渡すため、新しい dump はホスト実行ユーザー所有で作られる。
+- **既に root 所有 dump が `~/db-migration/` に残っている場合**: スクリプト
+  冒頭の検出ロジックが停止して案内するが、手動でも以下で解消できる:
+
+  ```bash
+  # 自分の所有に戻す (中身を保持したい場合)
+  sudo chown -R "$(id -u):$(id -g)" ~/db-migration
+
+  # もしくは中身を破棄して再取得する場合
+  sudo rm -f ~/db-migration/railway-*.dump ~/db-migration/railway-*.dump.partial
+  ```
+
+  どちらかを実施したあと、再度 `./scripts/migrate-from-railway.sh` を実行する。

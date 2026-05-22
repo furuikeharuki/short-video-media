@@ -9,14 +9,19 @@ import { isAdZoneEnabled } from "@/lib/ads/config";
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
 
-// ホーム "/" の <title> は root layout の default (= "AV Shorts") をそのまま
-// 使う (Google が検索結果でサイト名を自動付与するため "ホーム | AV Shorts |
-// AV Shorts" のような重複表示にならないようにする)。
+// ホーム "/" の <title> は "AV Shorts" を明示する。
+// root layout には title.default = "AV Shorts" / template = "%s" が設定済みで
+// あり、page 側で title を省略しても同じ結果になるはずだが、Search Console で
+// 観測された "年齢確認 | AV Shorts | AV Shorts" のような事故を二度と起こさない
+// ために、ホームの <title> はページ側で直接固定する (子の title はそのまま
+// template "%s" を通って <title>AV Shorts</title> として描画される)。
 export const metadata: Metadata = {
+  title: "AV Shorts",
   description:
     "本日配信開始の新作、日間/週間/月間ランキング、人気ジャンル別のAVショート動画を一覧でチェック。気に入った作品はFANZAでそのまま購入できます。",
   alternates: { canonical: "/" },
   openGraph: {
+    title: "AV Shorts",
     description:
       "新作・ランキング・人気ジャンルのAVショート動画。気に入った作品はFANZAでそのまま購入できます。",
     url: "/",

@@ -33,8 +33,9 @@ function isPublicFile(pathname: string): boolean {
 // (robots.txt 上は /age-gate を Disallow しているが、unauth で / を踏んだ
 //  クローラを 307 で /age-gate へ飛ばすと、リダイレクト元 / のスニペット/
 //  タイトルとして age-gate ページの内容を拾ってしまうため、ここで止める)
+// "bot"/"crawler"/"spider"/"crawl"/"spider" など汎用語も含める。
 const CRAWLER_UA_PATTERN =
-  /(googlebot|bingbot|slurp|duckduckbot|baiduspider|yandexbot|sogou|exabot|facebot|facebookexternalhit|twitterbot|linkedinbot|applebot|petalbot|google-inspectiontool|chrome-lighthouse|adsbot-google|mediapartners-google)/i;
+  /(googlebot|bingbot|slurp|duckduckbot|baiduspider|yandexbot|sogou|exabot|facebot|facebookexternalhit|twitterbot|linkedinbot|applebot|petalbot|google-inspectiontool|chrome-lighthouse|adsbot-google|mediapartners-google|bot\b|crawler|spider|crawl)/i;
 
 function isCrawler(userAgent: string | null): boolean {
   if (!userAgent) return false;
@@ -43,6 +44,15 @@ function isCrawler(userAgent: string | null): boolean {
 
 export function middleware(request: NextRequest) {
   const { pathname } = request.nextUrl;
+
+  // /age-gate 自体に当たった場合は素通しするが、X-Robots-Tag を付けて
+  // 万一クローラが /age-gate を取得しても index 対象にさせない (page metadata の
+  // robots: noindex に加え、HTTP ヘッダーレベルでも明示する)。
+  if (pathname.startsWith("/age-gate")) {
+    const res = NextResponse.next();
+    res.headers.set("X-Robots-Tag", "noindex, nofollow, noarchive");
+    return res;
+  }
 
   // 公開パスはスキップ
   if (PUBLIC_PATHS.some((p) => pathname.startsWith(p))) {
@@ -68,11 +78,14 @@ export function middleware(request: NextRequest) {
     return NextResponse.next();
   }
 
-  // 未認証なら age-gate へ
+  // 未認証なら age-gate へ。リダイレクト応答自体にも X-Robots-Tag を付けて、
+  // クローラがこのレスポンスを辿った場合でも index 対象にしない。
   const url = request.nextUrl.clone();
   url.pathname = "/age-gate";
   url.searchParams.set("next", pathname);
-  return NextResponse.redirect(url);
+  const redirect = NextResponse.redirect(url);
+  redirect.headers.set("X-Robots-Tag", "noindex, nofollow, noarchive");
+  return redirect;
 }
 
 export const config = {

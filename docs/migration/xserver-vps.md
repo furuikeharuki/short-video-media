@@ -466,3 +466,40 @@ chmod: '/home/deploy/db-migration/railway-shortvideo-...dump' のパーミッシ
   ```
 
   どちらかを実施したあと、再度 `./scripts/migrate-from-railway.sh` を実行する。
+
+### 9.5 db コンテナが再起動ループ (Postgres 18 で volume mount 先が古い)
+
+ログに以下のような行が見える場合:
+
+```
+This PostgreSQL data directory contains a lost+found directory ...
+... /var/lib/postgresql/data ... (unused mount/volume) ...
+```
+
+Postgres 18 公式イメージは **VOLUME を `/var/lib/postgresql` に変更** し、
+PGDATA を `/var/lib/postgresql/18/docker` 既定にした (将来の `pg_upgrade --link`
+を効かせるための再配置)。従来通り `/var/lib/postgresql/data` に mount すると
+v18 では「期待されない場所にデータがある」とみなされ起動失敗 / 再起動ループに
+入る。
+
+- **修正済み**: `infra/xserver/docker-compose.yml` の db.volumes は
+  `postgres_data:/var/lib/postgresql` (v18 公式推奨) に変更済み。
+- **既に旧パスで空の volume を作って失敗している場合** は、新規データ未投入の
+  前提でボリュームごと作り直す:
+
+  ```bash
+  cd /opt/short-video-media
+  git pull --ff-only origin main
+  docker compose -f infra/xserver/docker-compose.yml down -v
+  docker compose -f infra/xserver/docker-compose.yml up -d db
+  docker compose -f infra/xserver/docker-compose.yml logs --tail=30 db
+  # "database system is ready to accept connections" が出れば OK
+  docker compose -f infra/xserver/docker-compose.yml exec db postgres -V
+  # "postgres (PostgreSQL) 18.x" を確認
+  ```
+
+- 既に本番データが入っていてどうしても残したい場合は、`pg_dump` を取得して
+  `down -v` → 新ボリュームで `pg_restore` する。`docker run` で旧 mount 先
+  (`/var/lib/postgresql/data`) と新 mount 先 (`/var/lib/postgresql/18/docker`)
+  を両方マウントして `mv` で移動する手もあるが、空 volume なら作り直しが最も
+  確実。

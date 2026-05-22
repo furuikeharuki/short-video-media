@@ -1,7 +1,8 @@
-"""FastAPI エンドポイントのテスト。
+"""resolver サービス本体 (app.resolver.main) のエンドポイント単体テスト。
 
-Playwright 起動を回避するため lifespan をバイパスし、
-BrowserPool と extract_mp4_url をモック化する。
+旧 apps/resolver/tests/test_main.py を apps/api パッケージへ移植したもの。
+Playwright 起動を回避するため lifespan をバイパスし、BrowserPool と
+extract_mp4_url をモック化する。
 """
 from __future__ import annotations
 
@@ -11,8 +12,8 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from fastapi.testclient import TestClient
 
-from src import main as main_module
-from src.resolver import (
+from app.resolver import main as main_module
+from app.resolver.extractor import (
     ResolveNotFound,
     ResolveResult,
     ResolveTimeout,
@@ -20,15 +21,9 @@ from src.resolver import (
 )
 
 
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
-
 def _make_app_with_pool(monkeypatch, extract_mock):
     """lifespan を差し替えた app を作って TestClient を返す。"""
 
-    # 設定値を上書き
     monkeypatch.setattr(main_module.settings, "resolver_api_key", "test-key")
     monkeypatch.setattr(main_module.settings, "dmm_affiliate_id", "affi-001")
 
@@ -56,15 +51,9 @@ def _make_app_with_pool(monkeypatch, extract_mock):
         app.state.browser_pool = fake_pool
         yield
 
-    # FastAPI の lifespan を差し替え
     monkeypatch.setattr(main_module.app.router, "lifespan_context", fake_lifespan)
 
     return TestClient(main_module.app)
-
-
-# ---------------------------------------------------------------------------
-# /health
-# ---------------------------------------------------------------------------
 
 
 def test_health_returns_ok(monkeypatch):
@@ -77,11 +66,6 @@ def test_health_returns_ok(monkeypatch):
         assert body["browser_running"] is True
 
 
-# ---------------------------------------------------------------------------
-# /resolve 認証
-# ---------------------------------------------------------------------------
-
-
 def test_resolve_requires_bearer(monkeypatch):
     extract = AsyncMock(
         return_value=ResolveResult(
@@ -90,11 +74,9 @@ def test_resolve_requires_bearer(monkeypatch):
         )
     )
     with _make_app_with_pool(monkeypatch, extract) as client:
-        # ヘッダなし
         res = client.post("/resolve", json={"content_id": "1sun00052a"})
         assert res.status_code == 401
 
-        # 不正トークン
         res = client.post(
             "/resolve",
             json={"content_id": "1sun00052a"},
@@ -120,11 +102,6 @@ def test_resolve_succeeds_with_correct_bearer(monkeypatch):
         body = res.json()
         assert body["content_id"] == "1sun00052a"
         assert body["mp4_url"].endswith(".mp4")
-
-
-# ---------------------------------------------------------------------------
-# /resolve 例外マッピング
-# ---------------------------------------------------------------------------
 
 
 @pytest.mark.parametrize(

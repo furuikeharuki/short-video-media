@@ -1,7 +1,8 @@
 """DMM litevideo iframe から MP4 直リンク URL を抽出するコアロジック。
 
-`apps/jobs/src/extract_mp4_urls.py::extract_mp4_url` を切り出し、
-FastAPI エンドポイントから呼びやすいよう例外整形を行ったもの。
+旧 ``apps/resolver/src/resolver.py`` を ``apps/api`` パッケージへ移した
+もの。モジュール名が ``app.resolver.resolver`` だと冗長なので
+``extractor`` にリネームしている。
 
 ResolveError サブクラスで HTTP ステータスコードへのマッピングを表現する:
     - ResolveNotFound  → HTTP 404 (MP4 URL がページから見つからない)

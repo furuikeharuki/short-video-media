@@ -91,20 +91,33 @@ log "docker compose up -d..."
 docker compose -f "$COMPOSE_FILE" up -d --remove-orphans $SERVICES
 
 # ---- ヘルスチェック --------------------------------------------------------
-log "waiting for api to become healthy..."
-for i in $(seq 1 30); do
-  if docker compose -f "$COMPOSE_FILE" ps --format json api 2>/dev/null \
-      | grep -q '"Health":"healthy"'; then
-    log "api healthy"
-    break
-  fi
-  if [ "$i" -eq 30 ]; then
-    log "api did not become healthy within 30 * 5s. tail logs and proceed manually."
-    docker compose -f "$COMPOSE_FILE" logs --tail=80 api || true
-    fail "api health check failed"
-  fi
-  sleep 5
-done
+# api と resolver それぞれの healthcheck が healthy になるまで待つ。
+# resolver は Chromium 起動に 30〜60 秒かかるため、api より長めに見る。
+wait_for_healthy() {
+  local svc="$1"
+  local max_iter="$2"
+  log "waiting for ${svc} to become healthy (max $((max_iter * 5))s)..."
+  for i in $(seq 1 "$max_iter"); do
+    if docker compose -f "$COMPOSE_FILE" ps --format json "$svc" 2>/dev/null \
+        | grep -q '"Health":"healthy"'; then
+      log "${svc} healthy"
+      return 0
+    fi
+    if [ "$i" -eq "$max_iter" ]; then
+      log "${svc} did not become healthy in time. tailing logs:"
+      docker compose -f "$COMPOSE_FILE" logs --tail=80 "$svc" || true
+      return 1
+    fi
+    sleep 5
+  done
+}
+
+wait_for_healthy api 30 || fail "api health check failed"
+# resolver サービスが compose に定義されている場合のみチェック。
+# 未定義の環境 (旧 compose) ではスキップ。
+if docker compose -f "$COMPOSE_FILE" config --services 2>/dev/null | grep -qx 'resolver'; then
+  wait_for_healthy resolver 36 || fail "resolver health check failed"
+fi
 
 # ---- 古いイメージ掃除 -----------------------------------------------------
 # ディスクが枯渇しがちな VPS では重要。dangling のみで安全。

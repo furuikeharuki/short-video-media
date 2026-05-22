@@ -6,29 +6,32 @@
 ## 全体構成
 
 ```
-┌──────────────────────┐         ┌──────────────────────┐
-│  apps/web (Next.js)  │  HTTPS  │  apps/api (FastAPI)  │
-│  Vercel               │ ──────▶ │  Railway              │
-│  - SSR + ISR          │         │  - REST /api/v1/*     │
-│  - Auth.js v5         │         │  - PyJWT (exchange)   │
-│  - parallel routes    │         │  - SQLAlchemy async   │
-└──────────┬───────────┘         └──────────┬───────────┘
-           │                                 │
-           │                                 │
-           │           ┌─────────────────────▼──────────┐
-           │           │  Railway Postgres (managed)    │
-           │           │  - movies / actresses / ...    │
-           │           │  - events / bookmarks / ...    │
-           │           └────────────────────────────────┘
-           │                                 ▲
-           │                                 │
-           │                    ┌────────────┴─────────────┐
-           │                    │  apps/jobs (Python)      │
-           └─ DMM /          ◀──┤  GitHub Actions cron     │
-              FANZA API         │  - sync_catalog.py       │
-                                │  - extract_mp4_urls.py   │
-                                │  - Playwright Chromium   │
-                                └──────────────────────────┘
+┌──────────────────────┐         ┌──────────────────────────────┐
+│  apps/web (Next.js)  │  HTTPS  │ Xserver VPS (Tokyo)          │
+│  Vercel              │ ──────▶ │  ┌────────────────────────┐  │
+│  - SSR + ISR         │         │  │ api (apps/api)         │  │
+│  - Auth.js v5        │         │  │ - REST /api/v1/*       │  │
+│  - parallel routes   │         │  │ - PyJWT / SQLAlchemy   │  │
+└──────────┬───────────┘         │  └─────────┬──────────────┘  │
+           │                     │            │ HTTP            │
+           │                     │            ▼                 │
+           │                     │  ┌────────────────────────┐  │
+           │                     │  │ resolver               │  │
+           │                     │  │ (apps/api/app.resolver)│  │
+           │                     │  │ Playwright + Chromium  │  │
+           │                     │  └────────────────────────┘  │
+           │                     │                              │
+           │                     │  ┌────────────────────────┐  │
+           │                     │  │ jobs-worker (apps/jobs)│  │
+           │                     │  │ APScheduler 常駐       │  │
+           │                     │  └─────────┬──────────────┘  │
+           │                     │            │                 │
+           │                     │  ┌─────────▼──────────────┐  │
+           │                     │  │ db (Postgres 18)       │  │
+           │                     │  └────────────────────────┘  │
+           │                     └──────────────────────────────┘
+           │
+           └─ DMM / FANZA API (jobs-worker / resolver から outbound)
 ```
 
 ## モジュール責務
@@ -36,9 +39,25 @@
 | モジュール | 責務 | デプロイ先 |
 |-----------|------|-----------|
 | `apps/web` | UI / SSR / Auth.js / 縦スクロール再生 / モーダル詳細 | Vercel |
-| `apps/api` | REST API / DB アクセス / 計測イベント受付 / JWT 発行 | Railway |
-| `apps/jobs` | DMM API 取得 / MP4 直リンク抽出 / DB upsert | GitHub Actions |
+| `apps/api` | REST API / DB アクセス / 計測イベント受付 / JWT 発行 | Xserver VPS (旧 Railway) |
+| `apps/api` (`app.resolver`) | DMM litevideo iframe → MP4 URL 抽出 (Playwright) | Xserver VPS の resolver サービスとして起動 |
+| `apps/jobs` | DMM API 取得 / DB upsert / sample URL 解決ジョブ | Xserver VPS の jobs-worker (旧 GitHub Actions cron) |
 | `packages/shared` | TS 型・JSON Schema 共有 | (内部) |
+
+### resolver の位置づけ
+
+以前は `apps/resolver` として独立した FastAPI サービス (Xserver VPS Tokyo)
+だったが、Xserver VPS への移行で `apps/api` 自身も日本リージョンで動く
+ようになったため、コードを `apps/api/app/resolver/` に統合済み。
+
+通常 API コンテナ (slim Python image, ~150MB) と resolver サービス
+(`apps/api/Dockerfile.resolver`, Playwright base ~2GB) は **同じ
+`apps/api` パッケージを共有しつつ別イメージで動く**。これにより:
+
+- API メインの応答性 / 起動時間に Playwright/Chromium の影響が出ない
+- resolver のロジックを 2 箇所で保守する必要がない
+- `apps/api/app/services/resolver_client.py` (HTTP クライアント) → `app.resolver.main` への呼び出し境界はそのまま (HTTP 経由)
+- compose 内では同 docker network 経由 (`http://resolver:8080`) で通信
 
 ## データフロー
 

@@ -29,6 +29,17 @@ const BOTTOM_NAV_H = 56;
 const SWIPE_LOCK_THRESHOLD = 16;
 
 /**
+ * touchend で「スワイプとして次/前の動画に進む」と判定する縦移動量 (px) と
+ * 最大経過時間 (ms)。値が大きいほど厳しく (スワイプしにくく) なる。
+ *
+ * 以前は 60px / 1000ms でスワイプが効きにくいという声があったため緩和。
+ * 距離は SWIPE_LOCK_THRESHOLD (16px) より十分大きく保ち、ジャンル chip 等の
+ * タップが誤ってスワイプ確定するのを避ける。
+ */
+const SWIPE_COMMIT_DISTANCE = 40;
+const SWIPE_COMMIT_MAX_MS   = 1500;
+
+/**
  * touchstart の target がテキスト入力系の要素 (input / textarea / contenteditable
  * / select) の場合は、FeedViewer のスワイプロジックを走らせない。
  * これらの要素はテキスト選択 / 文字入力のためにタッチを内部で消費しており、
@@ -344,7 +355,7 @@ export default function FeedViewer({
       setDragPx(0);
       const dy = e.changedTouches[0].clientY - dragStartYForEnd.current;
       const dt = Date.now() - dragStartTime.current;
-      if (Math.abs(dy) > 60 && dt < 1000) { if (dy < 0) goNext(); else goPrev(); }
+      if (Math.abs(dy) > SWIPE_COMMIT_DISTANCE && dt < SWIPE_COMMIT_MAX_MS) { if (dy < 0) goNext(); else goPrev(); }
     };
 
     const onTouchCancel = () => {

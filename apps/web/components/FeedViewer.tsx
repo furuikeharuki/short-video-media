@@ -34,6 +34,9 @@ const SWIPE_LOCK_THRESHOLD = 1;
  *
  * 以前は 60px / 1000ms → 40px / 1500ms → 20px → 5px と緩和してきたが、
  * さらに反応をよくして欲しいという要望があり、距離を 1px まで詰める。
+ * 比較は `>=` で行うため、「1px 以上の移動」でコミットされる
+ * (`>` だと 1px ちょうどでは確定せず snapback してしまい、PR #159 の
+ * 「1px 以上で進む」という意図と食い違っていた)。
  * 指のごく僅かなブレでもスワイプ確定するため、タップとの取り違えが
  * 起きやすくなる点には注意。SWIPE_LOCK_THRESHOLD (1px) と同値にすることで
  * ロックを立ててからコミット判定に到達する経路は維持している。
@@ -357,7 +360,7 @@ export default function FeedViewer({
       setDragPx(0);
       const dy = e.changedTouches[0].clientY - dragStartYForEnd.current;
       const dt = Date.now() - dragStartTime.current;
-      if (Math.abs(dy) > SWIPE_COMMIT_DISTANCE && dt < SWIPE_COMMIT_MAX_MS) { if (dy < 0) goNext(); else goPrev(); }
+      if (Math.abs(dy) >= SWIPE_COMMIT_DISTANCE && dt < SWIPE_COMMIT_MAX_MS) { if (dy < 0) goNext(); else goPrev(); }
     };
 
     const onTouchCancel = () => {

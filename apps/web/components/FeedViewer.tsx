@@ -32,11 +32,13 @@ const SWIPE_LOCK_THRESHOLD = 16;
  * touchend で「スワイプとして次/前の動画に進む」と判定する縦移動量 (px) と
  * 最大経過時間 (ms)。値が大きいほど厳しく (スワイプしにくく) なる。
  *
- * 以前は 60px / 1000ms でスワイプが効きにくいという声があったため緩和。
- * 距離は SWIPE_LOCK_THRESHOLD (16px) より十分大きく保ち、ジャンル chip 等の
- * タップが誤ってスワイプ確定するのを避ける。
+ * 以前は 60px / 1000ms → 40px / 1500ms と緩和してきたが、まだ反応しづらい
+ * という声があり、さらに距離を 20px まで詰めて指の移動量が少なくても
+ * 次/前の動画に進めるようにする。SWIPE_LOCK_THRESHOLD (16px) より大きい
+ * 値は維持しているため、ジャンル chip 等の純粋なタップが誤ってスワイプ
+ * 確定する事故は引き続き防げる。
  */
-const SWIPE_COMMIT_DISTANCE = 40;
+const SWIPE_COMMIT_DISTANCE = 20;
 const SWIPE_COMMIT_MAX_MS   = 1500;
 
 /**

@@ -78,8 +78,12 @@ services:
   # --------------------------------------------------------------------------
   api:
     build:
-      context: ../..
-      dockerfile: apps/api/Dockerfile
+      # apps/api/Dockerfile は `COPY pyproject.toml .` 等を context ルート
+      # 直下から取る前提で書かれているため、build context は apps/api を指す。
+      # (worker 側は逆に `COPY apps/api /app/apps/api` するため context=repo root が必須。
+      # 両者で context が違う点はコメントで明示しておく)
+      context: ../../apps/api
+      dockerfile: Dockerfile
     restart: unless-stopped
     depends_on:
       db:

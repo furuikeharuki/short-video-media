@@ -27,7 +27,7 @@ Railway 上で稼働している `apps/api` と `apps/jobs` (worker) を Xserver
 │                       │ TCP            │ TCP            │
 │                       ▼                ▼                │
 │                ┌────────────────────────────┐           │
-│                │   db (Postgres 16)         │           │
+│                │   db (Postgres 18)         │           │
 │                └────────────────────────────┘           │
 │                                                         │
 │  ┌──────────────────────────────────────────────────┐   │
@@ -128,6 +128,30 @@ Railway 上で稼働している `apps/api` と `apps/jobs` (worker) を Xserver
 
 ### 3.1 Railway からのデータ移行 (DB)
 
+> ⚠️ **Postgres バージョン整合 (重要)**
+>
+> Railway 側 Postgres は **18.3** で稼働中。pg_dump は server より古い
+> メジャーでは `aborting because of server version mismatch` で失敗するため、
+> 以下を **18 系に揃える** こと:
+>
+> - VPS 側 `db` サービス: `infra/xserver/docker-compose.yml` → `postgres:18-alpine` (本リポジトリで既に設定済み)
+> - 移行スクリプト内の pg_dump/pg_restore イメージ: 既定で `postgres:18-alpine`。
+>   別バージョンに切替が必要なら `POSTGRES_TOOLS_IMAGE=postgres:18-alpine` で上書き
+>
+> 既に `postgres:16-alpine` の VPS db で空の volume を作成していた場合は、
+> PGDATA がメジャー間で非互換なため **ボリュームごと作り直し** が必要:
+>
+> ```bash
+> # まだ本番データを入れていない前提 (中身を消してよい場合のみ)
+> cd /opt/short-video-media
+> docker compose -f infra/xserver/docker-compose.yml down -v
+> # ↑ -v で postgres_data ボリュームも削除される
+> git pull --ff-only
+> docker compose -f infra/xserver/docker-compose.yml up -d db
+> docker compose -f infra/xserver/docker-compose.yml exec db postgres -V
+> # → "postgres (PostgreSQL) 18.x" であることを確認
+> ```
+
 VPS 上で **`scripts/migrate-from-railway.sh`** を実行すれば、
 Railway Postgres から VPS の `db` コンテナへ pg_dump (custom format) →
 pg_restore を一括で実施できる。Railway DATABASE_URL はコマンドライン引数では
@@ -175,7 +199,8 @@ ls infra/xserver/.env
 | `SKIP_DUMP` | `yes` で dump を取らず既存を再利用 | `no` |
 | `RESTORE_MODE` | `append` or `clean` | `append` |
 | `ASSUME_YES` | `yes` で対話確認を全スキップ (非対話 CI 用、推奨しない) | `no` |
-| `PG_DUMP_IMAGE` | pg_dump を走らせる docker イメージ | `postgres:16-alpine` |
+| `POSTGRES_TOOLS_IMAGE` | pg_dump / pg_restore 用 docker イメージ。**Railway の Postgres メジャー (現在 18.3) に揃えること** | `postgres:18-alpine` |
+| `PG_DUMP_IMAGE` | 旧変数名。`POSTGRES_TOOLS_IMAGE` 未設定時のフォールバックとして引き続き受理 | (未設定) |
 | `COMPOSE_FILE` | compose ファイルパス | `infra/xserver/docker-compose.yml` |
 
 > 🔐 **dump ファイルの取り扱い**
@@ -373,3 +398,46 @@ docker compose -f infra/xserver/docker-compose.yml logs --tail=50 jobs-worker
 > 古い URL が `.env` 等にコピペで残っていて誤接続する事故が起きやすい。
 > **データ移行が完了し動作確認が済んだら Railway DB 自体を削除する**
 > のが最も安全。
+
+---
+
+## 9. トラブルシュート
+
+### 9.1 `pg_dump: error: aborting because of server version mismatch`
+
+```
+pg_dump: error: aborting because of server version mismatch
+pg_dump: detail: server version: 18.3; pg_dump version: 16.x
+```
+
+pg_dump のメジャーが Railway 側より古い時に出る。原因と対処:
+
+- 原因: `POSTGRES_TOOLS_IMAGE` (旧 `PG_DUMP_IMAGE`) が `postgres:16-alpine` のままになっている。
+- 対処: 既定の `postgres:18-alpine` を使う (本リポジトリの既定)。
+  既に環境変数で 16 を渡している場合は `unset PG_DUMP_IMAGE POSTGRES_TOOLS_IMAGE` するか
+  `POSTGRES_TOOLS_IMAGE=postgres:18-alpine` を明示。
+
+### 9.2 db コンテナが Postgres 16 のまま起動してしまう
+
+`docker compose up -d db` 後に `postgres -V` で確認したらまだ 16 だった場合:
+
+- 原因: 既存の `postgres_data` ボリュームが 16 系の PGDATA で初期化されている
+  (PGDATA 内の `PG_VERSION` ファイルがメジャー一致しないと 18 のコンテナは起動しない)。
+- 対処 (本番データ未投入の前提):
+  ```bash
+  cd /opt/short-video-media
+  docker compose -f infra/xserver/docker-compose.yml down -v
+  git pull --ff-only
+  docker compose -f infra/xserver/docker-compose.yml up -d db
+  docker compose -f infra/xserver/docker-compose.yml exec db postgres -V
+  ```
+- 既に本番データが入っているなら、`down -v` する前に必ず
+  `scripts/backup-postgres.sh` で dump を取り、新ボリュームで `pg_restore` で戻す。
+
+### 9.3 Railway 側のメジャーが将来上がった場合
+
+- `infra/xserver/docker-compose.yml` の `db.image`
+- 既定の `POSTGRES_TOOLS_IMAGE`
+- `scripts/backup-postgres.sh` で使うクライアントメジャー (現状は db コンテナ内の pg_dump を使うため自動追随)
+
+の 3 点を同じメジャーに揃える。pg_dump のクライアントは **server と同じか新しい** メジャーであれば動くため、サーバ側を先に上げてからクライアント側を追従させる順序が安全。

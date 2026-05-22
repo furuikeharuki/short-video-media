@@ -19,8 +19,10 @@
 # 前提:
 #   - VPS 上で実行する (Compose で db サービスが起動している、もしくは本スクリプトが
 #     先に起動してくれる)。
-#   - PG_DUMP_IMAGE で指定する Postgres クライアント (デフォルト postgres:16-alpine)
-#     を docker run できる。
+#   - POSTGRES_TOOLS_IMAGE で指定する Postgres クライアント
+#     (デフォルト postgres:18-alpine) を docker run できる。
+#     Railway 側 Postgres のメジャーバージョンに合わせること
+#     (現状 18.3 で稼働しているため 18 系)。
 #   - infra/xserver/.env から POSTGRES_USER / POSTGRES_DB / POSTGRES_PASSWORD を読む。
 #
 # 使い方:
@@ -35,7 +37,13 @@
 # オプション環境変数:
 #   DUMP_DIR        : dump 保存先 (デフォルト: ~/db-migration)
 #   COMPOSE_FILE    : compose ファイル (デフォルト: infra/xserver/docker-compose.yml)
-#   PG_DUMP_IMAGE   : pg_dump を実行する docker image (デフォルト: postgres:16-alpine)
+#   POSTGRES_TOOLS_IMAGE : pg_dump を実行する docker image
+#                          (デフォルト: postgres:18-alpine)
+#                          Railway Postgres は 18.3 で動いているため、16 系で
+#                          dump すると "aborting because of server version
+#                          mismatch" で失敗する。VPS 側 db (compose の db
+#                          サービス) も同じ 18 系に揃える。
+#                          後方互換のため旧名 PG_DUMP_IMAGE も尊重する。
 #   ASSUME_YES      : "yes" なら確認プロンプトをスキップ (非対話 CI 用、推奨しない)
 #   SKIP_DUMP       : "yes" なら既存 dump を再利用 (デバッグ用)
 #   DUMP_FILE       : 既存 dump を指定 (相対パスなら DUMP_DIR 配下)
@@ -58,7 +66,9 @@ cd "$REPO_DIR"
 
 COMPOSE_FILE="${COMPOSE_FILE:-infra/xserver/docker-compose.yml}"
 DUMP_DIR="${DUMP_DIR:-$HOME/db-migration}"
-PG_DUMP_IMAGE="${PG_DUMP_IMAGE:-postgres:16-alpine}"
+# POSTGRES_TOOLS_IMAGE が pg_dump/pg_restore 用の正式変数。
+# 旧 PG_DUMP_IMAGE も後方互換で受け付ける (新規利用は POSTGRES_TOOLS_IMAGE 推奨)。
+POSTGRES_TOOLS_IMAGE="${POSTGRES_TOOLS_IMAGE:-${PG_DUMP_IMAGE:-postgres:18-alpine}}"
 ASSUME_YES="${ASSUME_YES:-no}"
 SKIP_DUMP="${SKIP_DUMP:-no}"
 RESTORE_MODE="${RESTORE_MODE:-append}"
@@ -185,7 +195,7 @@ else
   if ! docker run --rm \
       -v "$DUMP_PARENT":/dump \
       -e PG_SOURCE_URL="$RAILWAY_DATABASE_URL" \
-      "$PG_DUMP_IMAGE" \
+      "$POSTGRES_TOOLS_IMAGE" \
       sh -c 'pg_dump -Fc --no-owner --no-privileges --verbose \
                -f "/dump/'"$DUMP_BASENAME"'.partial" \
                "$PG_SOURCE_URL"' 2>&1 \

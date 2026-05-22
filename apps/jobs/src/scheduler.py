@@ -7,7 +7,8 @@ egress 大量課金 ($61/2日 など) を完全にゼロ化することが目的
 
 スケジュール (JST 想定 / デフォルト):
   - sync_catalog (incremental)        : 2 時間ごと (08, 10, 12, 14, 16, 18, 20 JST)
-  - resolve_sample_urls               : 毎日 11:00 JST
+  - resolve_sample_urls               : 毎日 11:00 JST (NULL の差分埋め)
+  - resolve_sample_urls_full_refresh  : 毎月 1 日 03:00 JST (全件再解決、デフォルト OFF)
   - sync_actress_profiles (--only-missing) : 毎日 13:00 JST
 
 タイムゾーン:
@@ -34,6 +35,8 @@ egress 大量課金 ($61/2日 など) を完全にゼロ化することが目的
 (すべて任意、未設定なら現行挙動を維持):
   - SCHEDULE_ENABLE_SYNC_CATALOG          : "false" でジョブ登録自体をスキップ
   - SCHEDULE_ENABLE_RESOLVE_SAMPLE_URLS   : "false" でジョブ登録自体をスキップ
+  - SCHEDULE_ENABLE_RESOLVE_SAMPLE_URLS_FULL_REFRESH
+        : "true" で月次フルリフレッシュジョブを登録 (デフォルト false)
   - SCHEDULE_ENABLE_ACTRESS_PROFILES      : "false" でジョブ登録自体をスキップ
   - SCHEDULE_SYNC_CATALOG_MODE            : "incremental" (デフォルト) / "full"
   - SCHEDULE_SYNC_CATALOG_FLOORS          : 取得フロアをコンマ区切り指定。
@@ -41,12 +44,16 @@ egress 大量課金 ($61/2日 など) を完全にゼロ化することが目的
                                             (動画フロア + goods) を使う
   - SCHEDULE_SYNC_CATALOG_HITS_PER_FLOOR  : 1 floor あたりの取得件数 (デフォルト 100)
   - SCHEDULE_RESOLVE_LIMIT                : 1 回の resolve で対象とする件数上限
+  - SCHEDULE_RESOLVE_FULL_REFRESH_LIMIT   : 月次フルリフレッシュ時の件数上限 (任意)
   - SCHEDULE_ACTRESS_ONLY_MISSING         : "false" にすると全女優プロフィール再取得
   - SCHEDULE_ACTRESS_LIMIT                : 1 回の sync_actress_profiles で処理する件数上限
   - SCHEDULE_SYNC_CATALOG_CRON_HOUR       : 例 "8,10,12,14,16,18,20" (デフォルト)
   - SCHEDULE_SYNC_CATALOG_CRON_MINUTE     : 例 "0" (デフォルト)
   - SCHEDULE_RESOLVE_CRON_HOUR            : 例 "11" (デフォルト)
   - SCHEDULE_RESOLVE_CRON_MINUTE          : 例 "0" (デフォルト)
+  - SCHEDULE_RESOLVE_FULL_REFRESH_CRON_DAY    : 例 "1" (デフォルト = 月初)
+  - SCHEDULE_RESOLVE_FULL_REFRESH_CRON_HOUR   : 例 "3" (デフォルト)
+  - SCHEDULE_RESOLVE_FULL_REFRESH_CRON_MINUTE : 例 "0" (デフォルト)
   - SCHEDULE_ACTRESS_CRON_HOUR            : 例 "13" (デフォルト)
   - SCHEDULE_ACTRESS_CRON_MINUTE          : 例 "0" (デフォルト)
 """
@@ -190,10 +197,41 @@ async def _run_resolve_sample_urls() -> None:
             concurrency=concurrency,
             limit=limit,
             dry_run=False,
+            force_all=False,
         )
         logger.info("[job] resolve_sample_urls done")
     except Exception:
         logger.error("[job] resolve_sample_urls FAILED\n%s", traceback.format_exc())
+
+
+async def _run_resolve_sample_urls_full_refresh() -> None:
+    """月次の全件再解決ジョブ。
+
+    通常の resolve_sample_urls は sample_movie_url IS NULL のみ対象とするが、
+    DMM 側 (CDN) の MP4 URL は数週間〜数カ月で期限切れになる可能性があるため、
+    定期的に全件を再解決して URL を最新化する。
+
+    デフォルトは無効 (SCHEDULE_ENABLE_RESOLVE_SAMPLE_URLS_FULL_REFRESH=true で有効化)。
+    """
+    concurrency = _resolve_concurrency()
+    limit = _env_int("SCHEDULE_RESOLVE_FULL_REFRESH_LIMIT", None)
+    logger.info(
+        "[job] resolve_sample_urls_full_refresh start (concurrency=%d, limit=%s)",
+        concurrency, limit,
+    )
+    try:
+        await resolve_main(
+            concurrency=concurrency,
+            limit=limit,
+            dry_run=False,
+            force_all=True,
+        )
+        logger.info("[job] resolve_sample_urls_full_refresh done")
+    except Exception:
+        logger.error(
+            "[job] resolve_sample_urls_full_refresh FAILED\n%s",
+            traceback.format_exc(),
+        )
 
 
 async def _run_sync_actress_profiles() -> None:
@@ -380,6 +418,29 @@ def _register_jobs(scheduler: AsyncIOScheduler) -> None:
     else:
         logger.info(
             "SCHEDULE_ENABLE_RESOLVE_SAMPLE_URLS=false: skipping resolve_sample_urls job"
+        )
+
+    # resolve_sample_urls_full_refresh: 毎月 1 日 03:00 JST (デフォルト無効)
+    # CDN URL の期限切れに備えて全件再解決する。Playwright を全件分回すため
+    # 数時間〜数十時間かかり得る。深夜帯の月初を既定とする。
+    if _env_bool("SCHEDULE_ENABLE_RESOLVE_SAMPLE_URLS_FULL_REFRESH", False):
+        full_day = os.getenv("SCHEDULE_RESOLVE_FULL_REFRESH_CRON_DAY", "1")
+        full_hour = os.getenv("SCHEDULE_RESOLVE_FULL_REFRESH_CRON_HOUR", "3")
+        full_minute = os.getenv("SCHEDULE_RESOLVE_FULL_REFRESH_CRON_MINUTE", "0")
+        scheduler.add_job(
+            _run_resolve_sample_urls_full_refresh,
+            CronTrigger(
+                day=full_day, hour=full_hour, minute=full_minute, timezone=TZ
+            ),
+            id="resolve_sample_urls_full_refresh",
+            name="resolve_sample_urls_full_refresh",
+            max_instances=1,
+            coalesce=True,
+        )
+    else:
+        logger.info(
+            "SCHEDULE_ENABLE_RESOLVE_SAMPLE_URLS_FULL_REFRESH=false: "
+            "skipping resolve_sample_urls_full_refresh job"
         )
 
     # sync_actress_profiles: 毎日 13:00 JST (日中帯)

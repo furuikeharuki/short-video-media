@@ -24,6 +24,9 @@
 
     # DB に書き込まずログ出力だけ
     python -m src.resolve_sample_urls --dry-run --limit 10
+
+    # 既存解決済みも含めて全件再解決 (月次フルリフレッシュ用)
+    python -m src.resolve_sample_urls --force-all
 """
 from __future__ import annotations
 
@@ -168,6 +171,7 @@ async def main(
     concurrency: int,
     limit: int | None,
     dry_run: bool,
+    force_all: bool = False,
 ) -> None:
     db_url = os.getenv("DATABASE_URL")
     if not db_url:
@@ -182,20 +186,24 @@ async def main(
 
     print(
         f"[resolve_sample_urls] start concurrency={concurrency} "
-        f"limit={limit} dry_run={dry_run}"
+        f"limit={limit} dry_run={dry_run} force_all={force_all}"
     )
 
     engine = create_async_engine(_get_async_url(db_url))
     Session = async_sessionmaker(engine, expire_on_commit=False)
 
-    # 対象 movies を取得 (sample_movie_url IS NULL のものだけ)
+    # 対象 movies を取得。
+    # 通常モード: sample_movie_url IS NULL のものだけ (差分埋め)
+    # force_all=True: content_id を持つすべての movies を再解決
+    #   (CDN 側の URL が定期的に切り替わるため、月次フルリフレッシュで使う)
     async with Session() as session:
         stmt = select(
             Movie.id, Movie.content_id, Movie.slug
         ).where(
             Movie.content_id.is_not(None),
-            Movie.sample_movie_url.is_(None),
         )
+        if not force_all:
+            stmt = stmt.where(Movie.sample_movie_url.is_(None))
         rows = (await session.execute(stmt)).all()
 
     targets: list[tuple[str, str, str]] = [
@@ -248,10 +256,18 @@ if __name__ == "__main__":
         "--dry-run", action="store_true",
         help="DB 書き込みせずログ出力だけ",
     )
+    parser.add_argument(
+        "--force-all", action="store_true",
+        help=(
+            "解決済み (sample_movie_url IS NOT NULL) も含めて全件再解決する。"
+            "CDN URL の期限切れに備えた月次フルリフレッシュ用。"
+        ),
+    )
     args = parser.parse_args()
 
     asyncio.run(main(
         concurrency=args.concurrency,
         limit=args.limit,
         dry_run=args.dry_run,
+        force_all=args.force_all,
     ))

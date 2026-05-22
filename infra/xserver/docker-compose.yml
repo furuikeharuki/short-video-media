@@ -105,9 +105,13 @@ services:
       # .env の RESOLVER_BASE_URL より優先される (env_file → environment の順で
       # environment の方が後勝ちのため)。.env では旧設定が残っていても上書きされる。
       RESOLVER_BASE_URL: ${RESOLVER_BASE_URL:-http://resolver:8080}
-    # /healthz が無ければ簡易的に / を叩く。後で /healthz を実装してもよい。
+    # ヘルスチェックは /api/v1/health (200 を返す) を叩く。
+    # 旧設定では `/` を叩いていたが、FastAPI 側にルートエンドポイントが
+    # なく 404 が返るため urllib.request.urlopen が HTTPError を送出し、
+    # 必ず unhealthy になる問題があった (api が正常起動していても
+    # deploy-xserver.sh の healthcheck 待ちでタイムアウトする)。
     healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0) if urllib.request.urlopen('http://127.0.0.1:8000/', timeout=3).status < 500 else sys.exit(1)"]
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0) if urllib.request.urlopen('http://127.0.0.1:8000/api/v1/health', timeout=3).status == 200 else sys.exit(1)"]
       interval: 30s
       timeout: 5s
       retries: 5
@@ -154,11 +158,13 @@ services:
     expose:
       - "8080"
     healthcheck:
+      # resolver の /health は 200 を返す。api 側と同じく明示的に == 200 で判定。
+      # (urllib は 4xx/5xx を例外で投げるため、いずれにせよ非 200 は失敗扱い)
       test:
         - "CMD"
         - "python"
         - "-c"
-        - "import urllib.request,sys; sys.exit(0) if urllib.request.urlopen('http://127.0.0.1:8080/health', timeout=3).status < 500 else sys.exit(1)"
+        - "import urllib.request,sys; sys.exit(0) if urllib.request.urlopen('http://127.0.0.1:8080/health', timeout=3).status == 200 else sys.exit(1)"
       interval: 30s
       timeout: 5s
       retries: 5

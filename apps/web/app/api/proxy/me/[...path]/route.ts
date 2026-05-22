@@ -9,6 +9,7 @@
  */
 
 import { NextRequest, NextResponse } from "next/server";
+import type { Session } from "next-auth";
 
 import { auth } from "@/auth";
 
@@ -17,18 +18,30 @@ export const dynamic = "force-dynamic";
 export const revalidate = 0;
 export const fetchCache = "force-no-store";
 
-const API_BASE_URL =
-  process.env.INTERNAL_API_BASE_URL ?? process.env.NEXT_PUBLIC_API_BASE_URL ?? "";
+const API_BASE_URL = (
+  process.env.INTERNAL_API_BASE_URL ??
+  process.env.NEXT_PUBLIC_API_BASE_URL ??
+  ""
+).replace(/\/+$/, "");
 
 type RouteContext = { params: Promise<{ path: string[] }> };
 
 async function handle(request: NextRequest, context: RouteContext) {
-  const session = await auth();
+  // auth() は cookie 復号失敗 (AUTH_SECRET 不整合など) で throw し得るため、
+  // 未ログインと同様に 401 として返す。500 を漏らさないのが目的。
+  let session: Session | null = null;
+  try {
+    session = (await auth()) as Session | null;
+  } catch (e) {
+    console.error("[proxy/me] auth() threw", e);
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
   if (!session?.apiToken) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
   if (!API_BASE_URL) {
-    return NextResponse.json({ error: "API not configured" }, { status: 500 });
+    console.error("[proxy/me] API base URL is not configured");
+    return NextResponse.json({ error: "API not configured" }, { status: 503 });
   }
 
   const { path } = await context.params;
@@ -53,12 +66,20 @@ async function handle(request: NextRequest, context: RouteContext) {
     }
   }
 
-  const apiRes = await fetch(targetUrl, {
-    method: request.method,
-    headers,
-    body,
-    cache: "no-store",
-  });
+  let apiRes: Response;
+  try {
+    apiRes = await fetch(targetUrl, {
+      method: request.method,
+      headers,
+      body,
+      cache: "no-store",
+    });
+  } catch (e) {
+    // backend 到達失敗 (DNS / 接続拒否 / TLS 失敗など) は 502 で返す。
+    // 500 のままだと未ログイン由来か backend ダウンか区別がつかない。
+    console.error("[proxy/me] upstream fetch failed", { targetUrl, error: e });
+    return NextResponse.json({ error: "Bad Gateway" }, { status: 502 });
+  }
 
   // 204 / 空ボディに対応
   const text = await apiRes.text();

@@ -1,0 +1,44 @@
+# ============================================================================
+# infra/xserver/Caddyfile
+# ----------------------------------------------------------------------------
+# Caddy 2 設定。API_DOMAIN を環境変数で渡し、HTTPS は自動取得する。
+# 既存 resolver が 80/443 を使っている場合、本ファイルを使う caddy サービスは
+# 起動しない (`docker compose --profile proxy up -d` を実行しないこと)。
+# ============================================================================
+
+# Caddy はデフォルトで Let's Encrypt 証明書を取得する。staging で試したい場合は
+# 環境変数 ACME_CA=https://acme-staging-v02.api.letsencrypt.org/directory を渡す。
+
+{$API_DOMAIN} {
+	# api コンテナへのリバプロ。docker network 内で `api` 名前解決される。
+	reverse_proxy api:8000 {
+		# 元クライアント IP / Host を伝搬。
+		header_up X-Real-IP {remote_host}
+		header_up X-Forwarded-For {remote_host}
+		header_up X-Forwarded-Proto {scheme}
+	}
+
+	# 1MB を超えるリクエストは弾く (events API 等の安全策)。
+	request_body {
+		max_size 1MB
+	}
+
+	# 基本的なセキュリティヘッダ。CORS は FastAPI 側で処理するためここでは触らない。
+	header {
+		# クリックジャッキング防止
+		X-Frame-Options "SAMEORIGIN"
+		# MIME sniffing 防止
+		X-Content-Type-Options "nosniff"
+		# Referrer 抑制
+		Referrer-Policy "strict-origin-when-cross-origin"
+		# 不要な Server ヘッダを消す
+		-Server
+	}
+
+	encode zstd gzip
+
+	log {
+		output stdout
+		format json
+	}
+}

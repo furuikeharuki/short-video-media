@@ -450,6 +450,48 @@ docker compose -f infra/xserver/docker-compose.yml logs --tail=50 jobs-worker
 > **データ移行が完了し動作確認が済んだら Railway DB 自体を削除する**
 > のが最も安全。
 
+### 8.3 jobs-worker の定期実行ジョブを .env で調整する
+
+`apps/jobs/src/scheduler.py` は APScheduler で 3 種類のジョブを内部 cron で
+回している。何を、どのくらい、いつ取得するかは `SCHEDULE_*` 環境変数で
+上書きできる。未設定なら従来挙動 (sync_catalog incremental / resolve 全件 /
+actress only-missing、JST 08:00 から 2h ごと + 11:00 + 13:00) を維持する。
+
+主な変数 (`infra/xserver/.env.example` にもコメント付きでテンプレあり):
+
+| 変数 | デフォルト | 用途 |
+| --- | --- | --- |
+| `SCHEDULE_ENABLE_SYNC_CATALOG` | `true` | sync_catalog ジョブの登録有無 |
+| `SCHEDULE_ENABLE_RESOLVE_SAMPLE_URLS` | `true` | resolve_sample_urls ジョブの登録有無 |
+| `SCHEDULE_ENABLE_ACTRESS_PROFILES` | `true` | sync_actress_profiles ジョブの登録有無 |
+| `SCHEDULE_SYNC_CATALOG_MODE` | `incremental` | `incremental` / `full` |
+| `SCHEDULE_SYNC_CATALOG_FLOORS` | (未設定) | カンマ区切り。空なら sync_catalog のデフォルトフロア |
+| `SCHEDULE_SYNC_CATALOG_HITS_PER_FLOOR` | `100` | 1 floor あたり取得件数 |
+| `SCHEDULE_RESOLVE_LIMIT` | (未設定) | 1 回の resolve で扱う件数上限 |
+| `SCHEDULE_ACTRESS_ONLY_MISSING` | `true` | 欠損のある女優のみ更新 |
+| `SCHEDULE_ACTRESS_LIMIT` | (未設定) | 1 回の actress 同期で扱う件数上限 |
+| `SCHEDULE_SYNC_CATALOG_CRON_HOUR` | `8,10,12,14,16,18,20` | sync_catalog 時刻 (JST) |
+| `SCHEDULE_SYNC_CATALOG_CRON_MINUTE` | `0` | sync_catalog 分 |
+| `SCHEDULE_RESOLVE_CRON_HOUR` / `_MINUTE` | `11` / `0` | resolve_sample_urls 時刻 (JST) |
+| `SCHEDULE_ACTRESS_CRON_HOUR` / `_MINUTE` | `13` / `0` | sync_actress_profiles 時刻 (JST) |
+
+反映方法:
+
+```bash
+# VPS 上
+cd /opt/short-video-media
+vi infra/xserver/.env  # SCHEDULE_* を編集
+# jobs-worker を作り直す (環境変数は再起動でなく recreate でしか反映されない)
+docker compose -f infra/xserver/docker-compose.yml up -d jobs-worker
+docker compose -f infra/xserver/docker-compose.yml logs --tail=50 jobs-worker
+# "scheduler started. registered jobs:" に意図したジョブだけが並ぶことを確認
+```
+
+> ⚠️ `SCHEDULER_BOOTSTRAP=true` で Xserver VPS 上で全件再取得を回している
+> 最中に jobs-worker を recreate する (`docker compose up -d jobs-worker`) と
+> 走行中のブートストラップは強制終了する。SCHEDULE_* の変更を反映したい
+> だけのときは、ブートストラップが落ち着いてから recreate するのが安全。
+
 ---
 
 ## 9. トラブルシュート

@@ -49,7 +49,15 @@ services:
       # tuning は postgresql.conf を別途マウントすること。
       TZ: Asia/Tokyo
     volumes:
-      - postgres_data:/var/lib/postgresql/data
+      # Postgres 18 公式イメージは VOLUME 宣言が /var/lib/postgresql に変更され、
+      # PGDATA は /var/lib/postgresql/<major>/docker (v18 では /var/lib/postgresql/18/docker)
+      # が既定。/var/lib/postgresql/data に mount すると 18 では
+      # "PGDATA directory ... is not the expected ... unused mount/volume" 系の
+      # エラーで再起動ループになる。
+      # → mount 先は /var/lib/postgresql 一本に揃え、PGDATA はイメージ既定値に任せる。
+      # 17 以前を使う場合はこの mount 先では永続化されないので、その時は
+      # PGDATA を明示する必要がある (本リポジトリは 18 系固定なので不要)。
+      - postgres_data:/var/lib/postgresql
       # 初回起動用 init スクリプトが必要ならここに追加:
       # - ./initdb:/docker-entrypoint-initdb.d:ro
     healthcheck:

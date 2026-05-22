@@ -22,23 +22,24 @@ const BOTTOM_NAV_H = 56;
  * この距離を超えて初めて縦スクロール抑止 (preventDefault) を呼ぶ。
  * それ未満の移動量（タップ）では呼ばず、ブラウザの click イベント発火を妨げない。
  *
- * 8px だと小さなジャンル chip や検索アイコン等のタップ中に指のわずかな
- * ぶれで簡単に超えてしまい preventDefault が走り synthetic click が消える。
- * 16px なら明確なスワイプとタップを区別しつつ、タップの指ブレは吸収できる。
+ * SWIPE_COMMIT_DISTANCE (5px) より小さい値でないと、コミット距離まで指が
+ * 動いてもロックが立たず確定処理に到達できないため、4px に下げる。
+ * ジャンル chip 等のタップ時の指ブレは 4px 程度なら基本超えないので、
+ * タップ判定との両立は維持できる想定。
  */
-const SWIPE_LOCK_THRESHOLD = 16;
+const SWIPE_LOCK_THRESHOLD = 4;
 
 /**
  * touchend で「スワイプとして次/前の動画に進む」と判定する縦移動量 (px) と
  * 最大経過時間 (ms)。値が大きいほど厳しく (スワイプしにくく) なる。
  *
- * 以前は 60px / 1000ms → 40px / 1500ms と緩和してきたが、まだ反応しづらい
- * という声があり、さらに距離を 20px まで詰めて指の移動量が少なくても
- * 次/前の動画に進めるようにする。SWIPE_LOCK_THRESHOLD (16px) より大きい
- * 値は維持しているため、ジャンル chip 等の純粋なタップが誤ってスワイプ
- * 確定する事故は引き続き防げる。
+ * 以前は 60px / 1000ms → 40px / 1500ms → 20px と緩和してきたが、まだ
+ * 反応しづらいという声があり、さらに距離を 5px まで詰めて指のごく僅かな
+ * 移動でも次/前の動画に進めるようにする。SWIPE_LOCK_THRESHOLD (4px) より
+ * 大きい値は維持しているため、ロックを立ててからコミット判定に到達する
+ * 経路は引き続き機能する。
  */
-const SWIPE_COMMIT_DISTANCE = 20;
+const SWIPE_COMMIT_DISTANCE = 5;
 const SWIPE_COMMIT_MAX_MS   = 1500;
 
 /**
@@ -302,7 +303,7 @@ export default function FeedViewer({
       // 始まったタッチはスワイプ判定を一切走らせない (キャレット移動 / 文字選択
       // を妨げないため)。
       // ボタン / リンク / chip 等はここで bail せず通常の swipe 経路に乗せる。
-      // しきい値 (SWIPE_LOCK_THRESHOLD = 16px) 未満ならタップとしてブラウザの
+      // しきい値 (SWIPE_LOCK_THRESHOLD = 4px) 未満ならタップとしてブラウザの
       // synthetic click が発火するし、超えたら preventDefault してフィード
       // スワイプとして扱う。
       if (isTextInputTarget(e.target)) {

@@ -75,8 +75,11 @@ docker stop resolver && docker rm resolver
 # 2) 統合後のコードに更新
 cd /opt/short-video-media
 git pull --ff-only
-# infra/xserver/.env の RESOLVER_BASE_URL は基本的に削除して良い
-# (docker-compose.yml の environment が http://resolver:8080 を強制する)
+# infra/xserver/.env の RESOLVER_BASE_URL は **必ず削除** すること。
+# (docker-compose.yml の environment が http://resolver:8080 を強制する。
+#  旧値が残っていると api コンテナの DNS 解決に失敗し /resolve-mp4 が
+#  502 を返す不具合があったため、念のため `unset` も推奨。)
+grep -v '^RESOLVER_BASE_URL=' infra/xserver/.env > infra/xserver/.env.tmp && mv infra/xserver/.env.tmp infra/xserver/.env || true
 
 # 3) build & up
 docker compose -f infra/xserver/docker-compose.yml build api resolver jobs-worker

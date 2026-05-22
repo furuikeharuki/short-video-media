@@ -102,9 +102,12 @@ services:
       PORT: "8000"
       TZ: Asia/Tokyo
       # resolver は同 compose network 内の `resolver` サービスを指す。
-      # .env の RESOLVER_BASE_URL より優先される (env_file → environment の順で
-      # environment の方が後勝ちのため)。.env では旧設定が残っていても上書きされる。
-      RESOLVER_BASE_URL: ${RESOLVER_BASE_URL:-http://resolver:8080}
+      # ここはハードコードしておく。`${RESOLVER_BASE_URL:-...}` の形だと .env に
+      # 旧設定 (例: http://host.docker.internal:8080) が残っていた場合に
+      # docker compose の変数展開がそちらを採用してしまい、api コンテナから
+      # DNS 解決できず "Name or service not known" で 502 になる。
+      # 値は env_file (.env) の RESOLVER_BASE_URL を上書きする。
+      RESOLVER_BASE_URL: http://resolver:8080
     # ヘルスチェックは /api/v1/health (200 を返す) を叩く。
     # 旧設定では `/` を叩いていたが、FastAPI 側にルートエンドポイントが
     # なく 404 が返るため urllib.request.urlopen が HTTPError を送出し、
@@ -196,7 +199,8 @@ services:
       DEPLOY_TARGET: xserver
       TZ: Asia/Tokyo
       # resolver は同 compose network 内の resolver サービスを指す。
-      RESOLVER_BASE_URL: ${RESOLVER_BASE_URL:-http://resolver:8080}
+      # api と同様にハードコード (.env の旧値で上書きされない)。
+      RESOLVER_BASE_URL: http://resolver:8080
       # 起動直後の bootstrap は誤発火を避けるためデフォルト false。
       # 初回データ取り込みが必要な時だけ .env で true にすること。
       SCHEDULER_BOOTSTRAP: ${SCHEDULER_BOOTSTRAP:-false}

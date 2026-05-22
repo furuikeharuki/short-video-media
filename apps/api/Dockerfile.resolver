@@ -13,10 +13,16 @@
 # 使用する。
 #
 # ベースイメージ:
-#   mcr.microsoft.com/playwright/python:v1.60.0-jammy
+#   mcr.microsoft.com/playwright/python:v1.60.0-noble (Ubuntu 24.04)
 #   - Chromium / Firefox / WebKit と Linux 依存ライブラリがプリインストール済み
 #   - apt-get でフォント・X 関連ライブラリを並べる必要がなく Dockerfile が短い
 #   - イメージサイズは ~2GB だが、Browser 起動の信頼性を優先
+#
+# 注意: 旧 v1.60.0-jammy (Ubuntu 22.04) は Python 3.10.12 が同梱されており、
+# apps/api の `requires-python = ">=3.12"` を満たさず pip install が
+# "Package 'short-video-media-api' requires a different Python:
+#  3.10.12 not in '>=3.12'" で失敗する。Ubuntu 24.04 ベースの noble タグは
+# Python 3.12 を同梱しているため、こちらを使うこと。
 #
 # ビルド例 (リポジトリルートから):
 #   docker build -t shortvideo/resolver -f apps/api/Dockerfile.resolver apps/api
@@ -30,9 +36,17 @@
 # ベースイメージのバージョンは pyproject.toml の playwright (resolver extra)
 # と必ず一致させること。不一致だと
 # "BrowserType.launch: Executable doesn't exist" でクラッシュする。
-FROM mcr.microsoft.com/playwright/python:v1.60.0-jammy
+# また Ubuntu base のバージョンは noble (24.04) を使うこと (Python 3.12 同梱)。
+FROM mcr.microsoft.com/playwright/python:v1.60.0-noble
 
 WORKDIR /app
+
+# noble (Ubuntu 24.04) のシステム Python は通常 PEP 668 で pip が弾かれるが、
+# mcr.microsoft.com/playwright/python:*-noble の Dockerfile.noble では
+# `/usr/lib/python3.12/EXTERNALLY-MANAGED` を削除して "upstream の python image
+# と挙動を揃える" と明記されているため、本イメージでは pip install が
+# そのまま使える。venv は切らない (二重管理を避けるため)。
+# 参照: microsoft/playwright-python/utils/docker/Dockerfile.noble
 
 # 依存解決のために pyproject.toml と app パッケージをコピー。
 # build context は apps/api 配下 (Dockerfile (通常 API) と同じ前提) なので
@@ -43,8 +57,9 @@ COPY app /app/app
 RUN pip install --no-cache-dir --upgrade pip \
     && pip install --no-cache-dir -e ".[resolver]"
 
-# Playwright Chromium はベースイメージにインストール済み
-# (mcr.microsoft.com/playwright が npx playwright install を済ませている)。
+# Playwright の browser バイナリはベースイメージ側に `/ms-playwright` へ
+# インストール済み。同イメージ内で `PLAYWRIGHT_BROWSERS_PATH=/ms-playwright`
+# も既に export されているため、追加の `playwright install` は不要。
 
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \

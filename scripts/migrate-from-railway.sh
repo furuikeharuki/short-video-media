@@ -130,6 +130,21 @@ esac
 mkdir -p "$DUMP_DIR"
 chmod 700 "$DUMP_DIR"
 
+# 過去に root 所有で作られた dump が残っていると、後段の chmod / mv が
+# "許可されていない操作です" で失敗する。事前に検出して対処方法を案内する。
+# (本スクリプト内では sudo を呼ばない。所有権変更はユーザーに明示させる)
+if find "$DUMP_DIR" -maxdepth 1 -type f \
+     \( -name "railway-*.dump" -o -name "railway-*.dump.partial" \) \
+     ! -user "$(id -u)" -print 2>/dev/null | grep -q .; then
+  printf '[migrate-from-railway][ERROR] %s に他ユーザー所有 (おそらく root) の\n' "$DUMP_DIR" >&2
+  printf '  既存 dump があります。以前 --user 指定なしで docker run 経由で作られた\n' >&2
+  printf '  ものです。次のコマンドで自分の所有に戻してください:\n\n' >&2
+  printf '    sudo chown -R "$(id -u):$(id -g)" "%s"\n\n' "$DUMP_DIR" >&2
+  printf '  もしくは中身を破棄して構わなければ:\n\n' >&2
+  printf '    sudo rm -f "%s"/railway-*.dump "%s"/railway-*.dump.partial\n\n' "$DUMP_DIR" "$DUMP_DIR" >&2
+  exit 1
+fi
+
 TS="$(date -u +%Y%m%dT%H%M%SZ)"
 DEFAULT_DUMP_NAME="railway-${POSTGRES_DB}-${TS}.dump"
 DUMP_PATH=""
@@ -191,10 +206,20 @@ else
   mkdir -p "$DUMP_PARENT"
   chmod 700 "$DUMP_PARENT"
 
+  # コンテナの postgres ユーザー (UID 70 等) ではなく、ホスト実行ユーザーで
+  # 書き出させる。--user を渡さないと dump がホスト側で root 所有になり、
+  # 後段の chmod / mv / shred が "Operation not permitted" で失敗する。
+  # /etc/passwd に該当 UID が無いコンテナでも pg_dump は問題なく動く
+  # (HOME 未解決の warning が出るだけ)。
+  HOST_UID="$(id -u)"
+  HOST_GID="$(id -g)"
+
   # 一時 .partial に書き出して atomic に rename
   if ! docker run --rm \
+      --user "${HOST_UID}:${HOST_GID}" \
       -v "$DUMP_PARENT":/dump \
       -e PG_SOURCE_URL="$RAILWAY_DATABASE_URL" \
+      -e HOME=/tmp \
       "$POSTGRES_TOOLS_IMAGE" \
       sh -c 'pg_dump -Fc --no-owner --no-privileges --verbose \
                -f "/dump/'"$DUMP_BASENAME"'.partial" \
@@ -203,6 +228,12 @@ else
     # 失敗時に partial を残しておくと取り違えのリスクがあるので消す
     rm -f "${DUMP_PATH}.partial"
     fail "pg_dump に失敗しました"
+  fi
+
+  # partial が空 / 存在しないなら失敗扱い (pipefail を sed が握ってしまうケースの保険)
+  if [ ! -s "${DUMP_PATH}.partial" ]; then
+    rm -f "${DUMP_PATH}.partial"
+    fail "pg_dump 出力が空です。ログを確認してください"
   fi
 
   mv "${DUMP_PATH}.partial" "$DUMP_PATH"

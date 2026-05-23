@@ -92,9 +92,13 @@ class Settings(BaseSettings):
     # resolver の Bearer 認証用 API キー。VPS の .env と同じ値を入れる。
     RESOLVER_API_KEY: str = ""
     # resolver への HTTP タイムアウト (ミリ秒)。Playwright 抽出は通常 8 秒程度。
-    # ナビ 15s + 描画 8s + マージン分で 25 秒。
+    # 最悪ケースは ナビ 15s + JS 評価ポーリング ~8s + wait_for_event 8s ≒ 31s
+    # まで膨らみ得るため、クライアント側はそれをカバーする 35 秒を取る。
+    # 以前は 25 秒だったが、resolver が worst-case 経路を辿った際に httpx 側が
+    # 先にタイムアウトしてしまい、web 側の force リトライを連発させていた
+    # (= ユーザーから見ると「選んでも再生が始まらない」状態)。
     # 同 VPS 内に同居させる場合は loopback で十分速いので変更不要。
-    RESOLVER_TIMEOUT_MS: int = 25000
+    RESOLVER_TIMEOUT_MS: int = 35000
 
     # ─────────────────────────────────────────────
     # DB 接続プール (asyncpg)

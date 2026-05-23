@@ -85,6 +85,33 @@ async def test_extract_returns_mp4_url_from_network_capture():
 
 
 @pytest.mark.asyncio
+async def test_extract_matches_mp4_url_with_query_string():
+    """DMM CDN は MP4 直リンクにクエリ (?token=...) を付けるケースがあり、
+    `endswith('.mp4')` だと取りこぼすため、クエリ付き URL でも捕捉できることを確認。"""
+    captured = ["https://cc3001.dmm.co.jp/pv/xyz/cidmhb.mp4?token=abc123&exp=9999"]
+    page = _make_page(evaluate_returns=None, captured_mp4=captured)
+    browser = _make_browser(page)
+
+    result = await extract_mp4_url(browser, "nhd00019", "affi-001")
+    assert result.mp4_url == captured[0]
+
+
+@pytest.mark.asyncio
+async def test_extract_prefers_network_capture_over_js_polling():
+    """ナビゲーション中にネットワーク捕捉が成立していれば、JS 評価でブロックせずに即返す。
+    (worst-case 経路の累積遅延 (JS 8s + wait_for_event 8s) を避ける)。"""
+    captured = ["https://cc3001.dmm.co.jp/pv/early/cid.mp4"]
+    # evaluate_returns=None だが captured_mp4 が goto 時点で配信されている。
+    page = _make_page(evaluate_returns=None, captured_mp4=captured)
+    browser = _make_browser(page)
+
+    result = await extract_mp4_url(browser, "any_cid", "affi-001")
+    assert result.mp4_url == captured[0]
+    # 早期 short-circuit が効くと page.evaluate は呼ばれない (= 8 秒ポーリングを回避)。
+    page.evaluate.assert_not_called()
+
+
+@pytest.mark.asyncio
 async def test_extract_normalizes_protocol_relative_url():
     page = _make_page(
         evaluate_returns="//cc3001.dmm.co.jp/pv/abc/cid_mhb_w.mp4",

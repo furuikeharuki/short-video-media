@@ -108,10 +108,17 @@ async def extract_mp4_url(
     captured_mp4: list[str] = []
 
     # ネットワーク監視: cc3001.dmm.co.jp 配下の .mp4 リクエストを全部キャプチャ
+    # クエリ・フラグメント付き URL (例: `...mp4?token=...`) も取りこぼさないように、
+    # `.mp4` をパス部分で検査する。
+    def _is_mp4_url(url: str) -> bool:
+        if "cc3001.dmm.co.jp" not in url:
+            return False
+        path = url.split("?", 1)[0].split("#", 1)[0]
+        return ".mp4" in path
+
     def on_request(request: Any) -> None:
-        url = request.url
-        if "cc3001.dmm.co.jp" in url and url.endswith(".mp4"):
-            captured_mp4.append(url)
+        if _is_mp4_url(request.url):
+            captured_mp4.append(request.url)
 
     page.on("request", on_request)
 
@@ -153,7 +160,7 @@ async def extract_mp4_url(
             try:
                 await page.wait_for_event(
                     "request",
-                    predicate=lambda r: "cc3001.dmm.co.jp" in r.url and r.url.endswith(".mp4"),
+                    predicate=lambda r: _is_mp4_url(r.url),
                     timeout=wait_video_timeout_ms,
                 )
             except Exception:  # pylint: disable=broad-except

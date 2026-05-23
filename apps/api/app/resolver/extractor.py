@@ -110,10 +110,18 @@ async def extract_mp4_url(
     page = await context.new_page()
     captured_mp4: list[str] = []
 
+    def _is_mp4_url(url: str) -> bool:
+        # DMM は MP4 直リンクに `?...` クエリやフラグメントを付けてくることが
+        # あるため、URL 全体に対する `endswith(".mp4")` だと取りこぼす。
+        # クエリ・フラグメントを除いたパス部分に `.mp4` が含まれるかで判定する。
+        if "cc3001.dmm.co.jp" not in url:
+            return False
+        path = url.split("?", 1)[0].split("#", 1)[0]
+        return ".mp4" in path
+
     def on_request(request: Any) -> None:
-        url = request.url
-        if "cc3001.dmm.co.jp" in url and url.endswith(".mp4"):
-            captured_mp4.append(url)
+        if _is_mp4_url(request.url):
+            captured_mp4.append(request.url)
 
     page.on("request", on_request)
 
@@ -136,31 +144,38 @@ async def extract_mp4_url(
                 "Resolver must run from a Japan IP."
             )
 
-        # <video> src を評価で取得
-        try:
-            src = await page.evaluate(
-                """async () => {
-                    for (let i = 0; i < 80; i++) {
-                        const video = document.querySelector('video');
-                        if (video) {
-                            const directSrc = video.getAttribute('src') || video.currentSrc;
-                            if (directSrc) return directSrc;
-                            const source = video.querySelector('source');
-                            if (source) {
-                                const s = source.getAttribute('src') || source.src;
-                                if (s) return s;
-                            }
-                        }
-                        await new Promise(r => setTimeout(r, 100));
-                    }
-                    return null;
-                }"""
-            )
-        except Exception as e:  # pylint: disable=broad-except
-            logger.debug("page.evaluate failed for %s: %s", content_id, e)
-            src = None
+        # ナビゲーション直後にネットワークキャプチャ済みなら、JS 評価を待たずに採用する。
+        # (DMM は domcontentloaded 前後に MP4 URL のリクエストを発行することがあり、
+        #  早期 short-circuit で worst-case 経路の累積待ち時間 (JS 8s + wait_for_event 8s)
+        #  を回避できる)。
+        src: str | None = captured_mp4[0] if captured_mp4 else None
 
-        # ネットワークキャプチャからフォールバック
+        # <video> src を評価で取得 (ネットワーク捕捉済みなら短時間で抜ける)。
+        if not src:
+            try:
+                src = await page.evaluate(
+                    """async () => {
+                        for (let i = 0; i < 80; i++) {
+                            const video = document.querySelector('video');
+                            if (video) {
+                                const directSrc = video.getAttribute('src') || video.currentSrc;
+                                if (directSrc) return directSrc;
+                                const source = video.querySelector('source');
+                                if (source) {
+                                    const s = source.getAttribute('src') || source.src;
+                                    if (s) return s;
+                                }
+                            }
+                            await new Promise(r => setTimeout(r, 100));
+                        }
+                        return null;
+                    }"""
+                )
+            except Exception as e:  # pylint: disable=broad-except
+                logger.debug("page.evaluate failed for %s: %s", content_id, e)
+                src = None
+
+        # ネットワークキャプチャからフォールバック (JS 評価中に request が来たケース)。
         if not src and captured_mp4:
             src = captured_mp4[0]
             logger.debug("Captured mp4 from network for %s: %s", content_id, src)
@@ -170,9 +185,7 @@ async def extract_mp4_url(
             try:
                 await page.wait_for_event(
                     "request",
-                    predicate=lambda r: (
-                        "cc3001.dmm.co.jp" in r.url and r.url.endswith(".mp4")
-                    ),
+                    predicate=lambda r: _is_mp4_url(r.url),
                     timeout=wait_video_timeout_ms,
                 )
             except Exception:  # pylint: disable=broad-except

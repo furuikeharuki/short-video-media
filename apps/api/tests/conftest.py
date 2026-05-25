@@ -15,6 +15,8 @@ os.environ.setdefault(
     "postgresql+asyncpg://test:test@localhost:5432/test_db",
 )
 
+import asyncio
+
 import pytest
 
 
@@ -24,9 +26,20 @@ def _reset_resolver_client_state() -> None:
 
     同じ content_id を複数テストで使うと、前のテストのキャッシュが残っていて
     MockTransport の handler が呼ばれない事故を防ぐ。
+
+    共有 httpx.AsyncClient も、前のテストの event loop に紐づいて壊れている
+    可能性があるためリセットする。
     """
     from app.services import resolver_client
 
     resolver_client._reset_state_for_tests()
+    try:
+        asyncio.run(resolver_client._reset_shared_client_for_tests())
+    except RuntimeError:
+        pass
     yield
     resolver_client._reset_state_for_tests()
+    try:
+        asyncio.run(resolver_client._reset_shared_client_for_tests())
+    except RuntimeError:
+        pass

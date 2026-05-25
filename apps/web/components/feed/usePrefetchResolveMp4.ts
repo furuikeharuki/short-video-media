@@ -10,21 +10,28 @@ import { resolveMp4Url } from "@/lib/api/resolve-mp4";
  *
  * 目的:
  *   - ユーザーがスワイプして次のスライドに到達した瞬間に再生が始まるよう、
- *     resolver の 5 分成功キャッシュを温めておく。
+ *     resolver の 1 時間成功キャッシュを温めておく。
  *   - <video> 要素は増やさない (モバイル Safari の同時接続上限を避けるため
  *     WINDOW_SIZE=1 を維持)。あくまで API レスポンスのキャッシュだけ温める。
  *
  * 仕様:
  *   - currentIndex+1 〜 currentIndex+PREFETCH_AHEAD のスライドを対象。
- *   - レスポンスは捨てる。in-flight デデュープ + 5 分キャッシュは API 側に任せる。
+ *   - レスポンスは捨てる。in-flight デデュープ + 1 時間キャッシュは API 側に任せる。
  *   - currentIndex が変わったら飛んでいる prefetch を abort。
+ *   - 高速スワイプ中 (isRapidSwiping) は新規 prefetch を発火しない。
+ *     スワイプ速度が落ち着いて isRapidSwiping=false に戻り、さらに
+ *     PREFETCH_DEBOUNCE_MS 静止してから初めて prefetch を実行する。
  *   - アンマウント時にも abort。
  */
 
-const PREFETCH_AHEAD = 3;
+// currentIndex の +1 〜 +5 を事前解決。API 側の 1 時間キャッシュと
+// クライアント側 in-flight デデュープにより、再訪時の追加コストはほぼゼロ。
+const PREFETCH_AHEAD = 5;
 // スクロール停止デバウンス: currentIndex がこの期間変わらなかったら「スクロール停止」とみなして prefetch を起動する。
-// これを入れないと、20 枚一気スクロールしたときに 60 件以上の resolve リクエストが resolver VPS にキューイングして、
+// これを入れないと、20 枚一気スクロールしたときに 100 件以上の resolve リクエストが resolver VPS にキューイングして、
 // 実際に見ているスライドの resolve がキューの後ろに回されて遅くなる。
+// isRapidSwiping ガードと併用することで、「高速スワイプ → スワイプ速度が落ち着く →
+// さらに 400ms 静止 → ようやく prefetch」という二段ガードになる。
 const PREFETCH_DEBOUNCE_MS = 400;
 
 export function usePrefetchResolveMp4(

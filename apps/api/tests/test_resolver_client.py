@@ -40,10 +40,11 @@ async def test_success_returns_mp4_url(monkeypatch: pytest.MonkeyPatch) -> None:
     _set_affiliate(monkeypatch)
     called: dict = {}
 
-    async def fake_extract(*, content_id, affiliate_id, timeout_s):
+    async def fake_extract(*, content_id, affiliate_id, timeout_s, client=None):
         called["content_id"] = content_id
         called["affiliate_id"] = affiliate_id
         called["timeout_s"] = timeout_s
+        called["client"] = client
         return ResolveResult(content_id=content_id, mp4_url="https://cdn.example/abc.mp4")
 
     _patch_extract(monkeypatch, fake_extract)
@@ -54,6 +55,8 @@ async def test_success_returns_mp4_url(monkeypatch: pytest.MonkeyPatch) -> None:
     assert called["affiliate_id"] == "test-affi-001"
     # デフォルトタイムアウト
     assert called["timeout_s"] == 10.0
+    # 共有 httpx.AsyncClient が渡されている (keep-alive 維持のため)
+    assert called["client"] is not None
 
 
 @pytest.mark.asyncio
@@ -110,7 +113,7 @@ async def test_custom_timeout_from_env(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("RESOLVER_TIMEOUT_MS", "5000")
     seen: dict = {}
 
-    async def fake_extract(*, content_id, affiliate_id, timeout_s):
+    async def fake_extract(*, content_id, affiliate_id, timeout_s, client=None):
         seen["timeout_s"] = timeout_s
         return ResolveResult(content_id=content_id, mp4_url="https://cdn.example/x.mp4")
 
@@ -161,7 +164,7 @@ async def test_concurrent_calls_dedupe_to_single_extract(
 async def test_success_is_cached_for_short_period(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """成功結果は 5 分間キャッシュされ、extract は再呼びされない。"""
+    """成功結果は 1 時間キャッシュされ、extract は再呼びされない。"""
     _set_affiliate(monkeypatch)
     call_count = 0
 

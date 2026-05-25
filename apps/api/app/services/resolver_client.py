@@ -21,6 +21,8 @@ import os
 import time
 from typing import Final
 
+import httpx
+
 from app.resolver.extractor import (
     ResolveNotFound,
     ResolveTimeout,
@@ -63,10 +65,12 @@ class ResolverUnavailable(ResolverError):
 # キャッシュ / デデュープ
 # ─────────────────────────────────────────────
 # 同一 content_id の再抽出は ~1-2 秒だが、連打を抑えるため短期キャッシュを残す。
-# DMM 側のトークンは 32 日以上有効なため 5 分の TTL は安全マージンとして十分。
+# DMM 側のトークンは 32 日以上有効なため 1 時間の TTL は安全マージンとして十分。
 # 1 ユーザー 1 セッション内ではほぼキャッシュヒットさせて DMM へのアクセス数と
 # httpx ラウンドトリップを大幅に減らす。
-_SUCCESS_CACHE_TTL_S: Final[float] = 300.0
+# v5.x: prefetch +5 化で同一 content_id への問い合わせ頻度が増えたため、
+# 300s → 3600s に拡大して DMM への実アクセスをさらに削減する。
+_SUCCESS_CACHE_TTL_S: Final[float] = 3600.0
 
 _inflight: dict[str, asyncio.Future[str]] = {}
 _inflight_lock = asyncio.Lock()
@@ -111,6 +115,85 @@ def _get_timeout_s() -> float:
     except ValueError:
         return _DEFAULT_TIMEOUT_S
     return max(1.0, ms / 1000.0)
+
+
+# ─────────────────────────────────────────────
+# 共有 httpx.AsyncClient (keep-alive)
+# ─────────────────────────────────────────────
+# DMM (www.dmm.co.jp) への接続は TLS ハンドシェイクのコストが高い。
+# 抽出ごとに AsyncClient を作って閉じると毎回 TCP+TLS が立ち上がり、
+# 1 リクエストあたり数百 ms 余計にかかる。
+# プロセスで 1 本だけ AsyncClient を保持し、コネクションプールを再利用する
+# ことで DMM 側との keep-alive を維持し、抽出レイテンシと CPU を削減する。
+#
+# ライフサイクル:
+#   - app.main の lifespan で startup_resolver_http_client() を呼んで生成、
+#     終了時に shutdown_resolver_http_client() で aclose() する。
+#   - lifespan が走らない経路 (一部のテスト等) でも `_get_shared_client()`
+#     が現在の event loop に紐づいた client を遅延生成するためフォールバックする。
+#     loop が変わったら (例: 別テスト) 自動で作り直す。
+_HTTPX_LIMITS: Final[httpx.Limits] = httpx.Limits(
+    max_connections=32,
+    max_keepalive_connections=16,
+    keepalive_expiry=30.0,
+)
+_shared_client: httpx.AsyncClient | None = None
+_shared_client_loop: asyncio.AbstractEventLoop | None = None
+_shared_client_lock = asyncio.Lock()
+
+
+def _new_shared_client() -> httpx.AsyncClient:
+    timeout_s = _get_timeout_s()
+    return httpx.AsyncClient(
+        timeout=timeout_s,
+        limits=_HTTPX_LIMITS,
+    )
+
+
+async def startup_resolver_http_client() -> None:
+    """FastAPI lifespan startup から呼ぶ。共有 AsyncClient を初期化する。"""
+    global _shared_client, _shared_client_loop
+    async with _shared_client_lock:
+        if _shared_client is not None:
+            return
+        _shared_client = _new_shared_client()
+        _shared_client_loop = asyncio.get_running_loop()
+
+
+async def shutdown_resolver_http_client() -> None:
+    """FastAPI lifespan shutdown から呼ぶ。共有 AsyncClient を閉じる。"""
+    global _shared_client, _shared_client_loop
+    async with _shared_client_lock:
+        client = _shared_client
+        _shared_client = None
+        _shared_client_loop = None
+    if client is not None:
+        try:
+            await client.aclose()
+        except Exception:  # noqa: BLE001
+            logger.warning("failed to close shared resolver http client", exc_info=True)
+
+
+async def _get_shared_client() -> httpx.AsyncClient:
+    """共有 AsyncClient を返す。未初期化なら現在の loop で作る。
+
+    別 event loop で作られたものが残っていたら作り直す
+    (テスト内で loop が複数立ち上がるケースに備える)。
+    """
+    global _shared_client, _shared_client_loop
+    loop = asyncio.get_running_loop()
+    if _shared_client is None or _shared_client_loop is not loop:
+        async with _shared_client_lock:
+            if _shared_client is None or _shared_client_loop is not loop:
+                old = _shared_client
+                _shared_client = _new_shared_client()
+                _shared_client_loop = loop
+                if old is not None:
+                    try:
+                        await old.aclose()
+                    except Exception:  # noqa: BLE001
+                        pass
+    return _shared_client
 
 
 # ─────────────────────────────────────────────
@@ -177,12 +260,14 @@ async def _do_resolve(content_id: str) -> str:
         raise ResolverConfigError("DMM_AFFILIATE_ID is not configured")
 
     timeout_s = _get_timeout_s()
+    client = await _get_shared_client()
 
     try:
         result = await extract_mp4_url(
             content_id=content_id,
             affiliate_id=affiliate_id,
             timeout_s=timeout_s,
+            client=client,
         )
     except ResolveNotFound as e:
         raise ResolverNotFound(str(e)) from e
@@ -200,3 +285,17 @@ def _reset_state_for_tests() -> None:
     """テスト用: in-flight テーブルと短期キャッシュを空にする。"""
     _inflight.clear()
     _success_cache.clear()
+
+
+async def _reset_shared_client_for_tests() -> None:
+    """テスト用: 共有 httpx.AsyncClient を閉じて未初期化状態に戻す。"""
+    global _shared_client, _shared_client_loop
+    async with _shared_client_lock:
+        client = _shared_client
+        _shared_client = None
+        _shared_client_loop = None
+    if client is not None:
+        try:
+            await client.aclose()
+        except Exception:  # noqa: BLE001
+            pass

@@ -6,6 +6,10 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.api.v1.api import api_router
 from app.core.cache import close_redis
 from app.core.config import settings
+from app.services.resolver_client import (
+    shutdown_resolver_http_client,
+    startup_resolver_http_client,
+)
 
 
 @asynccontextmanager
@@ -15,9 +19,15 @@ async def lifespan(app: FastAPI):
     マイグレーションは GitHub Actions (.github/workflows/migrate.yml) で
     main にマージされたタイミングで実行する方針。
     アプリ起動時にはマイグレーションを行わない。
+
+    DMM への httpx.AsyncClient はプロセスで 1 本だけ持って keep-alive する。
     """
-    yield
-    await close_redis()
+    await startup_resolver_http_client()
+    try:
+        yield
+    finally:
+        await shutdown_resolver_http_client()
+        await close_redis()
 
 
 app = FastAPI(title="ShortVid API", lifespan=lifespan)

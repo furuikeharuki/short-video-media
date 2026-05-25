@@ -41,6 +41,10 @@ interface Props {
   offset?: number;
   /** <video> が onError を発火したら呼ばれる。fire-and-forget。 */
   onError?: (slug: string) => void;
+  /** loadedmetadata 到達時に呼ばれる。親は readiness を 'metadata' に格上げする。 */
+  onMetadata?: (slug: string) => void;
+  /** canplay (readyState>=HAVE_FUTURE_DATA) 到達時に呼ばれる。親は readiness を 'canplay' に格上げする。 */
+  onCanPlay?: (slug: string) => void;
 }
 
 function vtPrefetchLog(message: string) {
@@ -55,6 +59,8 @@ export default function PrefetchVideoBuffer({
   preload = "auto",
   offset,
   onError,
+  onMetadata,
+  onCanPlay,
 }: Props) {
   const ref = useRef<HTMLVideoElement>(null);
   // 同じ slot の <video> で何度も onError が呼ばれても親への通知は 1 回だけにする。
@@ -67,11 +73,24 @@ export default function PrefetchVideoBuffer({
     // preload="none" のときは load() を呼ばない (帯域を一切使わない)。
     if (preload === "none") return;
 
+    const offLabel = offset != null ? `+${offset}` : "?";
+    let canPlayNotified = false;
+
     const onLoadedMetadata = () => {
-      const off = offset != null ? `+${offset}` : "?";
-      vtPrefetchLog(`loadedmetadata slug=${slug} offset=${off} mode=${preload}`);
+      vtPrefetchLog(`loadedmetadata slug=${slug} offset=${offLabel} mode=${preload}`);
+      onMetadata?.(slug);
+    };
+    const onCanPlayHandler = () => {
+      if (canPlayNotified) return;
+      canPlayNotified = true;
+      vtPrefetchLog(`canplay slug=${slug} offset=${offLabel} mode=${preload}`);
+      onCanPlay?.(slug);
     };
     el.addEventListener("loadedmetadata", onLoadedMetadata);
+    // canplay は HAVE_FUTURE_DATA 到達。preload="auto" のときだけ実用的に発火する。
+    // Safari の preload="metadata" では基本来ないが、念のため subscribe しておく
+    // (来た場合のみ canplay 扱いに格上げする)。
+    el.addEventListener("canplay", onCanPlayHandler);
 
     // 明示的に load() を呼んで preload を確実にキック。
     // src 属性だけ設定しても iOS Safari は load() を呼ばないと取りに行かないことがある。
@@ -81,10 +100,18 @@ export default function PrefetchVideoBuffer({
       // load() が例外を投げるケースは握り潰し
     }
 
+    // src 変更前に既に十分バッファ済みのケース (back-to-back swap など) を拾う。
+    if (el.readyState >= 3) {
+      onCanPlayHandler();
+    } else if (el.readyState >= 1) {
+      onMetadata?.(slug);
+    }
+
     return () => {
       el.removeEventListener("loadedmetadata", onLoadedMetadata);
+      el.removeEventListener("canplay", onCanPlayHandler);
     };
-  }, [src, preload, slug, offset]);
+  }, [src, preload, slug, offset, onMetadata, onCanPlay]);
 
   const handleError = () => {
     if (notifiedRef.current) return;

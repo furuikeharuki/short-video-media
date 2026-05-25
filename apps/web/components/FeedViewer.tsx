@@ -7,6 +7,7 @@ import type { MovieCard } from "@/lib/api/feed";
 import { markFeedGesture } from "@/components/feed/useFeedPlayback";
 import { usePrefetchResolveMp4 } from "@/components/feed/usePrefetchResolveMp4";
 import { usePrefetchVideoBytes } from "@/components/feed/usePrefetchVideoBytes";
+import { useWarmResolveMp4 } from "@/components/feed/useWarmResolveMp4";
 import PrefetchVideoBuffer from "@/components/feed/PrefetchVideoBuffer";
 import { AD_FEED_INTERVAL, isAdZoneEnabled } from "@/lib/ads/config";
 
@@ -127,6 +128,10 @@ export default function FeedViewer({
     .map((s) => s.movie);
 
   usePrefetchResolveMp4(movieItems, currentIndex, isRapidSwiping);
+  // 遠距離 (current+6..+15) を低優先度でバックグラウンド resolve。
+  // 近距離 prefetch / active と同じ resolveCache を共有するので、ユーザーが
+  // そこに到達するまでに URL が温まっている確率を上げる。
+  useWarmResolveMp4(movieItems, currentIndex, isRapidSwiping);
   const { slots: prefetchSlots, handleSlotError } = usePrefetchVideoBytes(
     movieItems,
     currentIndex,

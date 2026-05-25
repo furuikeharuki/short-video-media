@@ -17,8 +17,12 @@ GitHub Actions の cron で 1 時間ごとに実行する想定。
 環境変数:
   - DMM_API_ID              : DMM Webservice の API ID
   - DMM_AFFILIATE_ID        : DMM API 呼び出し用 ID (末尾 -990〜-999 必須)
-  - DMM_LINK_AFFILIATE_ID   : 購入ページ紐付け用 ID (例: xxxxxx-001)
-                              未設定時は DMM_AFFILIATE_ID をフォールバック
+                              API レスポンスの `affiliateURL` はこの ID で発行され、
+                              そのまま DB / フロントに保存することで DMM 側で
+                              クリックが正しくカウントされる。
+  - DMM_LINK_AFFILIATE_ID   : (任意) API が affiliateURL を返さない場合に組み立てる
+                              フォールバック URL の af_id。未設定なら DMM_AFFILIATE_ID。
+                              通常運用では使われない。
   - DATABASE_URL
 
 使い方:
@@ -72,9 +76,9 @@ FLOORS: list[tuple[str, str, str, str]] = [
 # cron など floors 未指定時に取得するデフォルトフロア (動画のみ)
 DEFAULT_FLOOR_NAMES: tuple[str, ...] = ("videoa", "videoc")
 
-# floor → 購入ページ URL テンプレート
-# DMM API が返す al.fanza.co.jp 形式のアフィリエイトリンクは新規アカウントで
-# 「無効リンク」になるため、af_id を直接付けた本家 URL を組み立てる
+# floor → 購入ページ URL テンプレート (フォールバック専用)
+# 通常は DMM API の `affiliateURL` (al.dmm.co.jp 経由のトラッキング付き) をそのまま使う。
+# API が affiliateURL を返さなかった場合の最終フォールバックとしてのみ使用。
 _AFFILIATE_URL_TEMPLATES: dict[str, str] = {
     "videoa": "https://www.dmm.co.jp/digital/videoa/-/detail/=/cid={cid}/?af_id={af_id}&ch=link_tool",
     "videoc": "https://www.dmm.co.jp/digital/videoc/-/detail/=/cid={cid}/?af_id={af_id}&ch=link_tool",
@@ -83,15 +87,42 @@ _AFFILIATE_URL_TEMPLATES: dict[str, str] = {
 
 
 def _build_affiliate_url(content_id: str, floor: str, affiliate_id: str) -> str:
-    """floor に応じた DMM 購入ページ URL を組み立てる。
-    DMM API が返す `affiliateURL` (al.fanza.co.jp 経由) は新規アカウントで
-    拒否される ("無効リンク") ため、直接 cid を含むページ URL に af_id を付与する。
+    """floor に応じた DMM 購入ページ URL を組み立てる (フォールバック)。
+
+    通常運用では DMM API の `affiliateURL` をそのまま使用する。
+    API が `affiliateURL` を返さない (空 / null) ケースに限り、この関数で
+    cid + af_id 直リンクを組み立てる。
     """
     tpl = _AFFILIATE_URL_TEMPLATES.get(floor)
     if tpl is None:
         # 未知の floor は videoa パターンにフォールバック
         tpl = _AFFILIATE_URL_TEMPLATES["videoa"]
     return tpl.format(cid=content_id, af_id=affiliate_id)
+
+
+def _pick_affiliate_url(
+    item: dict,
+    content_id: str,
+    floor: str,
+    fallback_af_id: str,
+) -> tuple[str, bool]:
+    """DMM API レスポンスから affiliate URL を取り出す。
+
+    DMM 側でクリックが正しくカウントされるよう、API が返した `affiliateURL`
+    (camelCase) をそのまま使う。値が空・null の場合に限り
+    `_build_affiliate_url` で組み立てたフォールバック URL を返す。
+
+    :return: (url, used_api) — used_api=True なら API の affiliateURL を採用。
+    """
+    api_url = item.get("affiliateURL")
+    if isinstance(api_url, str) and api_url.strip():
+        return api_url.strip(), True
+    fallback = _build_affiliate_url(content_id, floor, fallback_af_id)
+    print(
+        f"  [affiliate_url] fallback used cid={content_id} floor={floor}: "
+        f"DMM API did not return affiliateURL"
+    )
+    return fallback, False
 
 
 # ────────────────────────────────────────────────────────────
@@ -468,8 +499,15 @@ async def upsert_movie(
     title = item.get("title") or item.get("name") or "(無題)"
     slug = existing.slug if existing else _build_slug(item, content_id)
 
-    # アフィリエイト URL を自前で組み立てる (DMM API が返す al.fanza.co.jp は無効リンクになる)
-    affiliate_url = _build_affiliate_url(content_id, floor, affiliate_id)
+    # DMM API の affiliateURL をそのまま使う (DMM 側のクリック計測を保つため)。
+    # API が返さない場合に限り cid + af_id の直リンクへフォールバック。
+    affiliate_url, _aff_from_api = _pick_affiliate_url(item, content_id, floor, affiliate_id)
+    # mobile (SP) 用のトラッキング URL は API レスポンスの `affiliateURL_mobile`
+    # (または旧名 `affiliateURLs_mobile`) を優先する。
+    affiliate_url_mobile = (
+        item.get("affiliateURL_mobile")
+        or item.get("affiliateURLs_mobile")
+    )
 
     price_list, price_min = _extract_price_list(item)
     review_count, review_avg = _extract_review(item)
@@ -537,9 +575,15 @@ async def upsert_movie(
         movie.image_url_list = new_image_list or movie.image_url_list
         movie.image_url_large = new_image_large or movie.image_url_large
         movie.sample_embed_url = sample_embed_url or movie.sample_embed_url
-        # affiliate_url は常に自前生成のもので上書き (既存データの無効リンクを一括で修復する)
-        movie.affiliate_url = affiliate_url
-        movie.affiliate_url_en = item.get("affiliateURLs_mobile") or movie.affiliate_url_en
+        # affiliate_url の更新ルール:
+        #   - API が affiliateURL を返した場合 → そのまま上書き
+        #     (DMM 側のクリック計測を保つため自前 URL からの移行も兼ねる)
+        #   - API が返さなかった場合 → 既存値があれば触らず、空のときだけフォールバックを書く
+        if _aff_from_api:
+            movie.affiliate_url = affiliate_url
+        elif not movie.affiliate_url:
+            movie.affiliate_url = affiliate_url
+        movie.affiliate_url_en = affiliate_url_mobile or movie.affiliate_url_en
         movie.price_list = price_list or movie.price_list
         movie.price_min = price_min if price_min is not None else movie.price_min
         movie.release_date = release_date or movie.release_date
@@ -575,7 +619,7 @@ async def upsert_movie(
             ),
             sample_embed_url=sample_embed_url,
             affiliate_url=affiliate_url,
-            affiliate_url_en=item.get("affiliateURLs_mobile"),
+            affiliate_url_en=affiliate_url_mobile,
             price_list=price_list,
             price_min=price_min,
             release_date=release_date,
@@ -701,7 +745,8 @@ async def upsert_goods(
     image_urls = item.get("imageURL") or {}
 
     title = item.get("title") or item.get("name") or "(無題)"
-    affiliate_url = _build_affiliate_url(content_id, "goods", affiliate_id)
+    # DMM API の affiliateURL を優先採用 (なければ goods 用フォールバック)。
+    affiliate_url, _aff_from_api = _pick_affiliate_url(item, content_id, "goods", affiliate_id)
     price_list, price_min = _extract_price_list(item)
     review_count, review_avg = _extract_review(item)
 
@@ -757,7 +802,12 @@ async def upsert_goods(
         goods.description = item.get("comment") or goods.description or ""
         goods.image_url_list = new_image_list or goods.image_url_list
         goods.image_url_large = new_image_large or goods.image_url_large
-        goods.affiliate_url = affiliate_url
+        # affiliate_url: API が affiliateURL を返したら常に上書き、
+        # 返さなかった場合は既存値を保ち空のときだけフォールバックを書く。
+        if _aff_from_api:
+            goods.affiliate_url = affiliate_url
+        elif not goods.affiliate_url:
+            goods.affiliate_url = affiliate_url
         goods.price_list = price_list or goods.price_list
         goods.price_min = price_min if price_min is not None else goods.price_min
         goods.release_date = release_date or goods.release_date

@@ -19,6 +19,7 @@ from src.sync_catalog import (  # noqa: E402
     _parse_date,
     _parse_float,
     _parse_int,
+    _pick_affiliate_url,
     _pl_image_exists,
     _upgrade_goods_image_to_pl,
     _slugify,
@@ -60,6 +61,49 @@ def test_build_affiliate_url():
     # 未知 floor は videoa にフォールバック
     url = _build_affiliate_url("foo", "unknown", "af-990")
     assert "digital/videoa" in url
+
+
+def test_pick_affiliate_url_uses_api_value_exactly():
+    """DMM API が返した affiliateURL は そのまま (文字列を加工せず) 採用する。"""
+    api_url = (
+        "https://al.dmm.co.jp/?lurl=https%3A%2F%2Fwww.dmm.co.jp%2Fdigital%2Fvideoa"
+        "%2F-%2Fdetail%2F%3D%2Fcid%3Dnask00405%2F&af_id=avshorts0512-990&ch=api"
+    )
+    item = {"affiliateURL": api_url}
+    url, used_api = _pick_affiliate_url(item, "nask00405", "videoa", "fallback-001")
+    assert url == api_url  # 完全一致 — DMM 側のクリック計測を保つ
+    assert used_api is True
+
+
+def test_pick_affiliate_url_strips_whitespace_only_value():
+    """空白だけの affiliateURL はフォールバックさせる。"""
+    item = {"affiliateURL": "   "}
+    url, used_api = _pick_affiliate_url(item, "nask00405", "videoa", "fallback-001")
+    assert used_api is False
+    assert "cid=nask00405" in url
+    assert "af_id=fallback-001" in url
+
+
+def test_pick_affiliate_url_falls_back_when_missing():
+    """API が affiliateURL を返さない場合は cid + fallback af_id で組み立てる。"""
+    # 完全に欠落
+    url, used_api = _pick_affiliate_url({}, "ho11992", "goods", "fallback-001")
+    assert used_api is False
+    assert url.startswith("https://www.dmm.co.jp/mono/goods/")
+    assert "cid=ho11992" in url
+    assert "af_id=fallback-001" in url
+    # null 値
+    url2, used_api2 = _pick_affiliate_url({"affiliateURL": None}, "ho11992", "goods", "fallback-001")
+    assert used_api2 is False
+    assert url2 == url
+
+
+def test_pick_affiliate_url_non_string_falls_back():
+    """affiliateURL が文字列以外 (壊れたレスポンス) ならフォールバック。"""
+    item = {"affiliateURL": 123}
+    url, used_api = _pick_affiliate_url(item, "abc", "videoa", "fallback-001")
+    assert used_api is False
+    assert "cid=abc" in url
 
 
 def test_slugify():

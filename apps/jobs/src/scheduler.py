@@ -412,8 +412,9 @@ def _register_jobs(scheduler: AsyncIOScheduler) -> None:
         )
 
     # resolve_sample_urls_full_refresh: 毎月 1 日 03:00 JST (デフォルト無効)
-    # CDN URL の期限切れに備えて全件再解決する。Playwright を全件分回すため
-    # 数時間〜数十時間かかり得る。深夜帯の月初を既定とする。
+    # CDN URL の期限切れに備えて全件再解決する。httpx で各 movie につき
+    # 2 リクエスト (litevideo + html5_player) を投げるだけだが、件数次第で
+    # 数十分〜数時間かかる。深夜帯の月初を既定とする。
     if _env_bool("SCHEDULE_ENABLE_RESOLVE_SAMPLE_URLS_FULL_REFRESH", False):
         full_day = os.getenv("SCHEDULE_RESOLVE_FULL_REFRESH_CRON_DAY", "1")
         full_hour = os.getenv("SCHEDULE_RESOLVE_FULL_REFRESH_CRON_HOUR", "3")

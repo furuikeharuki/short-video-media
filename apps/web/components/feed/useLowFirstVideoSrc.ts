@@ -48,6 +48,13 @@ interface Args {
    * 全リセットする。同じ <video> 要素が再利用されるケースに備える。
    */
   slug: string;
+  /**
+   * 再生開始の最小許容秒数 (= プロ女優作品の先頭スキップ 5 秒など)。
+   * src 差し替え時に `<video>` の `currentTime` がブラウザの `emptied` で 0 に
+   * 戻されるが、ここで指定した値より小さい位置に復帰させないようクランプする。
+   * 0 / undefined のときは従来通り直前位置 (prevTime) をそのまま使う。
+   */
+  minStartTime?: number;
 }
 
 interface HighProbeProps {
@@ -69,6 +76,7 @@ export function useLowFirstVideoSrc({
   enabled,
   allowPrepare,
   slug,
+  minStartTime = 0,
 }: Args): Result {
   // 現在のメイン <video> の src 表示状態。React の <video src={currentSrc}> として描画される。
   const [currentSrc, setCurrentSrc] = useState<string | null>(lowSrc ?? null);
@@ -135,7 +143,14 @@ export function useLowFirstVideoSrc({
     }
 
     // 現在の low 再生状態を保存。
-    const prevTime = video.currentTime;
+    // 「プロ女優」(= minStartTime > 0) 作品では、probe canplay が低画質側の loadedmetadata
+    // よりも先に発火するケースがあり、その時点では video.currentTime はまだブラウザ初期値
+    // (0 付近) になっている。そのまま prevTime として保存して swap 後に書き戻すと、
+    // 高画質側を 0 秒から再生してしまい、useFeedPlayback 側の 5 秒下限クランプより前に
+    // 一瞬 5 秒スキップが効かなくなる。
+    // そのため prevTime は最低でも minStartTime まで持ち上げる。
+    const rawPrevTime = video.currentTime;
+    const prevTime = Math.max(minStartTime, rawPrevTime);
     const wasPaused = video.paused;
     const prevRate = video.playbackRate;
     // muted / volume は React の <video muted /> 経由で常に反映されるが、
@@ -203,7 +218,7 @@ export function useLowFirstVideoSrc({
       }
     };
     v.addEventListener("loadedmetadata", onMeta, { once: true });
-  }, [highSrc, lowSrc, enabled, slug, videoRef]);
+  }, [highSrc, lowSrc, enabled, slug, videoRef, minStartTime]);
 
   // プローブが onError を出したら、スワップを諦めて low 再生を続ける。
   const handleProbeError = useCallback(() => {

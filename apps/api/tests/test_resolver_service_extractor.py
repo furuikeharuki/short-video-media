@@ -144,6 +144,177 @@ async def test_extract_handles_escaped_forward_slashes(
 
 
 # ────────────────────────────────────────────────────────────────────
+# 旧 Playwright 経由でだけ拾えていたページ形状をカバーする回帰テスト群
+# (h-1186etqr00128 / h-1416ad00199 等で実観測された崩れパターン)
+# ────────────────────────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_extract_args_without_var_keyword(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`args = {...}` (var 無し) でも src を取り出せる。"""
+    raw_html = (
+        '<script>args = {"src": "https://cc3001.dmm.co.jp/pv/a/b.mp4"};</script>'
+    )
+    handler = _two_stage_handler(
+        litevideo_body=_litevideo_html(),
+        player_body=raw_html,
+    )
+    _install_transport(monkeypatch, handler)
+
+    result = await extract_mp4_url("h_1186etqr00128", "affi-001")
+    assert result.mp4_url == "https://cc3001.dmm.co.jp/pv/a/b.mp4"
+
+
+@pytest.mark.asyncio
+async def test_extract_args_with_nested_objects_and_arrays(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`bitrates: [{...}]` / `controls: {...}` を含むネストオブジェクトでも壊れない。
+
+    旧実装の ``\\{.*?\\}`` 非貪欲マッチは最初の `}` で止まるためここで失敗していた。
+    バランス括弧スキャナーへの移行で救われるパターン。
+    """
+    raw_html = (
+        '<script>var args = {'
+        '"src": "https://cc3001.dmm.co.jp/pv/x/y.mp4",'
+        '"bitrates": [{"bitrate": 300, "src": "//low/y_low.mp4"},'
+        '{"bitrate": 1000, "src": "//hi/y_hi.mp4"}],'
+        '"controls": {"volume": true, "fullscreen": true},'
+        '"poster": "//pics/y.jpg"'
+        '};</script>'
+    )
+    handler = _two_stage_handler(
+        litevideo_body=_litevideo_html(),
+        player_body=raw_html,
+    )
+    _install_transport(monkeypatch, handler)
+
+    result = await extract_mp4_url("h_1416ad00199", "affi-001")
+    assert result.mp4_url == "https://cc3001.dmm.co.jp/pv/x/y.mp4"
+
+
+@pytest.mark.asyncio
+async def test_extract_args_without_trailing_semicolon(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """末尾 `;` が無い (close `}` のみ) でも抽出できる。"""
+    raw_html = (
+        '<script>var args = {"src": "https://cc3001.dmm.co.jp/pv/n/o.mp4"}</script>'
+    )
+    handler = _two_stage_handler(
+        litevideo_body=_litevideo_html(),
+        player_body=raw_html,
+    )
+    _install_transport(monkeypatch, handler)
+
+    result = await extract_mp4_url("h_1186etqr00127", "affi-001")
+    assert result.mp4_url == "https://cc3001.dmm.co.jp/pv/n/o.mp4"
+
+
+@pytest.mark.asyncio
+async def test_extract_args_minified_single_line(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """ミニファイされた 1 行 JS でもバランス括弧で正しく切り出せる。"""
+    raw_html = (
+        'function init(){var args={"src":"https:\\/\\/cc3001.dmm.co.jp\\/pv\\/m\\/n.mp4",'
+        '"bitrates":[{"bitrate":300}]};player.setup(args);}'
+    )
+    handler = _two_stage_handler(
+        litevideo_body=_litevideo_html(),
+        player_body=raw_html,
+    )
+    _install_transport(monkeypatch, handler)
+
+    result = await extract_mp4_url("h_1416ad00198", "affi-001")
+    assert result.mp4_url == "https://cc3001.dmm.co.jp/pv/m/n.mp4"
+
+
+@pytest.mark.asyncio
+async def test_direct_mp4_fallback_when_args_missing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`args = {...}` が無くても HTML 内の cc3001 直リンクを拾えるフォールバック。"""
+    raw_html = (
+        '<html><body>'
+        '<video src="https:\\/\\/cc3001.dmm.co.jp\\/pv\\/zz\\/q_mhb_w.mp4"></video>'
+        '</body></html>'
+    )
+    handler = _two_stage_handler(
+        litevideo_body=_litevideo_html(),
+        player_body=raw_html,
+    )
+    _install_transport(monkeypatch, handler)
+
+    result = await extract_mp4_url("h_1186etqr00128", "affi-001")
+    assert result.mp4_url == "https://cc3001.dmm.co.jp/pv/zz/q_mhb_w.mp4"
+
+
+@pytest.mark.asyncio
+async def test_direct_mp4_fallback_prefers_mhb_w(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """フォールバック時に `_mhb_w.mp4` (高ビットレート) を優先する。"""
+    raw_html = (
+        '<html><body>'
+        '<source src="//cc3001.dmm.co.jp/pv/a/sample_low.mp4">'
+        '<source src="//cc3001.dmm.co.jp/pv/a/sample_mhb_w.mp4">'
+        '</body></html>'
+    )
+    handler = _two_stage_handler(
+        litevideo_body=_litevideo_html(),
+        player_body=raw_html,
+    )
+    _install_transport(monkeypatch, handler)
+
+    result = await extract_mp4_url("h_1416ad00199", "affi-001")
+    assert result.mp4_url == "https://cc3001.dmm.co.jp/pv/a/sample_mhb_w.mp4"
+
+
+@pytest.mark.asyncio
+async def test_direct_mp4_fallback_with_query_string(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """クエリ付き MP4 URL もフォールバックで拾える。"""
+    raw_html = (
+        '<html><body>'
+        'data-mp4="https://cc3001.dmm.co.jp/pv/aa/bb_mhb_w.mp4?token=xyz"'
+        '</body></html>'
+    )
+    handler = _two_stage_handler(
+        litevideo_body=_litevideo_html(),
+        player_body=raw_html,
+    )
+    _install_transport(monkeypatch, handler)
+
+    result = await extract_mp4_url("h_1416ad00199", "affi-001")
+    assert result.mp4_url == "https://cc3001.dmm.co.jp/pv/aa/bb_mhb_w.mp4?token=xyz"
+
+
+@pytest.mark.asyncio
+async def test_iframe_with_single_quoted_src(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """iframe の src がシングルクォートでも digitalapi URL を拾える。"""
+    lite_html = (
+        "<html><body>"
+        f"<iframe src='{_IFRAME_URL}' width='720'></iframe>"
+        "</body></html>"
+    )
+    mp4 = "https://cc3001.dmm.co.jp/pv/q/q.mp4"
+    handler = _two_stage_handler(
+        litevideo_body=lite_html,
+        player_body=_player_html(mp4),
+    )
+    _install_transport(monkeypatch, handler)
+
+    result = await extract_mp4_url("any_cid", "affi-001")
+    assert result.mp4_url == mp4
+
+
+# ────────────────────────────────────────────────────────────────────
 # エラー系
 # ────────────────────────────────────────────────────────────────────
 
@@ -163,9 +334,10 @@ async def test_missing_iframe_raises_not_found(
 
 
 @pytest.mark.asyncio
-async def test_missing_args_raises_not_found(
+async def test_missing_args_and_no_mp4_raises_not_found(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """args も直接 MP4 URL も無いケースは NotFound。"""
     handler = _two_stage_handler(
         litevideo_body=_litevideo_html(),
         player_body="<html><body>no args here</body></html>",
@@ -177,7 +349,26 @@ async def test_missing_args_raises_not_found(
 
 
 @pytest.mark.asyncio
-async def test_args_without_src_raises_not_found(
+async def test_args_without_src_falls_back_to_direct_mp4(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`args.src` が無くても HTML 内に MP4 URL があればフォールバックで救われる。"""
+    raw_html = (
+        '<script>var args = {"poster": "//x/y.jpg"};</script>'
+        '<source src="//cc3001.dmm.co.jp/pv/p/q_mhb_w.mp4">'
+    )
+    handler = _two_stage_handler(
+        litevideo_body=_litevideo_html(),
+        player_body=raw_html,
+    )
+    _install_transport(monkeypatch, handler)
+
+    result = await extract_mp4_url("any_cid", "affi-001")
+    assert result.mp4_url == "https://cc3001.dmm.co.jp/pv/p/q_mhb_w.mp4"
+
+
+@pytest.mark.asyncio
+async def test_args_without_src_and_no_mp4_raises_not_found(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     handler = _two_stage_handler(
@@ -191,17 +382,37 @@ async def test_args_without_src_raises_not_found(
 
 
 @pytest.mark.asyncio
-async def test_invalid_args_json_raises_upstream(
+async def test_invalid_args_json_with_no_mp4_raises_upstream(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """args オブジェクトが JSON として壊れていて MP4 も無いなら Upstream エラー。"""
     handler = _two_stage_handler(
         litevideo_body=_litevideo_html(),
-        player_body="<script>var args = {not valid json};</script>",
+        player_body="<script>var args = {not valid json here};</script>",
     )
     _install_transport(monkeypatch, handler)
 
     with pytest.raises(ResolveUpstream):
         await extract_mp4_url("bad_json_cid", "affi-001")
+
+
+@pytest.mark.asyncio
+async def test_invalid_args_json_falls_back_to_direct_mp4(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """args が壊れていても HTML 内に MP4 URL があれば回復する。"""
+    raw_html = (
+        '<script>var args = {not valid json here};</script>'
+        '<source src="//cc3001.dmm.co.jp/pv/f/g_mhb_w.mp4">'
+    )
+    handler = _two_stage_handler(
+        litevideo_body=_litevideo_html(),
+        player_body=raw_html,
+    )
+    _install_transport(monkeypatch, handler)
+
+    result = await extract_mp4_url("recover_cid", "affi-001")
+    assert result.mp4_url == "https://cc3001.dmm.co.jp/pv/f/g_mhb_w.mp4"
 
 
 @pytest.mark.asyncio

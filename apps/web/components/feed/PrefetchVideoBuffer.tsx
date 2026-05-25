@@ -2,6 +2,8 @@
 
 import { useEffect, useRef } from "react";
 
+import { isVideoTimingEnabled } from "@/lib/videoTiming";
+
 /**
  * 動画バイトの先読み専用の <video>。
  *
@@ -35,11 +37,25 @@ interface Props {
    * - "none": 完全に preload を止めたい場合。
    */
   preload?: "auto" | "metadata" | "none";
+  /** dev ログ用: currentIndex からのオフセット (+1, +2 など)。 */
+  offset?: number;
   /** <video> が onError を発火したら呼ばれる。fire-and-forget。 */
   onError?: (slug: string) => void;
 }
 
-export default function PrefetchVideoBuffer({ slug, src, preload = "auto", onError }: Props) {
+function vtPrefetchLog(message: string) {
+  if (!isVideoTimingEnabled()) return;
+  // eslint-disable-next-line no-console
+  console.debug(`vt byte-prefetch ${message}`);
+}
+
+export default function PrefetchVideoBuffer({
+  slug,
+  src,
+  preload = "auto",
+  offset,
+  onError,
+}: Props) {
   const ref = useRef<HTMLVideoElement>(null);
   // 同じ slot の <video> で何度も onError が呼ばれても親への通知は 1 回だけにする。
   const notifiedRef = useRef(false);
@@ -50,6 +66,13 @@ export default function PrefetchVideoBuffer({ slug, src, preload = "auto", onErr
     if (!el) return;
     // preload="none" のときは load() を呼ばない (帯域を一切使わない)。
     if (preload === "none") return;
+
+    const onLoadedMetadata = () => {
+      const off = offset != null ? `+${offset}` : "?";
+      vtPrefetchLog(`loadedmetadata slug=${slug} offset=${off} mode=${preload}`);
+    };
+    el.addEventListener("loadedmetadata", onLoadedMetadata);
+
     // 明示的に load() を呼んで preload を確実にキック。
     // src 属性だけ設定しても iOS Safari は load() を呼ばないと取りに行かないことがある。
     try {
@@ -57,7 +80,11 @@ export default function PrefetchVideoBuffer({ slug, src, preload = "auto", onErr
     } catch {
       // load() が例外を投げるケースは握り潰し
     }
-  }, [src, preload]);
+
+    return () => {
+      el.removeEventListener("loadedmetadata", onLoadedMetadata);
+    };
+  }, [src, preload, slug, offset]);
 
   const handleError = () => {
     if (notifiedRef.current) return;

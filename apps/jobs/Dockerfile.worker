@@ -6,7 +6,7 @@
 #   - DMM API → Railway Postgres (Private Network = postgres.railway.internal)
 #     を経由するため egress は発生しない。
 #   - APScheduler が JST タイムゾーンで 2 時間ごと / 毎日 cron を回す。
-#   - Playwright は不要 (extract_mp4_urls は使わない)。
+#   - Playwright は不要 (resolve_sample_urls は in-process httpx で完結)。
 #
 # Railway デプロイ設定:
 #   - Service type: Worker (HTTP ポート公開なし)
@@ -17,8 +17,6 @@
 #       DMM_API_ID = ...
 #       DMM_AFFILIATE_ID = ...
 #       DMM_LINK_AFFILIATE_ID = ...
-#       RESOLVER_BASE_URL = http://162.43.24.128
-#       RESOLVER_API_KEY = ...
 #
 # ローカル動作確認:
 #   docker build -f apps/jobs/Dockerfile.worker -t shortvideo/jobs-worker .

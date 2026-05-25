@@ -11,7 +11,6 @@ export type MovieDetail = {
   volume: number | null;
   image_url_list: string | null;
   image_url_large: string | null;
-  sample_movie_url: string | null;
   sample_embed_url: string | null;
   affiliate_url: string;
   price_list: {

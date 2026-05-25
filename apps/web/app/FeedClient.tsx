@@ -89,7 +89,6 @@ function movieDetailToCard(m: MovieDetail): MovieCard {
     slug: m.slug,
     image_url_list: m.image_url_list,
     image_url_large: m.image_url_large,
-    sample_movie_url: m.sample_movie_url,
     affiliate_url: m.affiliate_url,
     price_list: m.price_list,
     price_min: m.price_min,

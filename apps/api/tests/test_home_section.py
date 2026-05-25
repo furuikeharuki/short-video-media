@@ -27,7 +27,6 @@ def _card(i: int) -> MovieCard:
         slug=f"test-movie-{i:03d}",
         image_url_list=None,
         image_url_large=None,
-        sample_movie_url=None,
         affiliate_url=f"https://www.dmm.co.jp/digital/videoa/-/detail/=/cid=abc{i:05d}/?af_id=test-990",
         price_list=PriceList(list_price=1980, sale_price=980),
         price_min=980,
@@ -53,7 +52,6 @@ def _make_movie(i: int):
         slug = card.slug
         image_url_list = card.image_url_list
         image_url_large = card.image_url_large
-        sample_movie_url = card.sample_movie_url
         affiliate_url = card.affiliate_url
         price_list = None
         price_min = card.price_min

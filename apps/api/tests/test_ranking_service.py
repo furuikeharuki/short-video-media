@@ -30,7 +30,6 @@ def _movie(i: int, *, slug: str | None = None):
         slug=slug or f"movie-{i:03d}",
         image_url_list=None,
         image_url_large=None,
-        sample_movie_url=None,
         affiliate_url=f"https://example.com/{i}",
         price_list=None,
         price_min=None,

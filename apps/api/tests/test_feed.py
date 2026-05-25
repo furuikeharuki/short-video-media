@@ -25,7 +25,6 @@ def client(monkeypatch: pytest.MonkeyPatch) -> Iterator[TestClient]:
         slug="test-movie-001",
         image_url_list="https://example.com/list.jpg",
         image_url_large="https://example.com/large.jpg",
-        sample_movie_url=None,
         affiliate_url="https://www.dmm.co.jp/digital/videoa/-/detail/=/cid=abc00001/?af_id=test-990",
         price_list=PriceList(list_price=1980, sale_price=980),
         price_min=980,

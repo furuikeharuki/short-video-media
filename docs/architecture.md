@@ -11,16 +11,10 @@
 │  Vercel              │ ──────▶ │  ┌────────────────────────┐  │
 │  - SSR + ISR         │         │  │ api (apps/api)         │  │
 │  - Auth.js v5        │         │  │ - REST /api/v1/*       │  │
-│  - parallel routes   │         │  │ - PyJWT / SQLAlchemy   │  │
+│  - parallel routes   │         │  │ - in-process MP4 抽出  │  │
+│                      │         │  │   (httpx → DMM)        │  │
 └──────────┬───────────┘         │  └─────────┬──────────────┘  │
-           │                     │            │ HTTP            │
-           │                     │            ▼                 │
-           │                     │  ┌────────────────────────┐  │
-           │                     │  │ resolver               │  │
-           │                     │  │ (apps/api/app.resolver)│  │
-           │                     │  │ Playwright + Chromium  │  │
-           │                     │  └────────────────────────┘  │
-           │                     │                              │
+           │                     │            │                 │
            │                     │  ┌────────────────────────┐  │
            │                     │  │ jobs-worker (apps/jobs)│  │
            │                     │  │ APScheduler 常駐       │  │
@@ -31,7 +25,7 @@
            │                     │  └────────────────────────┘  │
            │                     └──────────────────────────────┘
            │
-           └─ DMM / FANZA API (jobs-worker / resolver から outbound)
+           └─ DMM / FANZA API (api / jobs-worker から outbound)
 ```
 
 ## モジュール責務
@@ -39,25 +33,23 @@
 | モジュール | 責務 | デプロイ先 |
 |-----------|------|-----------|
 | `apps/web` | UI / SSR / Auth.js / 縦スクロール再生 / モーダル詳細 | Vercel |
-| `apps/api` | REST API / DB アクセス / 計測イベント受付 / JWT 発行 | Xserver VPS (旧 Railway) |
-| `apps/api` (`app.resolver`) | DMM litevideo iframe → MP4 URL 抽出 (Playwright) | Xserver VPS の resolver サービスとして起動 |
+| `apps/api` | REST API / DB アクセス / 計測イベント受付 / JWT 発行 / DMM MP4 URL 抽出 | Xserver VPS (旧 Railway) |
+| `apps/api` (`app.resolver`) | DMM html5_player ページ → MP4 URL 抽出 (httpx, in-process) | apps/api と同じプロセスで動作 |
 | `apps/jobs` | DMM API 取得 / DB upsert / sample URL 解決ジョブ | Xserver VPS の jobs-worker (旧 GitHub Actions cron) |
 | `packages/shared` | TS 型・JSON Schema 共有 | (内部) |
 
-### resolver の位置づけ
+### MP4 URL 抽出の位置づけ
 
-以前は `apps/resolver` として独立した FastAPI サービス (Xserver VPS Tokyo)
-だったが、Xserver VPS への移行で `apps/api` 自身も日本リージョンで動く
-ようになったため、コードを `apps/api/app/resolver/` に統合済み。
+以前は `apps/resolver` として Playwright + Chromium を載せた独立 FastAPI
+サービスを Xserver VPS Tokyo で動かしていたが、DMM の html5_player
+ページが `var args = {...}` の形で MP4 URL を直接埋めて返してくれることが
+判明したため、ピュア httpx で apps/api 内で in-process 解決する方式に
+切り替えた。Playwright / Chromium / 別コンテナはすべて不要。
 
-通常 API コンテナ (slim Python image, ~150MB) と resolver サービス
-(`apps/api/Dockerfile.resolver`, Playwright base ~2GB) は **同じ
-`apps/api` パッケージを共有しつつ別イメージで動く**。これにより:
-
-- API メインの応答性 / 起動時間に Playwright/Chromium の影響が出ない
-- resolver のロジックを 2 箇所で保守する必要がない
-- `apps/api/app/services/resolver_client.py` (HTTP クライアント) → `app.resolver.main` への呼び出し境界はそのまま (HTTP 経由)
-- compose 内では同 docker network 経由 (`http://resolver:8080`) で通信
+- 通常 API コンテナ (slim Python image, ~150MB) だけで完結する
+- `apps/api/app/resolver/extractor.py` が抽出ロジック本体
+- `apps/api/app/services/resolver_client.py` が in-flight デデュープ + 短期成功キャッシュ
+- jobs-worker のバックフィルジョブ (`resolve_sample_urls.py`) も同じ extractor を再利用
 
 ## データフロー
 
@@ -71,7 +63,7 @@
 
 - **Next.js 15.3 / React 18**: parallel routes による TikTok 風遷移
 - **FastAPI + SQLAlchemy 2.x async + asyncpg**: 縦スクロールフィードの低レイテンシ実現
-- **Playwright (Chromium)**: 静的 fetch では取れない `litevideo iframe` の MP4 URL を JS 評価で取得
+- **httpx**: DMM html5_player ページの `var args = {...}` から MP4 URL を直接抽出 (Playwright 不要)
 - **Auth.js v5 + PyJWT**: フロント／バックの認証境界を JWT で分離、provider PII を DB に持たない
 
 ## 環境

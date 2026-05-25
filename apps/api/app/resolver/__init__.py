@@ -1,17 +1,13 @@
-"""DMM litevideo iframe から MP4 直リンクを抽出する Playwright resolver。
+"""DMM サンプル動画ページから MP4 直リンクを抽出するパッケージ。
 
-以前は `apps/resolver` として独立した FastAPI サービスだったが、
-Xserver VPS 移行に伴い `apps/api` パッケージへ統合した。
+以前は Playwright で iframe をレンダリングして MP4 URL を取得していたが、
+DMM 側の html5_player ページが ``var args = {...}`` 形式で MP4 URL を
+そのまま埋めて返してくれることが分かったため、ピュア httpx で
+in-process に解決する実装に切り替えた (resolver コンテナは廃止)。
 
-実行モード:
-    1. ``apps.resolver.main:app``: Playwright Chromium を起動する FastAPI app
-       (resolver 専用イメージ ``apps/api/Dockerfile.resolver`` でのみ使う)。
-    2. ``apps.api.main:app`` (通常 API): ``app.resolver`` 配下のコードを import
-       するが Playwright を起動しない。``app.resolver.client`` (旧
-       ``app.services.resolver_client``) 経由で HTTP で resolver サービスを叩く。
+主要モジュール:
+    extractor: ``extract_mp4_url`` 本体と ResolveError サブクラス。
 
-Playwright 依存は遅延 import (``browser_pool.start`` 内) で隔離してあるため、
-通常 API コンテナ (slim Python image) にこのパッケージを含めても起動には
-影響しない。Playwright がインストールされていない環境では Browser を
-起動しようとした時点で初めて ImportError になる。
+呼び出し元 (apps/api / apps/jobs) は ``app.services.resolver_client`` 経由で
+in-flight デデュープ・短期キャッシュ付きの公開 API を使う。
 """

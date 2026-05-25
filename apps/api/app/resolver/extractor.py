@@ -3,7 +3,7 @@ r"""DMM litevideo iframe から MP4 直リンク URL を抽出するコアロジ
 以前は Playwright で iframe ページを開いて <video> 要素や network から
 取得していたが、DMM 側の html5_player ページが返す HTML に
 ``var args = {...}`` の形で MP4 URL がそのまま埋まっていることが判明したため、
-ピュア httpx でフェッチ → 正規表現で取り出す方式に置き換えた。
+ピュア httpx でフェッチ → JS オブジェクトを抽出する方式に置き換えた。
 
 フロー:
     1. ``https://www.dmm.co.jp/litevideo/-/part/=/cid=<cid>/size=720_480/affi_id=<aid>/``
@@ -12,12 +12,15 @@ r"""DMM litevideo iframe から MP4 直リンク URL を抽出するコアロジ
        ``iframe src="https://www.dmm.co.jp/service/digitalapi/..."``
        を抽出
     3. iframe URL を fetch
-    4. ``var args = ({...})`` の {...} を JSON としてパース
+    4. ``args = { ... }`` の中身を JSON としてパース (ネストした
+       ``bitrates: [{...}]`` や ``controls: {...}`` を含むためバランス括弧で抽出)
     5. ``args["src"]`` を取り出し ``\/`` をアンエスケープ、``//`` で始まれば
        ``https:`` を前置
+    6. 上記がいずれも失敗したら HTML 全体から ``cc3001.dmm.co.jp/...mp4``
+       を直接拾うフォールバックを試す
 
 ResolveError サブクラスで HTTP ステータスコードへのマッピングを表現する:
-    - ResolveNotFound  → HTTP 404 (iframe や args が見つからない)
+    - ResolveNotFound  → HTTP 404 (iframe / args / mp4 のいずれも見つからない)
     - ResolveTimeout   → HTTP 504 (httpx タイムアウト)
     - ResolveUpstream  → HTTP 502 (DMM 側のエラー / リダイレクト等)
 
@@ -86,13 +89,32 @@ _DEFAULT_HEADERS = {
 }
 
 # litevideo ページに埋まっている iframe タグ。digitalapi 配下の URL のみを拾う。
+# クォートは ", ', 無しの 3 パターンを許容。
 _IFRAME_RE = re.compile(
-    r'iframe\s+src="(https://www\.dmm\.co\.jp/service/digitalapi[^"]+)"'
+    r"""iframe[^>]*?\s+src\s*=\s*(?:"([^"]+)"|'([^']+)'|([^\s>]+))""",
+    re.IGNORECASE,
+)
+_DIGITALAPI_HOST_PREFIX = "https://www.dmm.co.jp/service/digitalapi"
+
+# `args = {` の開始位置を探す。`var args =` / `window.args =` / `args =` のいずれにも対応。
+_ARGS_START_RE = re.compile(
+    r"(?:\bvar\s+|\bwindow\s*\.\s*|\b)args\s*=\s*\{",
+    re.IGNORECASE,
 )
 
-# html5_player ページの `var args = { ... };` を非貪欲に拾う。
-# DMM HTML は実測で 1 行記述だが、念のため DOTALL で改行も許容する。
-_ARGS_RE = re.compile(r"var\s+args\s*=\s*(\{.*?\})\s*;", re.DOTALL)
+# html5_player の直接 MP4 フォールバック。
+# `\/` エスケープ・素のスラッシュ・protocol-relative の 3 パターンを許容。
+_DIRECT_MP4_RE = re.compile(
+    r"""(?xi)
+    (?:https?:)?           # 任意の https: / http:
+    (?:\\/\\/|//)          # `\/\/` または `//`
+    cc3001\.dmm\.co\.jp    # CDN ホスト
+    (?:\\/|/)              # 続くスラッシュもエスケープ許容
+    [^"'\s<>]+?            # パス本体
+    \.mp4                  # 拡張子
+    (?:\?[^"'\s<>]*)?      # 任意クエリ
+    """
+)
 
 
 # ---------------------------------------------------------------------------
@@ -101,30 +123,126 @@ _ARGS_RE = re.compile(r"var\s+args\s*=\s*(\{.*?\})\s*;", re.DOTALL)
 
 
 def _parse_iframe_url(html: str) -> str:
-    m = _IFRAME_RE.search(html)
-    if not m:
-        raise ResolveNotFound("digitalapi iframe src not found in litevideo page")
-    return m.group(1)
+    """litevideo HTML から digitalapi 配下の iframe src を 1 つだけ拾う。"""
+    for m in _IFRAME_RE.finditer(html):
+        src = m.group(1) or m.group(2) or m.group(3) or ""
+        if src.startswith("//"):
+            src = "https:" + src
+        if src.startswith(_DIGITALAPI_HOST_PREFIX):
+            return src
+    raise ResolveNotFound("digitalapi iframe src not found in litevideo page")
 
 
-def _parse_mp4_src(html: str) -> str:
-    m = _ARGS_RE.search(html)
-    if not m:
-        raise ResolveNotFound("'var args = {...}' not found in html5_player page")
-    try:
-        args = json.loads(m.group(1))
-    except json.JSONDecodeError as e:
-        raise ResolveUpstream(f"failed to JSON-parse args: {e}") from e
+def _extract_args_object(html: str) -> str | None:
+    """``args = { ... }`` のオブジェクト文字列をバランス括弧で抜き出す。
 
-    src = args.get("src")
-    if not isinstance(src, str) or not src:
-        raise ResolveNotFound(f"args.src missing or empty: {args!r}")
+    JSON 文字列内の `{` `}` は無視するため、" / ' / バックスラッシュエスケープを
+    state machine で追跡する。マッチ位置が見つからなければ None。
+    """
+    m = _ARGS_START_RE.search(html)
+    if m is None:
+        return None
+    # `_ARGS_START_RE` は最後の `{` まで含むので、その位置からスキャン開始。
+    start = m.end() - 1
+    depth = 0
+    in_str: str | None = None
+    escape = False
+    i = start
+    n = len(html)
+    while i < n:
+        ch = html[i]
+        if in_str is not None:
+            if escape:
+                escape = False
+            elif ch == "\\":
+                escape = True
+            elif ch == in_str:
+                in_str = None
+        else:
+            if ch == '"' or ch == "'":
+                in_str = ch
+            elif ch == "{":
+                depth += 1
+            elif ch == "}":
+                depth -= 1
+                if depth == 0:
+                    return html[start : i + 1]
+        i += 1
+    return None
 
-    # JSON 内の \/ をアンエスケープ (json.loads 後にも残るケースがある)
+
+def _normalize_mp4_url(src: str) -> str:
+    """`\\/` をアンエスケープし、protocol-relative なら ``https:`` を前置する。"""
     src = src.replace("\\/", "/")
     if src.startswith("//"):
         src = "https:" + src
     return src
+
+
+def _parse_mp4_src(html: str) -> str:
+    """html5_player ページから MP4 URL を抜き出す。
+
+    1) ``args = {...}`` を balanced-brace で抜き JSON.parse → ``args.src``
+    2) 1) が失敗した場合は HTML 全体から cc3001 配下の MP4 URL を直接拾う
+
+    どちらも見つからなければ ResolveNotFound、
+    args オブジェクトはあるが JSON として壊れている場合は ResolveUpstream。
+    """
+    args_str = _extract_args_object(html)
+    parse_error: Exception | None = None
+    if args_str is not None:
+        try:
+            args = json.loads(args_str)
+        except json.JSONDecodeError as e:
+            # JSON パース失敗を覚えておくが、フォールバックで救えるかも知れない
+            # ので直ちには raise しない。
+            parse_error = e
+            args = None
+
+        if isinstance(args, dict):
+            src = args.get("src")
+            if isinstance(src, str) and src:
+                return _normalize_mp4_url(src)
+            # src が無い／空の場合: フォールバックを試した上で最終的に NotFound。
+            fallback = _direct_mp4_fallback(html)
+            if fallback is not None:
+                logger.info(
+                    "args.src missing; recovered MP4 via direct fallback (cid hint=%s)",
+                    args.get("cid") or args.get("title") or "?",
+                )
+                return fallback
+            raise ResolveNotFound(f"args.src missing or empty: {args!r}")
+
+    # ここに来るのは: (a) args オブジェクトを見つけられなかった、または
+    # (b) 見つけたが JSON として壊れていた、のどちらか。
+    fallback = _direct_mp4_fallback(html)
+    if fallback is not None:
+        if parse_error is not None:
+            logger.warning(
+                "args JSON parse failed (%s); recovered via direct mp4 fallback",
+                parse_error,
+            )
+        return fallback
+
+    if parse_error is not None:
+        raise ResolveUpstream(f"failed to JSON-parse args: {parse_error}") from parse_error
+    raise ResolveNotFound("'args = {...}' / direct mp4 url not found in html5_player page")
+
+
+def _direct_mp4_fallback(html: str) -> str | None:
+    """HTML 全体から cc3001.dmm.co.jp 配下の MP4 URL を直接拾う。
+
+    優先度:
+        1. `_mhb_w.mp4` (DMM の高ビットレート preview)
+        2. その他、最初に見つかった MP4 URL
+    """
+    matches = [m.group(0) for m in _DIRECT_MP4_RE.finditer(html)]
+    if not matches:
+        return None
+    # `_mhb_w.mp4` を含むものを優先 (DMM の高画質サンプル)
+    preferred = [u for u in matches if "mhb_w.mp4" in u]
+    chosen = preferred[0] if preferred else matches[0]
+    return _normalize_mp4_url(chosen)
 
 
 async def extract_mp4_url(

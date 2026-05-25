@@ -42,7 +42,19 @@ async def read_movie(slug: str, db: AsyncSession = Depends(get_db)) -> MovieDeta
 #     バイパスして再抽出。
 class ResolveMp4Response(BaseModel):
     content_id: str | None
+    # 既存クライアント (旧 web ビルド・jobs 等) との互換のため、最良の MP4 URL を
+    # `mp4_url` に常に返す。これは「低画質ファースト戦略」が無効なケースの
+    # フォールバックでもある。
     mp4_url: str
+    # 低画質ファースト戦略用の追加候補。
+    # - low_mp4_url: 軽量 / 早く再生開始できる候補 (= ファーストペイント用)。
+    #   web フロントはまずこの URL で <video> を再生開始する。
+    # - high_mp4_url: 高画質候補 (= 最終的に切り替える先)。
+    #   裏でロードし、`canplay` 相当に到達したらメイン <video> に差し替える。
+    # 低画質と高画質が同じ URL になることもある (single-bitrate)。
+    # 抽出に失敗 / 候補が単一しか無い場合は両方とも `mp4_url` と同じ値が入る。
+    low_mp4_url: str | None = None
+    high_mp4_url: str | None = None
 
 
 @router.get("/movies/{slug}/resolve-mp4", response_model=ResolveMp4Response)
@@ -81,7 +93,7 @@ async def resolve_mp4(
         return Response(status_code=499)
 
     try:
-        mp4_url = await resolver_client.resolve_mp4_url(
+        resolved = await resolver_client.resolve_mp4(
             content_id, bypass_cache=force
         )
     except resolver_client.ResolverNotFound as e:
@@ -96,4 +108,14 @@ async def resolve_mp4(
             status_code=500, detail="resolver service is not configured"
         ) from e
 
-    return ResolveMp4Response(content_id=content_id, mp4_url=mp4_url)
+    # low_mp4_url / high_mp4_url が None なら、いずれも primary に揃えて返す。
+    # フロント側 (低画質ファースト → 高画質スワップ) が常に両方を見るだけで
+    # 良い状態にしておく。同 URL なら web はスワップを発火しない。
+    low = resolved.low_mp4_url or resolved.mp4_url
+    high = resolved.high_mp4_url or resolved.mp4_url
+    return ResolveMp4Response(
+        content_id=content_id,
+        mp4_url=resolved.mp4_url,
+        low_mp4_url=low,
+        high_mp4_url=high,
+    )

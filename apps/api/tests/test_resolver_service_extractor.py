@@ -193,6 +193,79 @@ async def test_extract_args_with_nested_objects_and_arrays(
 
     result = await extract_mp4_url("h_1416ad00199", "affi-001")
     assert result.mp4_url == "https://cc3001.dmm.co.jp/pv/x/y.mp4"
+    # bitrates から low/high が抽出されている。primary (= args.src) は据え置き。
+    assert result.low_mp4_url == "https://low/y_low.mp4"
+    assert result.high_mp4_url == "https://hi/y_hi.mp4"
+
+
+@pytest.mark.asyncio
+async def test_extract_picks_low_high_from_bitrates_with_suffix_fallback(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """bitrates にビットレートキーが無いケースはサフィックスのランクで low/high を推定する。"""
+    raw_html = (
+        '<script>var args = {'
+        '"src": "https://cc3001.dmm.co.jp/pv/aa/aa_mhb_w.mp4",'
+        '"bitrates": ['
+        '{"src": "//cc3001.dmm.co.jp/pv/aa/aa_dmb_w.mp4"},'
+        '{"src": "//cc3001.dmm.co.jp/pv/aa/aa_dm_w.mp4"},'
+        '{"src": "//cc3001.dmm.co.jp/pv/aa/aa_mhb_w.mp4"}'
+        ']};</script>'
+    )
+    handler = _two_stage_handler(
+        litevideo_body=_litevideo_html(),
+        player_body=raw_html,
+    )
+    _install_transport(monkeypatch, handler)
+
+    result = await extract_mp4_url("bitrate_no_key", "affi-001")
+    assert result.low_mp4_url == "https://cc3001.dmm.co.jp/pv/aa/aa_dmb_w.mp4"
+    assert result.high_mp4_url == "https://cc3001.dmm.co.jp/pv/aa/aa_mhb_w.mp4"
+    # primary は args.src を優先 (既存挙動互換)
+    assert result.mp4_url == "https://cc3001.dmm.co.jp/pv/aa/aa_mhb_w.mp4"
+
+
+@pytest.mark.asyncio
+async def test_extract_single_bitrate_keeps_low_equal_high(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """候補が 1 つしか無いときは low/high が同じ URL になる (スワップは web 側でスキップされる)。"""
+    raw_html = (
+        '<script>var args = {"src": "https://cc3001.dmm.co.jp/pv/x/single.mp4"};</script>'
+    )
+    handler = _two_stage_handler(
+        litevideo_body=_litevideo_html(),
+        player_body=raw_html,
+    )
+    _install_transport(monkeypatch, handler)
+
+    result = await extract_mp4_url("single_cid", "affi-001")
+    assert result.mp4_url == "https://cc3001.dmm.co.jp/pv/x/single.mp4"
+    assert result.low_mp4_url == result.high_mp4_url == result.mp4_url
+
+
+@pytest.mark.asyncio
+async def test_extract_direct_fallback_returns_low_and_high(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`args` 無しの直リンクフォールバックでも、サフィックスから low/high を選び分ける。"""
+    raw_html = (
+        '<html><body>'
+        '<source src="//cc3001.dmm.co.jp/pv/zz/q_dmb_w.mp4">'
+        '<source src="//cc3001.dmm.co.jp/pv/zz/q_mhb_w.mp4">'
+        '</body></html>'
+    )
+    handler = _two_stage_handler(
+        litevideo_body=_litevideo_html(),
+        player_body=raw_html,
+    )
+    _install_transport(monkeypatch, handler)
+
+    result = await extract_mp4_url("direct_fb_cid", "affi-001")
+    assert result.low_mp4_url == "https://cc3001.dmm.co.jp/pv/zz/q_dmb_w.mp4"
+    assert result.high_mp4_url == "https://cc3001.dmm.co.jp/pv/zz/q_mhb_w.mp4"
+    # primary は _mhb_w.mp4 優先 (既存挙動)
+    assert result.mp4_url == "https://cc3001.dmm.co.jp/pv/zz/q_mhb_w.mp4"
 
 
 @pytest.mark.asyncio

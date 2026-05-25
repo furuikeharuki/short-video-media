@@ -17,7 +17,20 @@ const API_BASE_URL =
 
 export type ResolveMp4Response = {
   content_id: string | null;
+  /**
+   * 既存実装との互換のため、最良の MP4 URL (高画質寄り) を常に返す。
+   * 低画質ファースト戦略が無効な経路 (旧 web ビルド・jobs 等) はこれをそのまま使う。
+   */
   mp4_url: string;
+  /**
+   * 低画質ファースト戦略用の候補。
+   * - low_mp4_url: 軽量・即時再生用候補。フィードはまずこの URL で <video> を再生開始する。
+   * - high_mp4_url: 高画質候補。裏でロードし、`canplay` 到達でメイン <video> に差し替える。
+   * 低/高が同じ URL のとき (single-bitrate) はスワップを発火しない。
+   * 旧 API ビルドからのレスポンスでは undefined になり得るため optional。
+   */
+  low_mp4_url?: string | null;
+  high_mp4_url?: string | null;
 };
 
 /**

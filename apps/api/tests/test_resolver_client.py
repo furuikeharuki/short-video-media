@@ -210,6 +210,58 @@ async def test_bypass_cache_forces_new_extract(
 
 
 @pytest.mark.asyncio
+async def test_resolve_mp4_returns_low_high_candidates(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`resolve_mp4` は extractor から low/high 両候補を引き継いで返す。"""
+    _set_affiliate(monkeypatch)
+
+    async def fake_extract(*, content_id, **_kw):
+        return ResolveResult(
+            content_id=content_id,
+            mp4_url="https://cdn.example/primary.mp4",
+            low_mp4_url="https://cdn.example/low.mp4",
+            high_mp4_url="https://cdn.example/high.mp4",
+        )
+
+    _patch_extract(monkeypatch, fake_extract)
+
+    resolved = await resolver_client.resolve_mp4("cand001")
+    assert resolved.mp4_url == "https://cdn.example/primary.mp4"
+    assert resolved.low_mp4_url == "https://cdn.example/low.mp4"
+    assert resolved.high_mp4_url == "https://cdn.example/high.mp4"
+
+
+@pytest.mark.asyncio
+async def test_resolve_mp4_caches_full_candidate_set(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """成功時の short-term cache は low/high まで含めて保存し、再呼出しで使い回す。"""
+    _set_affiliate(monkeypatch)
+    call_count = 0
+
+    async def fake_extract(*, content_id, **_kw):
+        nonlocal call_count
+        call_count += 1
+        return ResolveResult(
+            content_id=content_id,
+            mp4_url=f"https://cdn.example/primary-v{call_count}.mp4",
+            low_mp4_url="https://cdn.example/low.mp4",
+            high_mp4_url="https://cdn.example/high.mp4",
+        )
+
+    _patch_extract(monkeypatch, fake_extract)
+    resolver_client._reset_state_for_tests()
+
+    first = await resolver_client.resolve_mp4("cache_cand001")
+    second = await resolver_client.resolve_mp4("cache_cand001")
+    assert call_count == 1
+    assert first == second
+    assert second.low_mp4_url == "https://cdn.example/low.mp4"
+    assert second.high_mp4_url == "https://cdn.example/high.mp4"
+
+
+@pytest.mark.asyncio
 async def test_failure_propagates_to_inflight_waiters(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

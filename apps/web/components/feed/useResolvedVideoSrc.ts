@@ -28,11 +28,20 @@ import { createVideoTimer } from "@/lib/videoTiming";
  *   - handleError: <video> の onError から呼ぶリトライハンドラ
  */
 
+type ResolvedUrls = {
+  /** 既存呼び出し元向けの「最良の URL」(後方互換)。 */
+  src: string;
+  /** 低画質ファースト戦略用の即時再生 URL。src と同一になることもある。 */
+  lowSrc: string;
+  /** 高画質スワップ先 URL。src / lowSrc と同一になることもある。 */
+  highSrc: string;
+};
+
 type State =
-  | { phase: "resolving"; src: null }
-  | { phase: "ready"; src: string }
-  | { phase: "retrying"; src: string | null }
-  | { phase: "exhausted"; src: null };
+  | { phase: "resolving"; urls: null }
+  | { phase: "ready"; urls: ResolvedUrls }
+  | { phase: "retrying"; urls: ResolvedUrls | null }
+  | { phase: "exhausted"; urls: null };
 
 interface Args {
   slug: string;
@@ -42,6 +51,14 @@ interface Args {
 
 interface Result {
   videoSrc: string | null;
+  /**
+   * 低画質ファースト用の URL (有れば)。サーバーが low_mp4_url を返さなかった
+   * (= 旧 API / 抽出失敗) ケースでは null。null のとき web は videoSrc (高画質)
+   * を直接使う。
+   */
+  lowSrc: string | null;
+  /** 高画質候補。low と同一の場合はスワップ不要。 */
+  highSrc: string | null;
   exhausted: boolean;
   /**
    * resolver への問い合わせ中 / force リトライ中で videoSrc がまだない状態。
@@ -57,8 +74,17 @@ const MAX_FORCE_RETRIES = 3;
 // force リトライ間の待ち時間 (指数バックオフ)。500ms → 1000ms → 2000ms。
 const FORCE_RETRY_BACKOFF_MS = [500, 1000, 2000];
 
+function toResolvedUrls(
+  res: { mp4_url: string; low_mp4_url?: string | null; high_mp4_url?: string | null },
+): ResolvedUrls {
+  // 旧 API ビルドからのレスポンス互換: low/high が無ければ mp4_url で埋める。
+  const low = res.low_mp4_url ?? res.mp4_url;
+  const high = res.high_mp4_url ?? res.mp4_url;
+  return { src: res.mp4_url, lowSrc: low, highSrc: high };
+}
+
 export function useResolvedVideoSrc({ slug, enabled }: Args): Result {
-  const [state, setState] = useState<State>({ phase: "resolving", src: null });
+  const [state, setState] = useState<State>({ phase: "resolving", urls: null });
 
   // 1 つのカードにつき force リトライをこれまで何回試したか。
   // 上限 (MAX_FORCE_RETRIES) を超えたら exhausted に落とす。
@@ -85,7 +111,7 @@ export function useResolvedVideoSrc({ slug, enabled }: Args): Result {
       inFlightRef.current = null;
     }
     clearBackoff();
-    setState({ phase: "resolving", src: null });
+    setState({ phase: "resolving", urls: null });
   }, [slug, clearBackoff]);
 
   // enabled のときだけ初回 resolve を発火。
@@ -111,12 +137,15 @@ export function useResolvedVideoSrc({ slug, enabled }: Args): Result {
         }
         if (res?.mp4_url) {
           timer.mark("resolve:ok");
+          const urls = toResolvedUrls(res);
           // 解決した CDN origin (cc3001 系) に dyn preconnect。TCP/TLS を前倒し。
-          ensurePreconnect(res.mp4_url);
-          setState({ phase: "ready", src: res.mp4_url });
+          // 低画質→高画質スワップで CDN ホストが異なるケースもあるため両方 preconnect。
+          ensurePreconnect(urls.lowSrc);
+          if (urls.highSrc !== urls.lowSrc) ensurePreconnect(urls.highSrc);
+          setState({ phase: "ready", urls });
         } else {
           timer.mark("resolve:exhausted");
-          setState({ phase: "exhausted", src: null });
+          setState({ phase: "exhausted", urls: null });
         }
       })
       .finally(() => {
@@ -144,14 +173,16 @@ export function useResolvedVideoSrc({ slug, enabled }: Args): Result {
     // リトライ中も現在の src を保持したまま phase だけ retrying に遷移させる。
     // これにより FeedItem の showVideo 判定 (videoSrc !== null) が保たれ、<video> 要素が
     // アンマウントされず thumbnail-bg (サムネ) にスイッチされるのを防ぐ。
-    setState((prev) => ({ phase: "retrying", src: prev.src }));
+    setState((prev) => ({ phase: "retrying", urls: prev.urls }));
 
     void resolveMp4Url(slug, { force: true, signal: controller.signal })
       .then((res) => {
         if (controller.signal.aborted) return;
         if (res?.mp4_url) {
-          ensurePreconnect(res.mp4_url);
-          setState({ phase: "ready", src: res.mp4_url });
+          const urls = toResolvedUrls(res);
+          ensurePreconnect(urls.lowSrc);
+          if (urls.highSrc !== urls.lowSrc) ensurePreconnect(urls.highSrc);
+          setState({ phase: "ready", urls });
           return;
         }
         // null 応答だった: 次のリトライを試すかどうか
@@ -168,7 +199,7 @@ export function useResolvedVideoSrc({ slug, enabled }: Args): Result {
             runForceResolve();
           }, wait);
         } else {
-          setState({ phase: "exhausted", src: null });
+          setState({ phase: "exhausted", urls: null });
         }
       })
       .catch(() => {
@@ -187,7 +218,7 @@ export function useResolvedVideoSrc({ slug, enabled }: Args): Result {
             runForceResolve();
           }, wait);
         } else {
-          setState({ phase: "exhausted", src: null });
+          setState({ phase: "exhausted", urls: null });
         }
       })
       .finally(() => {
@@ -202,7 +233,7 @@ export function useResolvedVideoSrc({ slug, enabled }: Args): Result {
   // それでもダメならサムネに落とす。
   const handleError = useCallback(() => {
     if (forceRetryCountRef.current >= MAX_FORCE_RETRIES) {
-      setState({ phase: "exhausted", src: null });
+      setState({ phase: "exhausted", urls: null });
       return;
     }
     forceRetryCountRef.current += 1;
@@ -236,8 +267,11 @@ export function useResolvedVideoSrc({ slug, enabled }: Args): Result {
     };
   }, []);
 
+  const urls = state.urls;
   return {
-    videoSrc: state.src,
+    videoSrc: urls?.src ?? null,
+    lowSrc: urls?.lowSrc ?? null,
+    highSrc: urls?.highSrc ?? null,
     exhausted: state.phase === "exhausted",
     resolving: state.phase === "resolving" || state.phase === "retrying",
     handleError,

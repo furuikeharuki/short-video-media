@@ -46,6 +46,23 @@ export interface VideoTimer {
   reset(): void;
 }
 
+/**
+ * vt ログ用に <video> 要素の役割を文字列で返す。
+ * `useLowFirstVideoSrc` が ref callback で `dataset.vtRole = "low" | "high"` を
+ * 各 <video> に書き込んでおり、ここでそれを読み取って整形する。
+ * 要素が null / 未設定の場合は "unknown" を返す。
+ */
+export function vtElementRole(el: HTMLVideoElement | null | undefined): string {
+  if (!el) return "unknown";
+  try {
+    const role = el.dataset?.vtRole;
+    if (role === "low" || role === "high") return role;
+  } catch {
+    /* ignore */
+  }
+  return "unknown";
+}
+
 export function createVideoTimer(label: string): VideoTimer {
   if (!isVideoTimingEnabled()) {
     return { mark: () => {}, reset: () => {} };

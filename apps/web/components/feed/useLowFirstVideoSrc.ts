@@ -405,6 +405,39 @@ export function useLowFirstVideoSrc({
         `vt ${slug}: swap done active=high paused=${high.paused} rs=${high.readyState} lowPaused=${low.paused}`,
       );
     }
+
+    // swap が成立した後の low <video> クリーンアップ。
+    //   - これより前に切ると、もし swap がアボートした場合に「low が再生不能なまま black 画面」
+    //     になる。必ず swappedRef = true / videoRef = high の確定 *後* に行う。
+    //   - low はもう pause() 済み。さらに muted にして「裏で再生再開しても無音」を保証する。
+    //   - src 属性を外して load() を呼び、低画質側の network/decoder/buffering を完全停止する。
+    //     これで `waiting` / `stalled` / `loadeddata` 等のイベントが low から飛んでこなくなり、
+    //     ローディングスピナーやサムネが low 由来で再表示されることを防ぐ。
+    //   - また「プロ女優 enforce currentTime=0 -> 5」が swap 後の low から再発する経路も塞ぐ
+    //     (currentTime=0 は HAVE_NOTHING の <video> でも timeupdate 経由で参照される)。
+    try {
+      low.pause();
+    } catch { /* ignore */ }
+    try {
+      low.muted = true;
+    } catch { /* ignore */ }
+    try {
+      // currentTime をリセットしておくと、後段のリスナが「currentTime=0 -> 5」を
+      // 検出して enforce を再発火することを防ぎつつ、要素自体は破棄せず残せる。
+      // ただし readyState が低い間は代入が黙って失敗することがあるため try/catch で十分。
+      low.removeAttribute("src");
+      // load() は src 除去後の状態を network/decoder に反映させる。
+      // (このタイミングで emptied/loadstart は起きるが、low の vt ログのみで
+      //  視覚効果はない — 既に opacity:0)
+      low.load();
+    } catch { /* ignore */ }
+
+    if (isVideoTimingEnabled()) {
+      // eslint-disable-next-line no-console
+      console.debug(
+        `vt ${slug}: low cleanup after high swap (lowPaused=${low.paused} lowMuted=${low.muted} lowHasSrc=${low.hasAttribute("src")})`,
+      );
+    }
   }, [enabled, highSrc, lowSrc, slug, videoRef, minStartTime, onVideoElementChange]);
 
   // low 側が遅れて ready になったケース用の retry。
@@ -450,6 +483,12 @@ export function useLowFirstVideoSrc({
       // duration を取得済みでないと比較できない
       if (!Number.isFinite(high.duration) || high.duration <= minStartTime + 0.05) return;
       if (high.currentTime + 0.05 < minStartTime) {
+        if (isVideoTimingEnabled()) {
+          // eslint-disable-next-line no-console
+          console.debug(
+            `vt ${slug}: pro-actress enforce element=high currentTime=${high.currentTime.toFixed(2)} -> ${minStartTime} paused=${high.paused} rs=${high.readyState} showHigh=false`,
+          );
+        }
         try {
           high.currentTime = minStartTime;
         } catch {
@@ -545,6 +584,10 @@ export function useLowFirstVideoSrc({
     (el: HTMLVideoElement | null) => {
       const prev = lowVideoRef.current;
       lowVideoRef.current = el;
+      if (el) {
+        // vt ログから「どっちの要素か」を識別できるよう dataset でタグ付け。
+        try { el.dataset.vtRole = "low"; } catch { /* ignore */ }
+      }
       if (!swappedRef.current) {
         videoRef.current = el;
         // null → 要素 への遷移 (= low <video> が今マウントされた) で
@@ -565,6 +608,9 @@ export function useLowFirstVideoSrc({
   const highVideoCallbackRef = useCallback(
     (el: HTMLVideoElement | null) => {
       highVideoRef.current = el;
+      if (el) {
+        try { el.dataset.vtRole = "high"; } catch { /* ignore */ }
+      }
       if (swappedRef.current && el) {
         videoRef.current = el;
       }

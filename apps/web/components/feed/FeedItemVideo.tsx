@@ -2,15 +2,25 @@
 
 import type { RefObject } from "react";
 
+interface HighProbeHandlers {
+  onCanPlay: () => void;
+  onPlaying: () => void;
+  onLoadedMetadata: () => void;
+  onError: () => void;
+}
+
 interface HighProbeProps {
   /**
-   * 高画質プローブ <video> の src。null のときはプローブをマウントしない。
-   * メイン <video> がまだ低画質を再生しているうちに、この hidden <video> が
-   * canplay に到達したらメイン側 src を高画質に差し替える。
+   * 高画質 <video> の src。null のときはマウントしない (= スワップ不要 or 抑制)。
+   * 中央スライドで low 再生中に裏で muted 再生される hidden <video>。
+   * `playing` 到達 + currentTime 同期完了で useLowFirstVideoSrc が opacity を入れ替える。
    */
   src: string | null;
-  onCanPlay: () => void;
-  onError: () => void;
+  /** true のときに高画質 <video> を可視 (opacity:1) にし、low の opacity を 0 にする。 */
+  show: boolean;
+  /** 高画質 <video> 要素を受け取る React ref callback。 */
+  callbackRef: (el: HTMLVideoElement | null) => void;
+  handlers: HighProbeHandlers;
 }
 
 interface Props {
@@ -21,10 +31,14 @@ interface Props {
   spinnerRef: RefObject<HTMLDivElement>;
   fastBadgeRef: RefObject<HTMLDivElement>;
   overlayRef: RefObject<HTMLDivElement>;
-  videoRef: RefObject<HTMLVideoElement>;
+  /**
+   * メイン (low) <video> 要素を受け取る React ref callback。useLowFirstVideoSrc が
+   * 内部的に保持しつつ、親 useFeedPlayback の videoRef.current にも同期する。
+   */
+  lowVideoCallbackRef: (el: HTMLVideoElement | null) => void;
   thumbnailUrl: string;
   thumbnailAlt: string;
-  /** 低画質ファースト戦略用の hidden probe <video> 設定。null でプローブ無効。 */
+  /** 低画質ファースト戦略用の hidden high <video> 設定。 */
   highProbe?: HighProbeProps;
   onLoadStart: () => void;
   onLoadedMetadata: () => void;
@@ -55,7 +69,7 @@ export default function FeedItemVideo({
   spinnerRef,
   fastBadgeRef,
   overlayRef,
-  videoRef,
+  lowVideoCallbackRef,
   thumbnailUrl,
   thumbnailAlt,
   highProbe,
@@ -112,7 +126,7 @@ export default function FeedItemVideo({
       </div>
 
       <video
-        ref={videoRef}
+        ref={lowVideoCallbackRef}
         src={src}
         // 注: poster は意図的に指定しない。
         // <video poster> は loadeddata に到達した後もブラウザ実装によっては表示が残り、
@@ -140,40 +154,52 @@ export default function FeedItemVideo({
         // opacity の transition は付けない。loadeddata / seeked でフレームが出た瞬間に
         // setVideoReady(true) で opacity:1 に切り替えるため、フェードで遅らせると
         // 黒画面の時間が長く見えてしまう。
+        // 高画質スワップ完了時の low → opacity:0 は useLowFirstVideoSrc が
+        // imperative に lowEl.style.opacity = "0" で書き換える (React style にすると
+        // useFeedPlayback の opacity:1 直接代入と競合するため、初期値のみ React で指定)。
         style={{ opacity: 0 }}
       />
 
       {/*
-        低画質ファースト戦略用の hidden プローブ <video>。
-        - 中央スライドでメインが低画質を再生中、裏でこの <video> が高画質をプリロードする。
-        - canplay 到達でメイン <video> の src を高画質に差し替える (useLowFirstVideoSrc 側で実施)。
+        高画質 <video> (dual-video 版)。
+        - 中央スライドで low が再生中、裏で full-size の hidden <video> として muted で
+          同時再生する。
+        - `playing` イベント到達 + currentTime 同期完了で useLowFirstVideoSrc が
+          opacity を 0 → 1 に切り替え、同時に low を pause + opacity:0 にする (crossfade)。
+        - これにより `<video src>` の差し替えに伴う `emptied → loadstart → loadedmetadata
+          → seek → playing` の停止フェーズが発生せず、ユーザーから見て「停止しないで画質が向上する」遷移になる。
         - lowSrc === highSrc / 旧 API / 隣接スライド / 高速スワイプ中 は src=null でアンマウント。
-        - display:none ではなく visibility:hidden + 1px サイズで配置: 一部ブラウザは display:none の
-          <video> をネットワーク経由で全くロードしないため、確実に preload を発火させたい。
-        - muted / playsInline / preload="auto" で iOS でもサウンドポリシーに引っかからずロードを進める。
+        - autoPlay は付けない。useLowFirstVideoSrc 側で canplay/loadedmetadata 後に
+          play() を呼ぶ。iOS の autoplay 制約は muted + playsInline で満たしている。
       */}
       {highProbe?.src ? (
         <video
           key={highProbe.src}
+          ref={highProbe.callbackRef}
           src={highProbe.src}
           muted
+          loop
           playsInline
           preload="auto"
-          // 再生はしない (autoPlay 無し)。canplay の発火だけが目的。
-          onCanPlay={highProbe.onCanPlay}
-          onError={highProbe.onError}
-          aria-hidden="true"
-          tabIndex={-1}
+          onCanPlay={highProbe.handlers.onCanPlay}
+          onPlaying={highProbe.handlers.onPlaying}
+          onLoadedMetadata={highProbe.handlers.onLoadedMetadata}
+          onError={highProbe.handlers.onError}
+          onContextMenu={(e) => e.preventDefault()}
+          controlsList="nodownload noremoteplayback nofullscreen noplaybackrate"
+          disablePictureInPicture
+          disableRemotePlayback
+          x-webkit-airplay="deny"
+          className="feed-video feed-video--high"
+          aria-hidden={!highProbe.show}
           style={{
-            position: "absolute",
-            width: 1,
-            height: 1,
-            opacity: 0,
+            // crossfade 完了までは完全に hidden (opacity:0)。layout は low と同じ
+            // .feed-video スタイル + 同じ親の絶対配置になる前提なので、サイズ・位置は揃う。
+            opacity: highProbe.show ? 1 : 0,
+            // ポインタイベントは常に low (= 操作対象) に通す。show=true でも
+            // useFeedPlayback はコンテナ上の onClick / onTouchStart で受けるため
+            // high <video> 自体はクリックを奪わない。
             pointerEvents: "none",
-            // visibility:hidden ではなく opacity:0 を使う: visibility:hidden だと
-            // ブラウザによっては <video> 自体を扱わず、ロードを中断するケースがある。
-            left: -9999,
-            top: -9999,
           }}
         />
       ) : null}

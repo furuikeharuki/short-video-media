@@ -72,7 +72,11 @@ export function useFeedPlayback({ slug, title, isActive, videoSrc, onOpenModal, 
   // 初回マウント時に一回だけショートボタンフラグを消費
   consumeStartUnmutedFlag();
 
-  const videoRef     = useRef<HTMLVideoElement>(null);
+  // dual-video 戦略 (useLowFirstVideoSrc) で、low → high の crossfade と同時に
+  // 親の videoRef.current を high <video> 要素に付け替えるため、null 許容の
+  // mutable ref として宣言する。`useRef<T>(null)` だと RefObject<T> (read-only `.current`)
+  // になるが、`useRef<T | null>(null)` で MutableRefObject<T | null> になる。
+  const videoRef     = useRef<HTMLVideoElement | null>(null);
   const sectionRef   = useRef<HTMLElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const shimmerRef   = useRef<HTMLDivElement>(null);
@@ -104,6 +108,15 @@ export function useFeedPlayback({ slug, title, isActive, videoSrc, onOpenModal, 
   const pcClickTimerRef          = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const [isMuted,      setIsMuted]      = useState(globalIsMuted);
+  // dual-video スワップで `videoRef.current` が low → high に付け替わったときに、
+  // プロ女優スキップ用のイベントリスナを新しい要素に張り直すためのバージョン番号。
+  // useLowFirstVideoSrc が `notifyVideoElementChange` を呼ぶたびにインクリメントされる。
+  // この値を プロ女優スキップ effect の deps に含めることで、当該 effect が再実行されて
+  // クリーンアップで旧要素から外し、再度新要素 (= videoRef.current) にリスナを張れる。
+  const [videoElementVersion, setVideoElementVersion] = useState(0);
+  const notifyVideoElementChange = useCallback(() => {
+    setVideoElementVersion((v) => v + 1);
+  }, []);
 
   // プロ女優スキップを適用すべきかどうかを ref に保持。<video> ごとの動的判定で、
   // メタデータロード後に duration を見て確定する (短すぎる動画は無効化)。
@@ -537,7 +550,7 @@ export function useFeedPlayback({ slug, title, isActive, videoSrc, onOpenModal, 
       video.removeEventListener("seeked", handleSeeked);
       video.removeEventListener("ended", handleEnded);
     };
-  }, [slug, videoSrc, isProActress, playVideo]);
+  }, [slug, videoSrc, isProActress, playVideo, videoElementVersion]);
 
   // 再生中の読み込み停滾 (waiting/stalled) と、出荷再開 (playing/canplaythrough) を検知して
   // スピナーの表示・非表示を切り替える。isActive 中のときだけビデオ要素が
@@ -576,7 +589,7 @@ export function useFeedPlayback({ slug, title, isActive, videoSrc, onOpenModal, 
       video.removeEventListener("canplaythrough", handleCanPlayThrough);
       video.removeEventListener("stalled", handleStalled);
     };
-  }, [isActive, setSpinnerVisible]);
+  }, [isActive, setSpinnerVisible, videoElementVersion]);
 
   // フォールバック: 念のため IntersectionObserver でも監視する。
   // (端末向きを変えたときや SSR ハイドレート直後など、isActive prop の同期前に発火するケースに備える)
@@ -809,5 +822,11 @@ export function useFeedPlayback({ slug, title, isActive, videoSrc, onOpenModal, 
     handleMouseUp,
     handleMouseLeave,
     handlePcClick,
+    /**
+     * dual-video スワップで `videoRef.current` の指す DOM 要素が変わった直後に
+     * 呼び出すコールバック。プロ女優スキップ / 再生スピナー effect の deps を
+     * 進めて再実行させ、新しい要素にイベントリスナを張り直す。
+     */
+    notifyVideoElementChange,
   };
 }

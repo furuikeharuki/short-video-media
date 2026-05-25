@@ -519,10 +519,17 @@ export function useFeedPlayback({ slug, title, isActive, videoSrc, onOpenModal, 
       if (lower <= 0) return;
       // タイマー精度の都合で 4.9 のような値も来るので、わずかにマージンを取って判定する
       if (video.currentTime + 0.05 < lower) {
-        if (isVideoTimingEnabled()) {
+        // 隣接スライド (isActive=false) かつ paused かつ readyState<=1 のケースは
+        // 「adjacent プレビュー用に 5 秒へ seek」「アンマウント / 再初期化途中」など
+        // 仕様どおりの seek でログが多くなり過ぎるためログだけ抑制する。
+        // 実際の seek (lower-bound enforce) は active/inactive 問わず必要なのでそのまま実行する。
+        // 一方、active 中の enforce はリトライ取りこぼし等の重要な signal なので必ずログ。
+        const isQuietInactive =
+          !isActiveRef.current && video.paused && video.readyState <= 1;
+        if (isVideoTimingEnabled() && !isQuietInactive) {
           // eslint-disable-next-line no-console
           console.debug(
-            `vt ${slug}: pro-actress enforce currentTime=${video.currentTime.toFixed(2)} -> ${lower} paused=${video.paused} rs=${video.readyState}`,
+            `vt ${slug}: pro-actress enforce currentTime=${video.currentTime.toFixed(2)} -> ${lower} paused=${video.paused} rs=${video.readyState} active=${isActiveRef.current}`,
           );
         }
         try { video.currentTime = lower; } catch { /* ignore */ }

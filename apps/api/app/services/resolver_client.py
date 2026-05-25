@@ -19,6 +19,7 @@ import asyncio
 import logging
 import os
 import time
+from dataclasses import dataclass
 from typing import Final
 
 import httpx
@@ -29,6 +30,20 @@ from app.resolver.extractor import (
     ResolveUpstream,
     extract_mp4_url,
 )
+
+
+@dataclass(frozen=True)
+class ResolvedMp4:
+    """resolver_client が返す MP4 URL のセット。
+
+    `mp4_url` は呼び出し側の互換性 (既存の高画質寄りの 1 本) を保つフィールド。
+    `low_mp4_url` / `high_mp4_url` は低画質ファースト戦略用の 2 候補で、
+    どちらも `mp4_url` と同じ URL になることがある (single-bitrate)。
+    """
+
+    mp4_url: str
+    low_mp4_url: str | None = None
+    high_mp4_url: str | None = None
 
 
 logger = logging.getLogger(__name__)
@@ -72,24 +87,25 @@ class ResolverUnavailable(ResolverError):
 # 300s → 3600s に拡大して DMM への実アクセスをさらに削減する。
 _SUCCESS_CACHE_TTL_S: Final[float] = 3600.0
 
-_inflight: dict[str, asyncio.Future[str]] = {}
+_inflight: dict[str, asyncio.Future[ResolvedMp4]] = {}
 _inflight_lock = asyncio.Lock()
-_success_cache: dict[str, tuple[str, float]] = {}
+# キャッシュは低/高/primary の 3 URL をまとめてストアする。期限切れで丸ごと無効。
+_success_cache: dict[str, tuple[ResolvedMp4, float]] = {}
 
 
-def _get_cached(content_id: str) -> str | None:
+def _get_cached(content_id: str) -> ResolvedMp4 | None:
     entry = _success_cache.get(content_id)
     if entry is None:
         return None
-    mp4_url, expires_at = entry
+    resolved, expires_at = entry
     if time.monotonic() >= expires_at:
         _success_cache.pop(content_id, None)
         return None
-    return mp4_url
+    return resolved
 
 
-def _put_cached(content_id: str, mp4_url: str) -> None:
-    _success_cache[content_id] = (mp4_url, time.monotonic() + _SUCCESS_CACHE_TTL_S)
+def _put_cached(content_id: str, resolved: ResolvedMp4) -> None:
+    _success_cache[content_id] = (resolved, time.monotonic() + _SUCCESS_CACHE_TTL_S)
 
 
 # ─────────────────────────────────────────────
@@ -199,8 +215,12 @@ async def _get_shared_client() -> httpx.AsyncClient:
 # ─────────────────────────────────────────────
 # 公開 API
 # ─────────────────────────────────────────────
-async def resolve_mp4_url(content_id: str, *, bypass_cache: bool = False) -> str:
-    """DMM サンプル動画 MP4 URL を解決する。
+async def resolve_mp4(content_id: str, *, bypass_cache: bool = False) -> ResolvedMp4:
+    """DMM サンプル動画 MP4 URL を解決し、low/high 候補を含む結果を返す。
+
+    `resolve_mp4_url` の後継。既存呼び出し元は `.mp4_url` プロパティ経由で
+    既存挙動と互換のまま使える。低画質ファースト戦略を取りたい呼び出し元
+    (web フロント / endpoint) は `.low_mp4_url` / `.high_mp4_url` を併用する。
 
     Args:
         content_id: DMM コンテンツ ID。
@@ -208,7 +228,8 @@ async def resolve_mp4_url(content_id: str, *, bypass_cache: bool = False) -> str
             in-flight デデュープは bypass_cache=True でも有効。
 
     Returns:
-        cc3001.dmm.co.jp/pv/... 形式の MP4 URL。
+        ResolvedMp4(mp4_url, low_mp4_url, high_mp4_url)。
+        low/high が同じ URL になることもある (single-bitrate / 直リンクフォールバック)。
 
     Raises:
         ResolverConfigError: DMM_AFFILIATE_ID 未設定。
@@ -225,7 +246,7 @@ async def resolve_mp4_url(content_id: str, *, bypass_cache: bool = False) -> str
     async with _inflight_lock:
         existing = _inflight.get(content_id)
         if existing is not None:
-            future: asyncio.Future[str] = existing
+            future: asyncio.Future[ResolvedMp4] = existing
             owner = False
         else:
             loop = asyncio.get_running_loop()
@@ -237,7 +258,7 @@ async def resolve_mp4_url(content_id: str, *, bypass_cache: bool = False) -> str
         return await future
 
     try:
-        mp4_url = await _do_resolve(content_id)
+        resolved = await _do_resolve(content_id)
     except BaseException as e:
         async with _inflight_lock:
             _inflight.pop(content_id, None)
@@ -246,15 +267,24 @@ async def resolve_mp4_url(content_id: str, *, bypass_cache: bool = False) -> str
         future.exception()
         raise
     else:
-        _put_cached(content_id, mp4_url)
+        _put_cached(content_id, resolved)
         async with _inflight_lock:
             _inflight.pop(content_id, None)
         if not future.done():
-            future.set_result(mp4_url)
-        return mp4_url
+            future.set_result(resolved)
+        return resolved
 
 
-async def _do_resolve(content_id: str) -> str:
+async def resolve_mp4_url(content_id: str, *, bypass_cache: bool = False) -> str:
+    """既存呼び出し元向けの互換ラッパ。`resolve_mp4(...).mp4_url` を返す。
+
+    新規呼び出し元は `resolve_mp4` を使うこと (low/high を取り出すため)。
+    """
+    resolved = await resolve_mp4(content_id, bypass_cache=bypass_cache)
+    return resolved.mp4_url
+
+
+async def _do_resolve(content_id: str) -> ResolvedMp4:
     affiliate_id = _get_affiliate_id()
     if not affiliate_id:
         raise ResolverConfigError("DMM_AFFILIATE_ID is not configured")
@@ -278,7 +308,11 @@ async def _do_resolve(content_id: str) -> str:
         logger.warning("resolver upstream: content_id=%s err=%s", content_id, e)
         raise ResolverUpstreamError(str(e)) from e
 
-    return result.mp4_url
+    return ResolvedMp4(
+        mp4_url=result.mp4_url,
+        low_mp4_url=result.low_mp4_url,
+        high_mp4_url=result.high_mp4_url,
+    )
 
 
 def _reset_state_for_tests() -> None:

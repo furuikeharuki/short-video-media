@@ -6,6 +6,7 @@ import { useBookmarks } from "@/components/auth/BookmarksProvider";
 import { signIn } from "next-auth/react";
 import { useFeedPlayback } from "./feed/useFeedPlayback";
 import { useResolvedVideoSrc } from "./feed/useResolvedVideoSrc";
+import { useLowFirstVideoSrc } from "./feed/useLowFirstVideoSrc";
 import { createVideoTimer, isVideoTimingEnabled } from "@/lib/videoTiming";
 import FeedItemVideo from "./feed/FeedItemVideo";
 import FeedItemMeta from "./feed/FeedItemMeta";
@@ -65,10 +66,13 @@ export default function FeedItem({ item, isActive, isAdjacent = false, isFirst, 
   // - <video> がエラーを返したら 1 回だけ force=true で再 resolve する
   // 隣接スライド (isAdjacent) でも URL 解決を走らせて、スワイプ到達時に
   // すでに <video> が読み込み済みになっているようにする。
-  const { videoSrc, exhausted, handleError } = useResolvedVideoSrc({
+  const { videoSrc, lowSrc, highSrc, exhausted, handleError } = useResolvedVideoSrc({
     slug: item.slug,
     enabled: isActive || isAdjacent,
   });
+
+  // 低画質ファースト戦略 (useLowFirstVideoSrc) は useFeedPlayback の戻り値 videoRef を
+  // 使うので、ここでは何もしない (useFeedPlayback 呼び出し直後に hook を起動する)。
 
   // <video> が loadeddata / seeked / canplay に到達したかどうかの React state。
   // これが false の間 = まだ黒画面の可能性があるので、thumbnail-bg-overlay (サムネ画像) を
@@ -125,11 +129,27 @@ export default function FeedItem({ item, isActive, isAdjacent = false, isFirst, 
     slug: item.slug,
     title: item.title,
     isActive,
-    // resolver で URL を遅延取得したときでも、<video> マウント直後に自動再生を起動させる
-    videoSrc,
+    // resolver で URL を遅延取得したときでも、<video> マウント直後に自動再生を起動させる。
+    // 低画質ファースト戦略下では「最初に再生する URL」= lowSrc ?? videoSrc を渡すことで、
+    // 低画質再生がマウントされた瞬間に autoplay が起動するようにする。high への
+    // src 差し替えは useLowFirstVideoSrc 側で v.play() を直接呼ぶため、useFeedPlayback の
+    // videoSrc deps 再実行に頼る必要はない。
+    videoSrc: lowSrc ?? videoSrc,
     onOpenModal: handleOpenModal,
     // プロ女優 (videoa) 作品は先頭 5 秒スキップ + 戻し不可
     isProActress: item.genres?.includes(PRO_ACTRESS_GENRE) ?? false,
+  });
+
+  // useFeedPlayback で確保された videoRef を渡して low → high スワップを制御する。
+  // currentSrc がメイン <video> の実 src になる: 初期は lowSrc、canplay 後に highSrc。
+  const { currentSrc, highProbe } = useLowFirstVideoSrc({
+    lowSrc: lowSrc ?? videoSrc,
+    highSrc: highSrc ?? videoSrc,
+    videoRef,
+    enabled: isActive,
+    // 高速スワイプ中はプローブを発火しない。中央 <video> の Range / resolve を優先する。
+    allowPrepare: isActive && !isRapidSwiping,
+    slug: item.slug,
   });
 
   // preload 戦略:
@@ -291,7 +311,11 @@ export default function FeedItem({ item, isActive, isAdjacent = false, isFirst, 
   // スワイプで中央に来た瞬間、既存の <video> インスタンスへ play() するだけで
   // 済むので、新規マウント由来の黒画面+スピナーが入らない。
   // モバイル Safari の同時接続上限 (約 4) は 中央 1 + 隣接 2 + currentIndex+2 の隠し先読み 1 = 計 4 で上限ギリギリ。
-  const showVideo = (isActive || isAdjacent) && videoSrc !== null && !exhausted;
+  // showVideo 判定は「再生可能な URL が解決済みかどうか」を見るため、currentSrc を
+  // 使う (低画質ファースト時は lowSrc が来た瞬間 true になる)。currentSrc は
+  // resolve 完了前は null。
+  const showVideo =
+    (isActive || isAdjacent) && currentSrc !== null && !exhausted;
 
   return (
     <>
@@ -299,7 +323,7 @@ export default function FeedItem({ item, isActive, isAdjacent = false, isFirst, 
         {showVideo ? (
           <>
             <FeedItemVideo
-              src={videoSrc}
+              src={currentSrc as string}
               preload={preloadAttr}
               containerRef={containerRef}
               shimmerRef={shimmerRef}
@@ -309,6 +333,7 @@ export default function FeedItem({ item, isActive, isAdjacent = false, isFirst, 
               videoRef={videoRef}
               thumbnailUrl={item.image_url_large ?? item.image_url_list ?? ""}
               thumbnailAlt={item.title}
+              highProbe={highProbe}
               onLoadStart={handleLoadStart}
               onLoadedMetadata={handleLoadedMetadata}
               onLoadedData={handleLoadedData}

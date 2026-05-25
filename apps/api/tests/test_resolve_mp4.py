@@ -74,6 +74,10 @@ def _cleanup_overrides() -> Iterator[None]:
     app.dependency_overrides.pop(get_db, None)
 
 
+LOW_URL = "https://cc3001.dmm.co.jp/pv/FRESHtoken/1sun00052adm_w.mp4"
+HIGH_URL = "https://cc3001.dmm.co.jp/pv/FRESHtoken/1sun00052amhb_w.mp4"
+
+
 def test_resolves_on_demand_and_does_not_touch_db(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -81,20 +85,49 @@ def test_resolves_on_demand_and_does_not_touch_db(
     row = ("1sun00052a",)
     client, session = _make_client(row)
 
-    async def _fake_resolve(content_id: str, *, bypass_cache: bool = False) -> str:
+    async def _fake_resolve(content_id: str, *, bypass_cache: bool = False):
         assert content_id == "1sun00052a"
         assert bypass_cache is False
-        return FRESH_URL
+        return resolver_client.ResolvedMp4(
+            mp4_url=HIGH_URL, low_mp4_url=LOW_URL, high_mp4_url=HIGH_URL
+        )
 
-    monkeypatch.setattr(resolver_client, "resolve_mp4_url", _fake_resolve)
+    monkeypatch.setattr(resolver_client, "resolve_mp4", _fake_resolve)
 
     resp = client.get("/api/v1/movies/some-slug/resolve-mp4")
     assert resp.status_code == 200, resp.text
     body = resp.json()
-    assert body == {"content_id": "1sun00052a", "mp4_url": FRESH_URL}
+    assert body == {
+        "content_id": "1sun00052a",
+        "mp4_url": HIGH_URL,
+        "low_mp4_url": LOW_URL,
+        "high_mp4_url": HIGH_URL,
+    }
     # DB への書き込み (UPDATE / commit) は一切走らない
     assert session.update_calls == []
     assert session.committed is False
+
+
+def test_response_falls_back_low_high_to_mp4_url_when_unavailable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """low/high が None の resolver 応答でも、応答 JSON では mp4_url にフォールバックする。"""
+    row = ("1sun00052a",)
+    client, _ = _make_client(row)
+
+    async def _fake_resolve(content_id: str, *, bypass_cache: bool = False):  # noqa: ARG001
+        return resolver_client.ResolvedMp4(
+            mp4_url=FRESH_URL, low_mp4_url=None, high_mp4_url=None
+        )
+
+    monkeypatch.setattr(resolver_client, "resolve_mp4", _fake_resolve)
+
+    resp = client.get("/api/v1/movies/some-slug/resolve-mp4")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["mp4_url"] == FRESH_URL
+    assert body["low_mp4_url"] == FRESH_URL
+    assert body["high_mp4_url"] == FRESH_URL
 
 
 def test_force_true_bypasses_in_process_cache(
@@ -104,12 +137,14 @@ def test_force_true_bypasses_in_process_cache(
     row = ("1sun00052a",)
     client, _ = _make_client(row)
 
-    async def _fake_resolve(content_id: str, *, bypass_cache: bool = False) -> str:
+    async def _fake_resolve(content_id: str, *, bypass_cache: bool = False):  # noqa: ARG001
         # force=true → bypass_cache=True
         assert bypass_cache is True
-        return FRESH_URL
+        return resolver_client.ResolvedMp4(
+            mp4_url=FRESH_URL, low_mp4_url=FRESH_URL, high_mp4_url=FRESH_URL
+        )
 
-    monkeypatch.setattr(resolver_client, "resolve_mp4_url", _fake_resolve)
+    monkeypatch.setattr(resolver_client, "resolve_mp4", _fake_resolve)
 
     resp = client.get("/api/v1/movies/some-slug/resolve-mp4?force=true")
     assert resp.status_code == 200
@@ -138,10 +173,10 @@ def test_resolver_not_found_propagates_as_404(
     row = ("1sun00052a",)
     client, _ = _make_client(row)
 
-    async def _raise(content_id: str, *, bypass_cache: bool = False) -> str:  # noqa: ARG001
+    async def _raise(content_id: str, *, bypass_cache: bool = False):  # noqa: ARG001
         raise resolver_client.ResolverNotFound("not found upstream")
 
-    monkeypatch.setattr(resolver_client, "resolve_mp4_url", _raise)
+    monkeypatch.setattr(resolver_client, "resolve_mp4", _raise)
 
     resp = client.get("/api/v1/movies/some-slug/resolve-mp4")
     assert resp.status_code == 404
@@ -153,10 +188,10 @@ def test_resolver_timeout_propagates_as_504(
     row = ("1sun00052a",)
     client, _ = _make_client(row)
 
-    async def _raise(content_id: str, *, bypass_cache: bool = False) -> str:  # noqa: ARG001
+    async def _raise(content_id: str, *, bypass_cache: bool = False):  # noqa: ARG001
         raise resolver_client.ResolverTimeout("slow")
 
-    monkeypatch.setattr(resolver_client, "resolve_mp4_url", _raise)
+    monkeypatch.setattr(resolver_client, "resolve_mp4", _raise)
 
     resp = client.get("/api/v1/movies/some-slug/resolve-mp4")
     assert resp.status_code == 504
@@ -168,10 +203,10 @@ def test_resolver_upstream_propagates_as_502(
     row = ("1sun00052a",)
     client, _ = _make_client(row)
 
-    async def _raise(content_id: str, *, bypass_cache: bool = False) -> str:  # noqa: ARG001
+    async def _raise(content_id: str, *, bypass_cache: bool = False):  # noqa: ARG001
         raise resolver_client.ResolverUpstreamError("dmm broken")
 
-    monkeypatch.setattr(resolver_client, "resolve_mp4_url", _raise)
+    monkeypatch.setattr(resolver_client, "resolve_mp4", _raise)
 
     resp = client.get("/api/v1/movies/some-slug/resolve-mp4")
     assert resp.status_code == 502
@@ -183,10 +218,10 @@ def test_resolver_config_error_returns_500(
     row = ("1sun00052a",)
     client, _ = _make_client(row)
 
-    async def _raise(content_id: str, *, bypass_cache: bool = False) -> str:  # noqa: ARG001
+    async def _raise(content_id: str, *, bypass_cache: bool = False):  # noqa: ARG001
         raise resolver_client.ResolverConfigError("not set")
 
-    monkeypatch.setattr(resolver_client, "resolve_mp4_url", _raise)
+    monkeypatch.setattr(resolver_client, "resolve_mp4", _raise)
 
     resp = client.get("/api/v1/movies/some-slug/resolve-mp4")
     assert resp.status_code == 500

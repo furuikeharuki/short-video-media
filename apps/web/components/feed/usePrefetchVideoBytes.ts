@@ -5,16 +5,19 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import type { MovieCard } from "@/lib/api/feed";
 import { resolveMp4Url } from "@/lib/api/resolve-mp4";
 import { ensurePreconnect, getPrefetchPolicy } from "@/lib/networkPrefs";
+import { isVideoTimingEnabled } from "@/lib/videoTiming";
 
 /**
  * 現在再生中のスライドより先 N 枚分の動画バイトを裏で preload しておく hook。
  *
  * 背景:
- *   - WINDOW_SIZE=1 (中央 + 隣接 2 枚) で isAdjacent の <video> が currentIndex±1 の
- *     バイトを直接 preload するため、この hook は currentIndex+2 以降を担当する。
+ *   - 隣接 FeedItem (`isAdjacent`) も <video> をマウントするが、ユーザーが
+ *     スワイプ確定するまで現スライドの再生・帯域を優先するため、必ずしも
+ *     +1 のバイト取得が間に合うとは限らない。そのため本 hook では
+ *     "次に中央になる" current+1 を最優先で裏 prefetch する権威ソースとして扱う。
  *   - ブラウザに応じて先読み枚数を変える:
- *       * Chrome / Chromium: currentIndex+2 と +3 の 2 枚を bytes 先読み
- *       * Safari / iOS Safari: currentIndex+2 のみ、preload="metadata" でメタデータだけ取得
+ *       * Chrome / Chromium: current+1 と +2 の 2 枚を bytes 先読み
+ *       * Safari / iOS Safari: current+1 のみ、preload="metadata" でメタデータだけ取得
  *       * Save-Data / 2g / slow-2g: 完全に止める
  *   - rapid swipe 中 / target スライドが存在しない場合は slot を 0 にして
  *     隠し <video> をアンマウントし、中央 <video> の帯域を奪わない。
@@ -30,15 +33,25 @@ import { ensurePreconnect, getPrefetchPolicy } from "@/lib/networkPrefs";
  */
 
 /**
- * 「次の次」から先読みを始める (隣接スライドは中央±1 なので +2 が次に中央になるスライド)。
- * 実際に何枚先まで読むかは getPrefetchPolicy() に従い、ブラウザと回線で決める。
+ * current+1 を最優先で先読みする (隣接 <video> の preload は active 再生に
+ * 帯域を譲って遅れることがあるため、本 hook が次スライドのバイト取得を担う)。
+ * 何枚先まで読むかは getPrefetchPolicy() に従い、ブラウザと回線で決める。
  */
-const PREFETCH_START_OFFSET = 2;
+const PREFETCH_START_OFFSET = 1;
 
-// スクロール停止デバウンス。スクロール中は中央の <video> の帯域を奪わないよう
-// 一定時間 currentIndex が止まってから slot 化 + resolve を発火する。
-// usePrefetchResolveMp4 と同じ 400ms。
-const PREFETCH_DEBOUNCE_MS = 400;
+// rapid swipe が落ち着いた直後に current+1 の resolve をすぐ走らせるための短デバウンス。
+// 0 ms にすると React の同期再レンダで余計な resolve が走り得るため最小値だけ確保。
+const NEXT_PREFETCH_DEBOUNCE_MS = 50;
+
+// current+1 以降のスロット (+2 など) は中央 <video> の安定再生を優先したいので
+// 従来通り少し待ってから resolve する。
+const UPCOMING_PREFETCH_DEBOUNCE_MS = 400;
+
+function vtPrefetchLog(message: string) {
+  if (!isVideoTimingEnabled()) return;
+  // eslint-disable-next-line no-console
+  console.debug(`vt byte-prefetch ${message}`);
+}
 
 interface PrefetchSlot {
   /** key 用。MovieCard.id をそのまま使う */
@@ -49,11 +62,14 @@ interface PrefetchSlot {
   src: string;
   /** 隠し <video> の preload 属性 (Safari は "metadata", Chrome は "auto") */
   preload: "auto" | "metadata" | "none";
+  /** dev ログ用: currentIndex からのオフセット (+1, +2 など)。 */
+  offset: number;
 }
 
 interface Target {
   id: string;
   slug: string;
+  offset: number;
 }
 
 export function usePrefetchVideoBytes(
@@ -71,27 +87,46 @@ export function usePrefetchVideoBytes(
   const healedRef = useRef<Set<string>>(new Set());
   // slug -> MovieCard.id の逆引き。onError から slot を特定するため。
   const slugToIdRef = useRef<Map<string, string>>(new Map());
+  // dev ログ用: byte-prefetch slot が出来たことのある slug を覚えておき、
+  // active 移動時にそのスライドが裏 prefetch 済みだったか出力する。
+  const prefetchedSlugsRef = useRef<Set<string>>(new Set());
+  const lastActiveSlugRef = useRef<string | null>(null);
 
   // ポリシー (aheadCount / preload) を計算する。effect 内で毎回読むと
   // navigator アクセスが増えるので useEffect の中で 1 度だけ参照する。
   // 回線状況は途中で変わり得るが、本サイトは短時間セッションなので静的取得で十分。
 
-  // 対象スライドの一覧 (id+slug) を currentIndex / items から決める。
-  // policy.aheadCount = 1 → +2 だけ / 2 → +2 と +3。
+  // 対象スライドの一覧 (id+slug+offset) を currentIndex / items から決める。
+  // policy.aheadCount = 1 → +1 だけ / 2 → +1 と +2。
   // ここで targets を実 effect が走る前に算出しておくと、deps として安定 key (id 連結) を使える。
   const policy = getPrefetchPolicyMemo();
   const targets: Target[] = [];
   if (policy.aheadCount > 0) {
     for (let i = 0; i < policy.aheadCount; i += 1) {
-      const idx = currentIndex + PREFETCH_START_OFFSET + i;
+      const offset = PREFETCH_START_OFFSET + i;
+      const idx = currentIndex + offset;
       if (idx >= items.length) break;
       const it = items[idx];
       if (!it || !it.slug) continue;
-      targets.push({ id: it.id, slug: it.slug });
+      targets.push({ id: it.id, slug: it.slug, offset });
     }
   }
   // deps 用に安定キーを生成 (id の join)。
-  const targetsKey = targets.map((t) => `${t.id}:${t.slug}`).join("|");
+  const targetsKey = targets.map((t) => `${t.id}:${t.slug}:${t.offset}`).join("|");
+
+  // active スライドが変わったタイミングで、そのスライドが裏 prefetch 済みだったかを
+  // dev ログに出す (loadedmetadata +9s 等を取り逃したかの確認用)。
+  useEffect(() => {
+    if (!isVideoTimingEnabled()) return;
+    const activeItem = items[currentIndex];
+    if (!activeItem || !activeItem.slug) return;
+    if (lastActiveSlugRef.current === activeItem.slug) return;
+    lastActiveSlugRef.current = activeItem.slug;
+    const prefetched = prefetchedSlugsRef.current.has(activeItem.slug);
+    vtPrefetchLog(
+      `active index=${currentIndex} slug=${activeItem.slug} byte-prefetched=${prefetched}`,
+    );
+  }, [currentIndex, items]);
 
   useEffect(() => {
     const inFlight = inFlightRef.current;
@@ -128,46 +163,63 @@ export function usePrefetchVideoBytes(
       return;
     }
 
-    // currentIndex が PREFETCH_DEBOUNCE_MS の間変わらなかったら resolve + slot 化。
-    const timer = setTimeout(() => {
-      for (const target of targets) {
-        if (inFlight.has(target.slug)) continue;
-        const controller = new AbortController();
-        inFlight.set(target.slug, controller);
-        void resolveMp4Url(target.slug, { signal: controller.signal })
-          .then((res) => {
-            if (controller.signal.aborted) return;
-            if (!res?.mp4_url) return;
-            // 解決した CDN origin に dyn preconnect (TCP/TLS handshake を前倒し)。
-            ensurePreconnect(res.mp4_url);
-            setSlots((prev) => {
-              if (prev.some((s) => s.id === target.id)) return prev;
-              return [
-                ...prev,
-                {
-                  id: target.id,
-                  slug: target.slug,
-                  src: res.mp4_url,
-                  preload: policy.preload,
-                },
-              ];
-            });
-          })
-          .finally(() => {
-            if (inFlight.get(target.slug) === controller) {
-              inFlight.delete(target.slug);
-            }
+    // current+1 はほぼ即時に発火し、+2 以降は中央 <video> 安定再生のため少し遅らせる。
+    const nextTarget = targets.find((t) => t.offset === PREFETCH_START_OFFSET);
+    const upcomingTargets = targets.filter((t) => t.offset > PREFETCH_START_OFFSET);
+
+    const fire = (target: Target) => {
+      if (inFlight.has(target.slug)) return;
+      const controller = new AbortController();
+      inFlight.set(target.slug, controller);
+      vtPrefetchLog(
+        `slot index=${currentIndex + target.offset} slug=${target.slug} offset=+${target.offset} mode=${policy.preload}`,
+      );
+      void resolveMp4Url(target.slug, { signal: controller.signal })
+        .then((res) => {
+          if (controller.signal.aborted) return;
+          if (!res?.mp4_url) return;
+          // 解決した CDN origin に dyn preconnect (TCP/TLS handshake を前倒し)。
+          ensurePreconnect(res.mp4_url);
+          prefetchedSlugsRef.current.add(target.slug);
+          setSlots((prev) => {
+            if (prev.some((s) => s.id === target.id)) return prev;
+            return [
+              ...prev,
+              {
+                id: target.id,
+                slug: target.slug,
+                src: res.mp4_url,
+                preload: policy.preload,
+                offset: target.offset,
+              },
+            ];
           });
-      }
-    }, PREFETCH_DEBOUNCE_MS);
+        })
+        .finally(() => {
+          if (inFlight.get(target.slug) === controller) {
+            inFlight.delete(target.slug);
+          }
+        });
+    };
+
+    const nextTimer = nextTarget
+      ? setTimeout(() => fire(nextTarget), NEXT_PREFETCH_DEBOUNCE_MS)
+      : null;
+    const upcomingTimer =
+      upcomingTargets.length > 0
+        ? setTimeout(() => {
+            for (const target of upcomingTargets) fire(target);
+          }, UPCOMING_PREFETCH_DEBOUNCE_MS)
+        : null;
 
     return () => {
-      clearTimeout(timer);
+      if (nextTimer) clearTimeout(nextTimer);
+      if (upcomingTimer) clearTimeout(upcomingTimer);
     };
     // targetsKey / isRapidSwiping / policy.preload・aheadCount が変わったときに走り直す。
     // targets は毎レンダー新オブジェクトなので key 化した文字列を使う。
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [targetsKey, isRapidSwiping, policy.preload, policy.aheadCount]);
+  }, [targetsKey, isRapidSwiping, policy.preload, policy.aheadCount, currentIndex]);
 
   // アンマウント時に全 resolve を abort
   useEffect(() => {
@@ -204,11 +256,13 @@ export function usePrefetchVideoBytes(
           if (!id) return; // 既に対象範囲外
           setSlots((prev) => {
             const idx = prev.findIndex((s) => s.id === id);
+            const existingOffset = idx >= 0 ? prev[idx].offset : PREFETCH_START_OFFSET;
             const next: PrefetchSlot = {
               id,
               slug,
               src: res.mp4_url,
               preload: policy.preload,
+              offset: existingOffset,
             };
             if (idx === -1) {
               return [...prev, next];

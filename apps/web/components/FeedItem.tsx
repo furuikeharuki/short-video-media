@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useCallback, useEffect, useRef } from "react";
+import { useState, useCallback, useEffect, useLayoutEffect, useRef } from "react";
 import type { MovieCard } from "@/lib/api/feed";
 import { useBookmarks } from "@/components/auth/BookmarksProvider";
 import { signIn } from "next-auth/react";
@@ -16,6 +16,11 @@ import FeedItemMeta from "./feed/FeedItemMeta";
 import FeedItemSideActions from "./feed/FeedItemSideActions";
 import { itemStyle } from "./feed/feedItemStyle";
 import MovieDetailModal from "./movie-detail/MovieDetailModal";
+import {
+  claimForFeed,
+  getReadiness,
+  hasPromotableElement,
+} from "@/lib/videoHandoff";
 
 interface Props {
   item: MovieCard;
@@ -50,6 +55,46 @@ export default function FeedItem({ item, isActive, isAdjacent = false, isFirst, 
     slug: item.slug,
     enabled: isActive || isAdjacent,
   });
+
+  // prefetch buffer から canplay 済み要素を引き取れたら、新規 <video> を作らずに
+  // そのまま active に流用する。
+  //
+  // render フェーズで registry を sync 読みして「promote 可能か」を判定するため、
+  // 余計な JSX <video> がマウント→即廃棄される無駄がない。claim 自体は副作用
+  // (registry mutation + log) なので useLayoutEffect で行う。useLayoutEffect は
+  // passive useEffect より前に走るので、同じ commit で buffer がアンマウントする
+  // 場合でも先に claim できる (buffer 側の releasePrefetchElement は passive
+  // cleanup として後段で走る)。
+  const [promotedElement, setPromotedElement] =
+    useState<HTMLVideoElement | null>(null);
+  const promotedSlugRef = useRef<string | null>(null);
+  const canPromote =
+    isActive && !!videoSrc && hasPromotableElement(item.slug, videoSrc);
+  useLayoutEffect(() => {
+    if (!isActive) return;
+    if (!videoSrc) return;
+    if (promotedSlugRef.current === item.slug) return;
+    if (!hasPromotableElement(item.slug, videoSrc)) return;
+    // readiness を先に読んでからログする (claim 後はレジストリが空になる)
+    const readiness = getReadiness(item.slug) ?? "canplay";
+    const el = claimForFeed(item.slug, videoSrc);
+    if (!el) return;
+    promotedSlugRef.current = item.slug;
+    setPromotedElement(el);
+    if (isVideoTimingEnabled()) {
+      // eslint-disable-next-line no-console
+      console.debug(
+        `vt byte-prefetch promote slug=${item.slug} readiness=${readiness}`,
+      );
+    }
+  }, [isActive, videoSrc, item.slug]);
+  // slug 変更で promoted を捨てる (別作品にスワイプして戻ってきた等)。
+  useEffect(() => {
+    if (promotedSlugRef.current && promotedSlugRef.current !== item.slug) {
+      promotedSlugRef.current = null;
+      setPromotedElement(null);
+    }
+  }, [item.slug]);
 
   const isProActress = isProActressMovie(item.genres);
 
@@ -262,6 +307,8 @@ export default function FeedItem({ item, isActive, isAdjacent = false, isFirst, 
               onMouseUp={handleMouseUp}
               onMouseLeave={handleMouseLeave}
               onClick={handlePcClick}
+              promotedElement={promotedElement}
+              expectingPromotion={canPromote && !promotedElement}
             />
             {isActive && !videoReady && (
               <div

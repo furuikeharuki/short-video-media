@@ -63,14 +63,25 @@ interface PrefetchSlot {
   src: string;
   /** 隠し <video> の preload 属性 (Safari は "metadata", Chrome は "auto") */
   preload: "auto" | "metadata" | "none";
-  /** dev ログ用: currentIndex からのオフセット (+1, +2 など)。 */
+  /**
+   * dev ログ用: スロット作成時点の currentIndex からのオフセット (+1, +2 など)。
+   * active が後から動いてもこの値は更新しない (作成時のスナップショット)。
+   */
   offset: number;
+  /**
+   * dev ログ用: スロット作成時点で「このスロットがどの items index を狙っているか」を
+   * 凍結した値。currentIndex + offset (作成時) と同義。後から active が動いても
+   * このスロットのログには常に同じ index が出る。
+   */
+  targetIndex: number;
 }
 
 interface Target {
   id: string;
   slug: string;
   offset: number;
+  /** スロット作成時点で凍結する items index (currentIndex + offset)。 */
+  targetIndex: number;
 }
 
 export type PrefetchReadiness = "metadata" | "canplay";
@@ -114,7 +125,7 @@ export function usePrefetchVideoBytes(
       if (idx >= items.length) break;
       const it = items[idx];
       if (!it || !it.slug) continue;
-      targets.push({ id: it.id, slug: it.slug, offset });
+      targets.push({ id: it.id, slug: it.slug, offset, targetIndex: idx });
     }
   }
   // deps 用に安定キーを生成 (id の join)。
@@ -202,11 +213,11 @@ export function usePrefetchVideoBytes(
       inFlight.set(target.slug, controller);
       if (isRapidSwiping && target.offset === PREFETCH_START_OFFSET) {
         vtPrefetchLog(
-          `rapid allow +${target.offset} slug=${target.slug} index=${currentIndex + target.offset}`,
+          `rapid allow +${target.offset} slug=${target.slug} index=${target.targetIndex}`,
         );
       }
       vtPrefetchLog(
-        `slot index=${currentIndex + target.offset} slug=${target.slug} offset=+${target.offset} mode=${policy.preload} immediate=${immediate}`,
+        `slot index=${target.targetIndex} slug=${target.slug} offset=+${target.offset} mode=${policy.preload} immediate=${immediate}`,
       );
       void resolveMp4Url(target.slug, {
         signal: controller.signal,
@@ -230,6 +241,7 @@ export function usePrefetchVideoBytes(
                 src: res.mp4_url,
                 preload: policy.preload,
                 offset: target.offset,
+                targetIndex: target.targetIndex,
               },
             ];
           });
@@ -241,13 +253,12 @@ export function usePrefetchVideoBytes(
         });
     };
 
-    // +1 は microtask で即時発火 (React の同期再レンダ完了直後)。
-    let nextCancelled = false;
+    // +1 は同期的に即時発火する (effect 内 = React コミット直後)。
+    // microtask へのキューイングはせず、resolveMp4Url を即呼び出してネットワークを
+    // 1 tick でも早くキックする。これにより active が +1 を claim できる確率
+    // (canplay 到達済み) が上がる。
     if (nextTarget) {
-      Promise.resolve().then(() => {
-        if (nextCancelled) return;
-        fire(nextTarget, true);
-      });
+      fire(nextTarget, true);
     }
     const upcomingTimer =
       upcomingTargets.length > 0
@@ -257,7 +268,6 @@ export function usePrefetchVideoBytes(
         : null;
 
     return () => {
-      nextCancelled = true;
       if (upcomingTimer) clearTimeout(upcomingTimer);
     };
     // targetsKey / isRapidSwiping / policy.preload・aheadCount が変わったときに走り直す。
@@ -304,13 +314,17 @@ export function usePrefetchVideoBytes(
           if (!id) return; // 既に対象範囲外
           setSlots((prev) => {
             const idx = prev.findIndex((s) => s.id === id);
-            const existingOffset = idx >= 0 ? prev[idx].offset : PREFETCH_START_OFFSET;
+            // 既存スロットがあれば作成時の offset/targetIndex を保持 (ログ drift 防止)。
+            const existing = idx >= 0 ? prev[idx] : null;
+            const existingOffset = existing?.offset ?? PREFETCH_START_OFFSET;
+            const existingTargetIndex = existing?.targetIndex ?? -1;
             const next: PrefetchSlot = {
               id,
               slug,
               src: res.mp4_url,
               preload: policy.preload,
               offset: existingOffset,
+              targetIndex: existingTargetIndex,
             };
             if (idx === -1) {
               return [...prev, next];

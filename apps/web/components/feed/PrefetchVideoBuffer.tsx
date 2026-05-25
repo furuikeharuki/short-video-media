@@ -3,47 +3,38 @@
 import { useEffect, useRef } from "react";
 
 import { isVideoTimingEnabled } from "@/lib/videoTiming";
+import {
+  registerPrefetchElement,
+  releasePrefetchElement,
+  updateReadiness,
+} from "@/lib/videoHandoff";
 
 /**
  * 動画バイトの先読み専用の <video>。
  *
- * 画面外に配置し、ユーザーには見えない。preload="auto" でブラウザの
- * 動画パイプラインに先頭バッファを取得させるのが目的。
- *
- * - muted + playsinline: モバイル Safari でも preload が走るようにする
- * - aria-hidden + tabIndex=-1: スクリーンリーダー / フォーカスから隠す
- * - pointer-events: none: 万一表示されても操作不可
- *
- * ORB (Opaque Response Blocking) 対策:
- *   - 1px / opacity:0 の隠し方だと Chrome が「メディア用途」と認識しづらく、
- *     cross-origin の MP4 が ERR_BLOCKED_BY_ORB で弾かれることがある。
- *   - 画面外 (top/left: -9999px) に普通サイズの <video> として配置することで、
- *     ブラウザにとっては「画面外にある通常のメディア要素」として preload を
- *     走らせやすくする。
- *
- * 失敗ハンドリング:
- *   - <video> が onError を発火したら親に通知し、親 hook で force=true で
- *     resolver を再呼び出しさせる。これにより、ユーザーがスワイプ到達する前に
- *     新しい URL を取得しておける。
+ * 実装方式 (PR #181 以降):
+ *   - <video> を React の JSX としてではなく、`document.createElement("video")`
+ *     で作って videoHandoff レジストリに登録する。これにより、active 側 (FeedItem)
+ *     が canplay 済みの要素を claim して同一の DOM ノードをそのまま流用できる。
+ *   - 本コンポーネント自体は host <div> を 1 つマウントするだけ。要素は host に
+ *     append される。
+ *   - 画面外配置 (top/left: -9999px) は registerPrefetchElement 側でセット済み。
+ *   - 失敗 (error) は onError 経由で親 hook (usePrefetchVideoBytes) に通知し、
+ *     force=true で resolver を再呼び出しさせる。
  */
 
 interface Props {
   slug: string;
   src: string;
-  /**
-   * 隠し <video> の preload 属性。
-   * - "auto" (デフォルト): 通常時。先頭バッファまでバイトを取得する。
-   * - "metadata": 高速スワイプ中など、中央 <video> の帯域を奪いたくないとき。
-   * - "none": 完全に preload を止めたい場合。
-   */
   preload?: "auto" | "metadata" | "none";
-  /** dev ログ用: currentIndex からのオフセット (+1, +2 など)。 */
+  /**
+   * dev ログ用: スロット作成時点での currentIndex からのオフセット。
+   * active が遠ざかっても "作成時の offset" を保持するため、ここで受け取る値は
+   * 親 (usePrefetchVideoBytes) が slot を生成した瞬間に固定したものを渡す。
+   */
   offset?: number;
-  /** <video> が onError を発火したら呼ばれる。fire-and-forget。 */
   onError?: (slug: string) => void;
-  /** loadedmetadata 到達時に呼ばれる。親は readiness を 'metadata' に格上げする。 */
   onMetadata?: (slug: string) => void;
-  /** canplay (readyState>=HAVE_FUTURE_DATA) 到達時に呼ばれる。親は readiness を 'canplay' に格上げする。 */
   onCanPlay?: (slug: string) => void;
 }
 
@@ -62,83 +53,76 @@ export default function PrefetchVideoBuffer({
   onMetadata,
   onCanPlay,
 }: Props) {
-  const ref = useRef<HTMLVideoElement>(null);
+  const hostRef = useRef<HTMLDivElement>(null);
   // 同じ slot の <video> で何度も onError が呼ばれても親への通知は 1 回だけにする。
   const notifiedRef = useRef(false);
 
   useEffect(() => {
+    const host = hostRef.current;
+    if (!host) return;
     notifiedRef.current = false;
-    const el = ref.current;
-    if (!el) return;
-    // preload="none" のときは load() を呼ばない (帯域を一切使わない)。
-    if (preload === "none") return;
+    if (preload === "none") {
+      return;
+    }
+
+    const el = registerPrefetchElement({ slug, src, preload });
+    host.appendChild(el);
 
     const offLabel = offset != null ? `+${offset}` : "?";
     let canPlayNotified = false;
 
     const onLoadedMetadata = () => {
-      vtPrefetchLog(`loadedmetadata slug=${slug} offset=${offLabel} mode=${preload}`);
+      vtPrefetchLog(
+        `loadedmetadata slug=${slug} offset=${offLabel} mode=${preload}`,
+      );
+      updateReadiness(slug, "metadata");
       onMetadata?.(slug);
     };
     const onCanPlayHandler = () => {
       if (canPlayNotified) return;
       canPlayNotified = true;
       vtPrefetchLog(`canplay slug=${slug} offset=${offLabel} mode=${preload}`);
+      updateReadiness(slug, "canplay");
       onCanPlay?.(slug);
     };
+    const onErrorHandler = () => {
+      if (notifiedRef.current) return;
+      notifiedRef.current = true;
+      onError?.(slug);
+    };
     el.addEventListener("loadedmetadata", onLoadedMetadata);
-    // canplay は HAVE_FUTURE_DATA 到達。preload="auto" のときだけ実用的に発火する。
-    // Safari の preload="metadata" では基本来ないが、念のため subscribe しておく
-    // (来た場合のみ canplay 扱いに格上げする)。
     el.addEventListener("canplay", onCanPlayHandler);
-
-    // 明示的に load() を呼んで preload を確実にキック。
-    // src 属性だけ設定しても iOS Safari は load() を呼ばないと取りに行かないことがある。
-    try {
-      el.load();
-    } catch {
-      // load() が例外を投げるケースは握り潰し
-    }
+    el.addEventListener("error", onErrorHandler);
 
     // src 変更前に既に十分バッファ済みのケース (back-to-back swap など) を拾う。
     if (el.readyState >= 3) {
       onCanPlayHandler();
     } else if (el.readyState >= 1) {
+      updateReadiness(slug, "metadata");
       onMetadata?.(slug);
     }
 
     return () => {
       el.removeEventListener("loadedmetadata", onLoadedMetadata);
       el.removeEventListener("canplay", onCanPlayHandler);
+      el.removeEventListener("error", onErrorHandler);
+      // claim 済みの場合は releasePrefetchElement が no-op になる。
+      releasePrefetchElement(slug, el);
     };
-  }, [src, preload, slug, offset, onMetadata, onCanPlay]);
+  }, [src, preload, slug, offset, onMetadata, onCanPlay, onError]);
 
-  const handleError = () => {
-    if (notifiedRef.current) return;
-    notifiedRef.current = true;
-    onError?.(slug);
-  };
-
+  // host だけ React で管理する。実 <video> 要素は registerPrefetchElement が作る。
   return (
-    <video
-      ref={ref}
-      src={src}
-      preload={preload}
-      muted
-      playsInline
+    <div
+      ref={hostRef}
       aria-hidden="true"
-      tabIndex={-1}
-      onError={handleError}
       style={{
-        // 画面外配置で ORB を回避しつつ、通常サイズのメディア要素として preload を起動させる。
         position: "fixed",
         top: "-9999px",
         left: "-9999px",
-        width: 100,
-        height: 100,
-        opacity: 0,
+        width: 0,
+        height: 0,
         pointerEvents: "none",
-        zIndex: -1,
       }}
     />
   );

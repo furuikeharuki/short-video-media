@@ -56,6 +56,7 @@ const VIDEO_HARD_TIMEOUT_MS = 25000;
 // どこから来ても FeedViewer 経由で FeedItem に到達する) ため、ここで判定すれば
 // すべてのアクセス経路で 5 秒スキップが効く。
 const PRO_ACTRESS_GENRE = "プロ女優";
+const PRO_ACTRESS_HEAD_SKIP_SEC = 5;
 
 export default function FeedItem({ item, isActive, isAdjacent = false, isFirst, isSecond = false, isRapidSwiping = false }: Props) {
   const [modalSlug, setModalSlug] = useState<string | null>(null);
@@ -71,6 +72,9 @@ export default function FeedItem({ item, isActive, isAdjacent = false, isFirst, 
     enabled: isActive || isAdjacent,
   });
 
+  // プロ女優 (videoa) 作品判定。useFeedPlayback と useLowFirstVideoSrc の両方で必要なので
+  // ここで一度だけ算出する。
+  const isProActress = item.genres?.includes(PRO_ACTRESS_GENRE) ?? false;
   // 低画質ファースト戦略 (useLowFirstVideoSrc) は useFeedPlayback の戻り値 videoRef を
   // 使うので、ここでは何もしない (useFeedPlayback 呼び出し直後に hook を起動する)。
 
@@ -137,7 +141,7 @@ export default function FeedItem({ item, isActive, isAdjacent = false, isFirst, 
     videoSrc: lowSrc ?? videoSrc,
     onOpenModal: handleOpenModal,
     // プロ女優 (videoa) 作品は先頭 5 秒スキップ + 戻し不可
-    isProActress: item.genres?.includes(PRO_ACTRESS_GENRE) ?? false,
+    isProActress,
   });
 
   // useFeedPlayback で確保された videoRef を渡して low → high スワップを制御する。
@@ -150,6 +154,9 @@ export default function FeedItem({ item, isActive, isAdjacent = false, isFirst, 
     // 高速スワイプ中はプローブを発火しない。中央 <video> の Range / resolve を優先する。
     allowPrepare: isActive && !isRapidSwiping,
     slug: item.slug,
+    // プロ女優作品は先頭 5 秒スキップ仕様。high 画質 swap 時に currentTime を 5 秒未満に
+    // 戻さないよう、最低開始秒数を渡す。非プロ女優作品は 0 (=従来通り直前位置を維持)。
+    minStartTime: isProActress ? PRO_ACTRESS_HEAD_SKIP_SEC : 0,
   });
 
   // preload 戦略:

@@ -112,7 +112,18 @@ export function usePrefetchResolveMp4(
       vtPrefetchLog(
         `resolve start index=${scheduledIndex} priority=${target.priority} slug=${target.slug}`,
       );
-      void resolveMp4Url(target.slug, { signal: controller.signal })
+      // priority=0 (active) は "high" で global slot を優先確保。
+      // priority>=1 (近距離 +1..+5) は "normal" で FIFO 順、warm の "low" より先に走る。
+      const resolvePriority = target.priority === 0 ? "high" : "normal";
+      void resolveMp4Url(target.slug, {
+        signal: controller.signal,
+        priority: resolvePriority,
+        onReuse: (kind) => {
+          vtPrefetchLog(
+            `resolve reuse=${kind} index=${scheduledIndex} priority=${target.priority} slug=${target.slug}`,
+          );
+        },
+      })
         .then((res) => {
           if (controller.signal.aborted) return;
           const got = !!res?.mp4_url;

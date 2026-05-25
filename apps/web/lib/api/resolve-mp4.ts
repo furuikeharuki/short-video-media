@@ -30,6 +30,28 @@ export type ResolveMp4Response = {
 };
 
 /**
+ * 優先度。
+ *  - "high":   active 再生 (useResolvedVideoSrc)。waiters の先頭に割り込み、
+ *              warm の低優先度上限 (activeLow) を無視して即発火。
+ *  - "normal": 近距離 prefetch (current+1..+5)。FIFO で順次発火。
+ *  - "low":    遠距離 warm (current+6..+15)。全体スロット (MAX_CONCURRENT_FETCHES)
+ *              に加えて低優先度同時実行枠 (MAX_CONCURRENT_LOW) でも絞られる。
+ *              これにより warm の実 HTTP 同時実行は最大 2 本に固定される。
+ */
+export type ResolvePriority = "high" | "normal" | "low";
+
+export type ResolveOptions = {
+  force?: boolean;
+  signal?: AbortSignal;
+  priority?: ResolvePriority;
+  /** HTTP fetch が実際に開始した瞬間に 1 回だけ呼ばれる。`resolveMp4Url` を
+   *  共有 (キャッシュ / in-flight 再利用) した consumer では呼ばれない。 */
+  onStart?: () => void;
+  /** 既存の in-flight / 成功キャッシュを再利用した瞬間に呼ばれる。 */
+  onReuse?: (kind: "in-flight" | "cached") => void;
+};
+
+/**
  * クライアント側メモリ内 in-flight デデュープキャッシュ。
  *
  * 同じ slug を複数のコンポーネント (usePrefetchResolveMp4 / usePrefetchVideoBytes /
@@ -56,54 +78,139 @@ type CacheEntry = {
 const resolveCache = new Map<string, CacheEntry>();
 
 /**
+ * 成功した resolve 結果の短期キャッシュ。
+ *
+ * in-flight キャッシュ (`resolveCache`) は全 consumer が abort されると
+ * エントリごと消えるため、その後 active 再生がやって来ると改めて resolver を
+ * 叩き直してしまっていた (vt ログで `resolve:start` の後 ~3s 待ちが見える原因)。
+ *
+ * 解決済みの mp4_url は API 側でも 1 時間キャッシュされている前提なので、
+ * クライアントでも同じ時間覚えておき、in-flight が落ちた後でも即返せるようにする。
+ * TTL は API 側と揃えて 1 時間。
+ */
+const SUCCESS_CACHE_TTL_MS = 60 * 60 * 1000;
+type SuccessEntry = { value: ResolveMp4Response; storedAt: number };
+const successCache = new Map<string, SuccessEntry>();
+
+function readSuccessCache(slug: string): ResolveMp4Response | null {
+  const entry = successCache.get(slug);
+  if (!entry) return null;
+  if (Date.now() - entry.storedAt >= SUCCESS_CACHE_TTL_MS) {
+    successCache.delete(slug);
+    return null;
+  }
+  return entry.value;
+}
+
+function writeSuccessCache(slug: string, value: ResolveMp4Response): void {
+  successCache.set(slug, { value, storedAt: Date.now() });
+}
+
+/**
  * resolver は uncached で ~8.6s かかるため、ブラウザから同時に多数のリクエストを
  * 投げると上流 (Cloudflare / API) で 504 が出やすい。並列度を上限 8 に絞ることで
  * バーストを抑制する (resolver / jobs-worker 側も実測で 8 が最適という前提)。
  *
  * 上限内: 即座に fetch を発火。
- * 上限超過: FIFO で待機し、空きが出たら起動。待機中に AbortController が
+ * 上限超過: 優先度 ("high" / "normal" / "low") で並び替えた待ち行列に積み、
+ *           空きが出たら優先度順 (FIFO 内) で起動。待機中に AbortController が
  *           abort された場合は fetch せずに諦める。
+ *
+ * 加えて、warm (priority="low") は同時実行を 2 本までに絞る。これは
+ * 「warm が 8 本すべて埋めてしまい、active がスロット待ちになる」事態を避けるため。
  *
  * デデュープキャッシュ (resolveCache) は同一 slug の同時要求を 1 本にまとめる
  * 役割で、別 slug 同士の同時実行はここで絞る。
  */
 const MAX_CONCURRENT_FETCHES = 8;
+const MAX_CONCURRENT_LOW = 2;
 let activeFetches = 0;
-const waiters: Array<() => void> = [];
+let activeLow = 0;
 
-function acquireSlot(signal: AbortSignal): Promise<boolean> {
+type Waiter = {
+  priority: ResolvePriority;
+  wake: () => void;
+};
+const waiters: Waiter[] = [];
+
+function priorityRank(p: ResolvePriority): number {
+  if (p === "high") return 0;
+  if (p === "normal") return 1;
+  return 2;
+}
+
+/** 起こせる waiter (現在のスロット余裕で起動可能なもの) を優先度順で取り出す。 */
+function pickNextWaiterIndex(): number {
+  let bestIdx = -1;
+  let bestRank = Infinity;
+  for (let i = 0; i < waiters.length; i += 1) {
+    const w = waiters[i];
+    if (w.priority === "low" && activeLow >= MAX_CONCURRENT_LOW) continue;
+    const rank = priorityRank(w.priority);
+    if (rank < bestRank) {
+      bestRank = rank;
+      bestIdx = i;
+      if (rank === 0) break; // high は即決
+    }
+  }
+  return bestIdx;
+}
+
+function canStartImmediately(priority: ResolvePriority): boolean {
+  if (activeFetches >= MAX_CONCURRENT_FETCHES) return false;
+  if (priority === "low" && activeLow >= MAX_CONCURRENT_LOW) return false;
+  return true;
+}
+
+function acquireSlot(
+  signal: AbortSignal,
+  priority: ResolvePriority,
+): Promise<boolean> {
   if (signal.aborted) return Promise.resolve(false);
-  if (activeFetches < MAX_CONCURRENT_FETCHES) {
+  if (canStartImmediately(priority)) {
     activeFetches += 1;
+    if (priority === "low") activeLow += 1;
     return Promise.resolve(true);
   }
   return new Promise<boolean>((resolve) => {
-    const onWake = () => {
-      signal.removeEventListener("abort", onAbort);
-      if (signal.aborted) {
-        // 起こされたが既に abort 済み → 次の waiter に渡す
-        releaseSlot();
-        resolve(false);
-        return;
-      }
-      resolve(true);
+    const waiter: Waiter = {
+      priority,
+      wake: () => {
+        signal.removeEventListener("abort", onAbort);
+        if (signal.aborted) {
+          // 起こされたが既に abort 済み → 次の waiter に渡す
+          releaseSlot(priority);
+          resolve(false);
+          return;
+        }
+        resolve(true);
+      },
     };
     const onAbort = () => {
-      const idx = waiters.indexOf(onWake);
+      const idx = waiters.indexOf(waiter);
       if (idx >= 0) waiters.splice(idx, 1);
       signal.removeEventListener("abort", onAbort);
       resolve(false);
     };
     signal.addEventListener("abort", onAbort, { once: true });
-    waiters.push(onWake);
+    waiters.push(waiter);
   });
 }
 
-function releaseSlot(): void {
-  const next = waiters.shift();
-  if (next) {
-    // activeFetches は据え置きで次のリクエストに引き継ぐ
-    next();
+function releaseSlot(priority: ResolvePriority): void {
+  // まず開放: low サブカウンタを下げる (グローバルは waiter に引き継ぐかここで下げる)。
+  if (priority === "low") {
+    activeLow = Math.max(0, activeLow - 1);
+  }
+  const idx = pickNextWaiterIndex();
+  if (idx >= 0) {
+    const [next] = waiters.splice(idx, 1);
+    // グローバルスロット (activeFetches) は据え置きで次の consumer に引き継ぐ。
+    // 次が low なら activeLow を再度 +1。
+    if (next.priority === "low") {
+      activeLow += 1;
+    }
+    next.wake();
   } else {
     activeFetches = Math.max(0, activeFetches - 1);
   }
@@ -135,18 +242,28 @@ function sleep(ms: number, signal: AbortSignal): Promise<void> {
 
 export async function resolveMp4Url(
   slug: string,
-  options: { force?: boolean; signal?: AbortSignal } = {},
+  options: ResolveOptions = {},
 ): Promise<ResolveMp4Response | null> {
   if (!slug) return null;
 
   // 呼び出し元の signal が既に abort されていれば即座に null。
   if (options.signal?.aborted) return null;
 
+  const priority: ResolvePriority = options.priority ?? "normal";
+
   // force=false のケース、既にキャッシュにあればそれを共有する。
   if (!options.force) {
-    const cached = resolveCache.get(slug);
+    // 1. 成功キャッシュにヒットすれば即返す。
+    const cached = readSuccessCache(slug);
     if (cached) {
-      return subscribe(slug, cached, options.signal);
+      options.onReuse?.("cached");
+      return cached;
+    }
+    // 2. in-flight 共有があればタダ乗り。
+    const inflight = resolveCache.get(slug);
+    if (inflight) {
+      options.onReuse?.("in-flight");
+      return subscribe(slug, inflight, options.signal);
     }
   }
 
@@ -158,15 +275,24 @@ export async function resolveMp4Url(
   }`;
 
   const controller = new AbortController();
+  const onStart = options.onStart;
   const promise: Promise<ResolveMp4Response | null> = (async () => {
     // 1 度だけリトライ可能。504 / ネットワーク (タイムアウト含む) のときに発火。
     let attempt = 0;
     while (true) {
-      const acquired = await acquireSlot(controller.signal);
+      const acquired = await acquireSlot(controller.signal, priority);
       if (!acquired) return null; // 全 consumer abort
       let shouldRetry = false;
       let result: ResolveMp4Response | null = null;
       try {
+        if (attempt === 0) {
+          // HTTP fetch が実際に開始した瞬間に通知 (warm の `start` ログ用)。
+          try {
+            onStart?.();
+          } catch {
+            // ロギング失敗は無視。
+          }
+        }
         const res = await fetch(url, {
           method: "GET",
           // クライアントから直接叩くため Next.js のキャッシュは無効。
@@ -195,7 +321,7 @@ export async function resolveMp4Url(
         }
       } finally {
         // sleep に入る前に必ずスロットを返し、他の slug がそのスロットを使えるようにする。
-        releaseSlot();
+        releaseSlot(priority);
       }
 
       if (!shouldRetry) return result;
@@ -209,9 +335,20 @@ export async function resolveMp4Url(
   // force=true でも上書きしておく (これ以降の同一 slug 読み出しは新 URL を共有できる)。
   resolveCache.set(slug, entry);
   void promise.then((res) => {
+    if (res && res.mp4_url) {
+      // 成功は短期キャッシュへ昇格。in-flight 終了後の再要求でも即返せる。
+      writeSuccessCache(slug, res);
+    }
     // 失敗 (null) ケースはキャッシュから外す = 次回再試行できる。
-    if (res === null && resolveCache.get(slug) === entry) {
-      resolveCache.delete(slug);
+    // 成功ケースは subscribe() 側の refCount=0 でクリーンアップされるが、
+    // 念のため successCache に値が入っていれば in-flight エントリも片付ける。
+    if (resolveCache.get(slug) === entry) {
+      if (res === null) {
+        resolveCache.delete(slug);
+      } else if (res && res.mp4_url) {
+        // 成功は successCache がカバーするので in-flight エントリは即お役御免。
+        resolveCache.delete(slug);
+      }
     }
   });
 
@@ -263,3 +400,11 @@ function subscribe(
   });
 }
 
+/** テスト用にキャッシュをクリアする (本番コードからは呼ばない想定)。 */
+export function __resetResolveCachesForTests(): void {
+  resolveCache.clear();
+  successCache.clear();
+  waiters.length = 0;
+  activeFetches = 0;
+  activeLow = 0;
+}

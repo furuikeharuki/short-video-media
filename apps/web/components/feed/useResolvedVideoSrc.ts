@@ -90,7 +90,16 @@ export function useResolvedVideoSrc({ slug, enabled }: Args): Result {
     inFlightRef.current = controller;
     const timer = createVideoTimer(slug);
     timer.mark("resolve:start");
-    void resolveMp4Url(slug, { signal: controller.signal })
+    void resolveMp4Url(slug, {
+      signal: controller.signal,
+      priority: "high",
+      onReuse: (kind) => {
+        // 直前 prefetch/warm が走らせていた in-flight を共有 (in-flight) するか、
+        // 1h 短期キャッシュにヒット (cached) した場合に発火。
+        // vt ログ的には active が「待たずに済んだ」ことが見えるのが価値。
+        timer.mark(`resolve:reuse-${kind}`);
+      },
+    })
       .then((res) => {
         if (controller.signal.aborted) {
           return;
@@ -127,7 +136,11 @@ export function useResolvedVideoSrc({ slug, enabled }: Args): Result {
     inFlightRef.current = controller;
     setState((prev) => ({ phase: "retrying", url: prev.url }));
 
-    void resolveMp4Url(slug, { force: true, signal: controller.signal })
+    void resolveMp4Url(slug, {
+      force: true,
+      signal: controller.signal,
+      priority: "high",
+    })
       .then((res) => {
         if (controller.signal.aborted) return;
         if (res?.mp4_url) {

@@ -2,16 +2,17 @@
 
 import { useEffect, useRef, useCallback, useState } from "react";
 
+import { createVideoTimer, isVideoTimingEnabled } from "@/lib/videoTiming";
+import {
+  PRO_ACTRESS_HEAD_SKIP_SEC,
+  PRO_ACTRESS_MIN_DURATION_SEC,
+} from "@/lib/proActress";
+
 const SKIP_SEC = 5;
 const DBL_TAP_MS = 300;
 const LONG_PRESS_MS = 500;
 const TAP_MOVE_THRESHOLD = 10;
 const PLAY_THRESHOLD = 0.85;
-// 「プロ女優」(= videoa フロア) 作品の先頭スキップ仕様。
-// 開始位置を 5 秒に飛ばし、シーク / ループのいずれでもそれより前には戻せないようにする。
-const PRO_ACTRESS_HEAD_SKIP_SEC = 5;
-// 極端に短いサンプル動画でホボ即終了するのを避けるためのガード
-const PRO_ACTRESS_MIN_DURATION_SEC = 10;
 
 let globalUserGestured = false;
 let globalIsMuted = true;
@@ -123,6 +124,10 @@ export function useFeedPlayback({ slug, title, isActive, videoSrc, onOpenModal, 
   const skipEffectiveRef = useRef(false);
   // プロ女優スキップ用の最小許容秒数。skipEffectiveRef が false なら 0。
   const skipLowerBoundRef = useRef(0);
+  // プロ女優判定の最新値を ref に同期。playVideo は useCallback で deps を絞っていて
+  // 再生成したくないので、ref 経由で最新の isProActress を読めるようにしておく。
+  // (props の isProActress は useEffect で ref に書き写される)
+  const isProActressRef = useRef(false);
 
   // 同 slug 作品で「直近の再生位置」を記憶しておく ref。
   // 再生中に <video> が onError → force リトライで src が差し替わったときに、
@@ -314,11 +319,30 @@ export function useFeedPlayback({ slug, title, isActive, videoSrc, onOpenModal, 
     isMutedRef.current = globalIsMuted;
 
     // プロ女優スキップが有効、かつまだ先頭 5 秒より前にいるなら、play() 直前に 5 秒へ飛ばす。
-    // (loadedmetadata 完了後しか currentTime を信頼してセットできないので、安全な範囲で
-    //  ガードする: duration が確定していて かつ currentTime < lower のときだけ)
-    const lower = skipLowerBoundRef.current;
-    if (lower > 0 && Number.isFinite(video.duration) && video.duration > lower) {
-      if (video.currentTime < lower) {
+    // - 通常パス: skipLowerBoundRef.current (loadedmetadata 後に確定) を見て seek。
+    // - 先行パス: skipLowerBoundRef.current がまだ確定していなくても、isProActress
+    //   プロパティが true なら "先頭 5 秒以前で再生開始しない" 仕様確定なので、
+    //   metadata 確定前でもベストエフォートで currentTime をセットしておく。
+    //   loadedmetadata 前は currentTime セットがブラウザに無視されるが、確定後の
+    //   handleLoadedMeta -> enforceLowerBound でもう一度クランプされるため二重防御になる。
+    //   この先行 seek が無いと、play() を await している間 (= loadedmetadata 待ち)
+    //   に「最初のフレーム = 0 秒目」が一瞬見えるブラウザ実装で、ユーザーから「5 秒
+    //   スキップが効いていない」と見えるケースがあった。
+    const lower = isProActressRef.current
+      ? PRO_ACTRESS_HEAD_SKIP_SEC
+      : skipLowerBoundRef.current;
+    if (lower > 0) {
+      if (Number.isFinite(video.duration) && video.duration > lower) {
+        if (video.currentTime < lower) {
+          try { video.currentTime = lower; } catch { /* ignore */ }
+        }
+      } else if (Number.isFinite(video.duration) && video.duration > 0) {
+        // duration が判明していて、かつ lower より短いケース (= 短すぎる動画)。
+        // この場合スキップは無効化する (= currentTime はそのまま)。
+      } else {
+        // duration がまだ NaN (loadedmetadata 前)。
+        // 一部ブラウザは currentTime セットを silently accept してくれるので試す。
+        // ダメだった場合は handleLoadedMeta → enforceLowerBound で巻き取られる。
         try { video.currentTime = lower; } catch { /* ignore */ }
       }
     }
@@ -448,6 +472,13 @@ export function useFeedPlayback({ slug, title, isActive, videoSrc, onOpenModal, 
     window.dispatchEvent(new CustomEvent("video-progress", { detail: { progress: 0 } }));
   }, [isActive, setShimmerVisible, setSpinnerVisible, setFastBadge, stopProgressLoop]);
 
+  // props.isProActress を ref に同期。playVideo (useCallback) から最新値を参照できるようにする。
+  // この同期は他の effect より先に走らせたいので、useLayoutEffect を使い、React 18 の
+  // 同期コミット直後 (= 子の useEffect が走る前) に確実に書き込む。
+  useEffect(() => {
+    isProActressRef.current = isProActress;
+  }, [isProActress]);
+
   // プロ女優スキップの確定処理。
   //
   // この effect は isActive に関わらず常に走る。隣接スライド (isAdjacent=true) で <video>
@@ -460,9 +491,13 @@ export function useFeedPlayback({ slug, title, isActive, videoSrc, onOpenModal, 
     const video = videoRef.current;
     if (!video) return;
 
-    // この <video> 用の初期値リセット
-    skipEffectiveRef.current = false;
-    skipLowerBoundRef.current = 0;
+    // この <video> 用の初期値リセット。
+    // ただし isProActress=true のときは「duration がまだ分からなくてもとりあえず
+    // 下限 = 5 秒として playVideo 等に伝える」ことで、loadedmetadata 確定前に play() を
+    // 呼んだ場合でも先頭 5 秒以前から再生開始されるのを防ぐ。
+    // duration 確定後 evaluate() で確認し、極端に短い動画 (< 10 秒) なら下限を 0 に戻す。
+    skipEffectiveRef.current = isProActress;
+    skipLowerBoundRef.current = isProActress ? PRO_ACTRESS_HEAD_SKIP_SEC : 0;
 
     const evaluate = () => {
       if (!isProActress) {
@@ -487,6 +522,12 @@ export function useFeedPlayback({ slug, title, isActive, videoSrc, onOpenModal, 
       if (lower <= 0) return;
       // タイマー精度の都合で 4.9 のような値も来るので、わずかにマージンを取って判定する
       if (video.currentTime + 0.05 < lower) {
+        if (isVideoTimingEnabled()) {
+          // eslint-disable-next-line no-console
+          console.debug(
+            `vt ${slug}: pro-actress enforce currentTime=${video.currentTime.toFixed(2)} -> ${lower}`,
+          );
+        }
         try { video.currentTime = lower; } catch { /* ignore */ }
       }
     };

@@ -8,6 +8,11 @@ import { useFeedPlayback } from "./feed/useFeedPlayback";
 import { useResolvedVideoSrc } from "./feed/useResolvedVideoSrc";
 import { useLowFirstVideoSrc } from "./feed/useLowFirstVideoSrc";
 import { createVideoTimer, isVideoTimingEnabled } from "@/lib/videoTiming";
+import {
+  getMinStartTime,
+  isProActressMovie,
+  logProActressDecision,
+} from "@/lib/proActress";
 import FeedItemVideo from "./feed/FeedItemVideo";
 import FeedItemMeta from "./feed/FeedItemMeta";
 import FeedItemSideActions from "./feed/FeedItemSideActions";
@@ -52,11 +57,8 @@ const VIDEO_HARD_TIMEOUT_MS = 25000;
 
 // 「プロ女優」(= sync_catalog で videoa フロアの作品全部に付与される擬似ジャンル)。
 // このジャンルが付いている作品は先頭 5 秒をスキップして再生する仕様。
-// FeedItem は アプリ内で動画を再生する唯一の入口 (検索 / 女優ページ / ブックマーク等
-// どこから来ても FeedViewer 経由で FeedItem に到達する) ため、ここで判定すれば
-// すべてのアクセス経路で 5 秒スキップが効く。
-const PRO_ACTRESS_GENRE = "プロ女優";
-const PRO_ACTRESS_HEAD_SKIP_SEC = 5;
+// 判定ロジック・スキップ秒数は @/lib/proActress に集約 (FeedItem / useFeedPlayback /
+// useLowFirstVideoSrc が同じ定数を参照するようにし、文字列リテラルの取りこぼしを防ぐ)。
 
 export default function FeedItem({ item, isActive, isAdjacent = false, isFirst, isSecond = false, isRapidSwiping = false }: Props) {
   const [modalSlug, setModalSlug] = useState<string | null>(null);
@@ -73,8 +75,17 @@ export default function FeedItem({ item, isActive, isAdjacent = false, isFirst, 
   });
 
   // プロ女優 (videoa) 作品判定。useFeedPlayback と useLowFirstVideoSrc の両方で必要なので
-  // ここで一度だけ算出する。
-  const isProActress = item.genres?.includes(PRO_ACTRESS_GENRE) ?? false;
+  // ここで一度だけ算出する。判定実体は @/lib/proActress に集約済み。
+  const isProActress = isProActressMovie(item.genres);
+  const minStartTime = getMinStartTime(item.genres);
+
+  // 開発用: ?vt=1 / localStorage.video_timing=1 のとき、判定結果を 1 行ログ。
+  // 「先頭 5 秒スキップが効いていない」報告時に、コンソールで isPro=true/minStart=5
+  // が出ているか目視確認するのに使う。
+  useEffect(() => {
+    if (!isActive) return;
+    logProActressDecision(item.slug, item.genres);
+  }, [isActive, item.slug, item.genres]);
   // 低画質ファースト戦略 (useLowFirstVideoSrc) は useFeedPlayback の戻り値 videoRef を
   // 使うので、ここでは何もしない (useFeedPlayback 呼び出し直後に hook を起動する)。
 
@@ -165,7 +176,7 @@ export default function FeedItem({ item, isActive, isAdjacent = false, isFirst, 
     slug: item.slug,
     // プロ女優作品は先頭 5 秒スキップ仕様。high 画質 swap 時に currentTime を 5 秒未満に
     // 戻さないよう、最低開始秒数を渡す。非プロ女優作品は 0 (=従来通り直前位置を維持)。
-    minStartTime: isProActress ? PRO_ACTRESS_HEAD_SKIP_SEC : 0,
+    minStartTime,
     // crossfade で videoRef.current が low → high に変わったら、useFeedPlayback の
     // プロ女優スキップ / スピナー effect を再実行して、新しい要素にイベントリスナを
     // 張り直してもらう。

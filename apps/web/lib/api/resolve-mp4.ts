@@ -2,8 +2,7 @@
  * GET /api/v1/movies/{slug}/resolve-mp4 を叩いて、再生可能な MP4 URL を取得する。
  *
  * API 側は DB キャッシュを廃止しており、毎回 in-process httpx で DMM の
- * html5_player ページから抽出する。連打抑制は API 側の in-flight デデュープ
- * + 60 秒の短期成功キャッシュとクライアント側のメモリキャッシュで二重に行う。
+ * html5_player ページから抽出する。連打抑制は API 側の in-flight デデュープ * + 5 分の短期成功キャッシュとクライアント側のメモリキャッシュで二重に行う。
  *
  * - force=false (デフォルト): クライアント側 / サーバ側両方のメモリキャッシュ優先。
  * - force=true: <video> が再生エラーになったときのリトライ用。サーバ側の

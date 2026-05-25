@@ -161,7 +161,7 @@ async def test_concurrent_calls_dedupe_to_single_extract(
 async def test_success_is_cached_for_short_period(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """成功結果は 60 秒間キャッシュされ、extract は再呼びされない。"""
+    """成功結果は 5 分間キャッシュされ、extract は再呼びされない。"""
     _set_affiliate(monkeypatch)
     call_count = 0
 

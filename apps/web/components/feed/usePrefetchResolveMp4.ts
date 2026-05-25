@@ -10,13 +10,13 @@ import { resolveMp4Url } from "@/lib/api/resolve-mp4";
  *
  * 目的:
  *   - ユーザーがスワイプして次のスライドに到達した瞬間に再生が始まるよう、
- *     resolver の 60 秒成功キャッシュを温めておく。
+ *     resolver の 5 分成功キャッシュを温めておく。
  *   - <video> 要素は増やさない (モバイル Safari の同時接続上限を避けるため
  *     WINDOW_SIZE=1 を維持)。あくまで API レスポンスのキャッシュだけ温める。
  *
  * 仕様:
  *   - currentIndex+1 〜 currentIndex+PREFETCH_AHEAD のスライドを対象。
- *   - レスポンスは捨てる。in-flight デデュープ + 60 秒キャッシュは API 側に任せる。
+ *   - レスポンスは捨てる。in-flight デデュープ + 5 分キャッシュは API 側に任せる。
  *   - currentIndex が変わったら飛んでいる prefetch を abort。
  *   - アンマウント時にも abort。
  */

@@ -32,7 +32,7 @@ async def read_movie(slug: str, db: AsyncSession = Depends(get_db)) -> MovieDeta
 #     URL を DB にキャッシュしてもトークン期限切れで再生不可になることがあった。
 #   - 現行実装は apps/api 内 (httpx) で DMM の html5_player ページから
 #     都度抽出するため、トークン期限切れ問題が原理的に発生しない。
-#   - resolver_client 側に in-process の in-flight デデュープ + 60 秒の短期
+#   - resolver_client 側に in-process の in-flight デデュープ + 5 分の短期
 #     成功キャッシュがあるので、連打 / バーストは抑制される。
 # UX:
 #   - 毎回 resolver を呼ぶが、in-process なので 1-2 秒程度。

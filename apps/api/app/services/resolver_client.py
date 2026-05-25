@@ -63,8 +63,10 @@ class ResolverUnavailable(ResolverError):
 # キャッシュ / デデュープ
 # ─────────────────────────────────────────────
 # 同一 content_id の再抽出は ~1-2 秒だが、連打を抑えるため短期キャッシュを残す。
-# DMM 側のトークンは長期間有効なので 60 秒は十分安全。
-_SUCCESS_CACHE_TTL_S: Final[float] = 60.0
+# DMM 側のトークンは 32 日以上有効なため 5 分の TTL は安全マージンとして十分。
+# 1 ユーザー 1 セッション内ではほぼキャッシュヒットさせて DMM へのアクセス数と
+# httpx ラウンドトリップを大幅に減らす。
+_SUCCESS_CACHE_TTL_S: Final[float] = 300.0
 
 _inflight: dict[str, asyncio.Future[str]] = {}
 _inflight_lock = asyncio.Lock()

@@ -605,20 +605,40 @@ export function useFeedPlayback({ slug, title, isActive, videoSrc, onOpenModal, 
     };
   }, [slug, videoSrc, isProActress, playVideo, videoElementVersion]);
 
-  // 再生中の読み込み停滾 (waiting/stalled) と、出荷再開 (playing/canplaythrough) を検知して
+  // 再生中の読み込み停滞 (waiting/stalled) と、再生再開 (playing/canplaythrough) を検知して
   // スピナーの表示・非表示を切り替える。isActive 中のときだけビデオ要素が
   // 存在するため、それに依存したイベントリスナをその単位で貼り替える。
+  //
+  // 重要: dual-video スワップ (useLowFirstVideoSrc) で videoRef.current が
+  // low → high に付け替わったときは、effect が再実行されて新しい high <video> に
+  // 張り直す。ただし high はスワップ起動時点ですでに `playing` 状態になっており、
+  // 再バインド後に追加で `playing` イベントが飛ぶ保証はない。そのため
+  // 「再バインド時点の active 要素が既に再生中なら即座にスピナーを消す」
+  // 同期チェックを必ず走らせる。これを入れないと、
+  //   - スワップ前に low 側で waiting で出ていたスピナー
+  //   - 初期 JSX の display:flex のまま残ったスピナー
+  // が high 再生中に消えず、「音声はなっているのに画面はロード中」状態になる。
   useEffect(() => {
     if (!isActive) return;
     const video = videoRef.current;
     if (!video) return;
 
+    const slugTag = isVideoTimingEnabled() ? slug : "";
+
     const handleWaiting = () => {
+      if (isVideoTimingEnabled()) {
+        // eslint-disable-next-line no-console
+        console.debug(`vt ${slugTag}: spinner waiting (active el ts=${video.currentTime.toFixed(2)})`);
+      }
       // シーク直後などにも発火するが、バッファが足りればすぐ playing で消えるので問題なし
       setSpinnerVisible(true);
     };
     const handlePlaying = () => {
       hasPlayedRef.current = true;
+      if (isVideoTimingEnabled()) {
+        // eslint-disable-next-line no-console
+        console.debug(`vt ${slugTag}: spinner clear (playing on active el)`);
+      }
       // 万一、起動タイミングで shimmer が見えていたら明示的に消しておく。
       const shimmer = shimmerRef.current;
       if (shimmer) shimmer.style.display = "none";
@@ -628,6 +648,10 @@ export function useFeedPlayback({ slug, title, isActive, videoSrc, onOpenModal, 
       setSpinnerVisible(false);
     };
     const handleStalled = () => {
+      if (isVideoTimingEnabled()) {
+        // eslint-disable-next-line no-console
+        console.debug(`vt ${slugTag}: spinner stalled (active el)`);
+      }
       // ネットワーク遅延でデータが来ないときもスピナーを出す
       setSpinnerVisible(true);
     };
@@ -636,13 +660,34 @@ export function useFeedPlayback({ slug, title, isActive, videoSrc, onOpenModal, 
     video.addEventListener("playing", handlePlaying);
     video.addEventListener("canplaythrough", handleCanPlayThrough);
     video.addEventListener("stalled", handleStalled);
+
+    // 再バインド時の同期チェック。
+    // active 要素 (= 視覚的に表示中で音声を出す方) がすでに「実質再生中」なら
+    // スピナーを必ず消す。dual-video スワップ後の高画質 <video> がここに該当する。
+    //   - paused が false
+    //   - readyState >= HAVE_CURRENT_DATA (= 2、現在の 1 フレームをデコード済み)
+    // の両方を満たすときに即座にスピナーを消す。
+    //
+    // 逆に paused 中・readyState 不足のときは何もしない (waiting/stalled の通常経路に任せる)。
+    if (!video.paused && video.readyState >= 2) {
+      const shimmer = shimmerRef.current;
+      if (shimmer) shimmer.style.display = "none";
+      setSpinnerVisible(false);
+      if (isVideoTimingEnabled()) {
+        // eslint-disable-next-line no-console
+        console.debug(
+          `vt ${slugTag}: spinner clear on rebind (paused=${video.paused} rs=${video.readyState})`,
+        );
+      }
+    }
+
     return () => {
       video.removeEventListener("waiting", handleWaiting);
       video.removeEventListener("playing", handlePlaying);
       video.removeEventListener("canplaythrough", handleCanPlayThrough);
       video.removeEventListener("stalled", handleStalled);
     };
-  }, [isActive, setSpinnerVisible, videoElementVersion]);
+  }, [isActive, setSpinnerVisible, videoElementVersion, slug]);
 
   // フォールバック: 念のため IntersectionObserver でも監視する。
   // (端末向きを変えたときや SSR ハイドレート直後など、isActive prop の同期前に発火するケースに備える)

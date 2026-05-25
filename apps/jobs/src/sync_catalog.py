@@ -407,9 +407,8 @@ async def upsert_movie(
 ) -> None:
     """DMM API の 1 件を Movie テーブルに upsert する。
 
-    sample_movie_url は apps/api 側 (resolve-mp4 endpoint / extractor) が
-    ユーザー初回再生時に動的に解決して書き戻すため、sync ジョブでは一切触らない
-    (INSERT 時は None、UPDATE 時は保護)。
+    MP4 直リンク (旧 sample_movie_url) は DB に保持しない設計に変更済み。
+    再生時に apps/api 側の resolve-mp4 endpoint が in-process httpx で都度抽出する。
 
     :param actress_filter:
         与えられたとき、作品に含まれる女優名がこのセットに 1 つも一致しなければ skip。
@@ -537,7 +536,6 @@ async def upsert_movie(
         new_image_large = image_urls.get("large") or _build_large_image_url(content_id, floor)
         movie.image_url_list = new_image_list or movie.image_url_list
         movie.image_url_large = new_image_large or movie.image_url_large
-        # sample_movie_url は in-process 解決結果のキャッシュを保護するため、sync では一切触らない。
         movie.sample_embed_url = sample_embed_url or movie.sample_embed_url
         # affiliate_url は常に自前生成のもので上書き (既存データの無効リンクを一括で修復する)
         movie.affiliate_url = affiliate_url
@@ -575,8 +573,6 @@ async def upsert_movie(
                 image_urls.get("large")
                 or _build_large_image_url(content_id, floor)
             ),
-            # sample_movie_url は apps/api 側がユーザー初回再生時に解決して埋める。
-            sample_movie_url=None,
             sample_embed_url=sample_embed_url,
             affiliate_url=affiliate_url,
             affiliate_url_en=item.get("affiliateURLs_mobile"),
@@ -678,7 +674,7 @@ async def upsert_goods(
     """DMM goods フロアの 1 件を Goods テーブルに upsert する。
 
     Movie とは独立したテーブルに保存し、女優詳細ページの「関連商品」セクションでだけ
-    参照する。sample_movie_url / sample_embed_url / director / series はない。
+    参照する。sample_embed_url / director / series はない。
 
     actress_filter が与えられたとき、商品に含まれる女優名がセットに 1 つも一致しなければ skip。
     さらに、一致した女優だけを ActressGoods リンクに追加する (新規女優はここでは追加しない)。

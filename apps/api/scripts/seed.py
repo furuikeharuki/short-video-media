@@ -64,7 +64,6 @@ async def seed(session: AsyncSession) -> None:
             volume=data.get("volume"),
             image_url_list=data.get("image_url_list", ""),
             image_url_large=data.get("image_url_large", ""),
-            sample_movie_url=data.get("sample_movie_url"),
             sample_embed_url=data.get("sample_embed_url", ""),
             affiliate_url=data.get("affiliate_url", ""),
             affiliate_url_en=data.get("affiliate_url_en"),

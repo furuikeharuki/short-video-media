@@ -17,7 +17,6 @@ class MovieCard(BaseModel):
     slug: str
     image_url_list: str | None = None
     image_url_large: str | None = None
-    sample_movie_url: str | None = None
     affiliate_url: str
     price_list: PriceList | None = None
     price_min: int | None = None
@@ -40,7 +39,6 @@ class MovieDetail(BaseModel):
     volume: int | None = None
     image_url_list: str | None = None
     image_url_large: str | None = None
-    sample_movie_url: str | None = None
     sample_embed_url: str | None = None
     affiliate_url: str
     price_list: PriceList | None = None

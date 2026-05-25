@@ -9,8 +9,6 @@ dependencies = [
     "asyncpg>=0.29",
     "pydantic>=2.7",
     "pydantic-settings>=2.2",
-    # extract_mp4_urls.py 用 (ヘッドレスブラウザで MP4 URL を抽出)
-    "playwright>=1.45",
     # scheduler.py 用 (Railway 内常駐 worker で内蔵 cron を回す)
     "apscheduler>=3.10",
     "tzdata>=2024.1",

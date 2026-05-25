@@ -1,9 +1,13 @@
 /**
  * GET /api/v1/movies/{slug}/resolve-mp4 を叩いて、再生可能な MP4 URL を取得する。
  *
- * - force=false (デフォルト): API 側で DB キャッシュ優先。
- * - force=true: <video> が再生エラーになったときのリトライ用。
- *   API 側で DB キャッシュを無視して resolver を呼び直す。
+ * API 側は DB キャッシュを廃止しており、毎回 in-process httpx で DMM の
+ * html5_player ページから抽出する。連打抑制は API 側の in-flight デデュープ
+ * + 60 秒の短期成功キャッシュとクライアント側のメモリキャッシュで二重に行う。
+ *
+ * - force=false (デフォルト): クライアント側 / サーバ側両方のメモリキャッシュ優先。
+ * - force=true: <video> が再生エラーになったときのリトライ用。サーバ側の
+ *   短期キャッシュもバイパスして DMM へ再アクセスさせる。
  *
  * 失敗時は null を返してサムネにフォールバック (例外は投げない)。
  */
@@ -14,7 +18,6 @@ const API_BASE_URL =
 export type ResolveMp4Response = {
   content_id: string | null;
   mp4_url: string;
-  cached: boolean;
 };
 
 /**
@@ -158,7 +161,7 @@ export async function resolveMp4Url(
         const res = await fetch(url, {
           method: "GET",
           // クライアントから直接叩くため Next.js のキャッシュは無効。
-          // API 側で DB キャッシュを持っているのでここでキャッシュする必要はない。
+          // 連打抑制はクライアント・サーバ両方の in-flight デデュープに任せる。
           cache: "no-store",
           // 全 consumer が abort されたら fetch も中断する。
           signal: controller.signal,
@@ -251,20 +254,3 @@ function subscribe(
   });
 }
 
-/**
- * キャッシュされた sample_movie_url をサーバー側で NULL に戻すよう依頼する。
- *
- * <video> が ORB / 404 / その他の理由で再生に失敗したときに叩く。
- * 成功・失敗ともにエラーを抔ぐさない fire-and-forget 専用ヘルパー。
- */
-export async function invalidateSampleUrl(slug: string): Promise<void> {
-  if (!slug) return;
-  // クライアント側メモリキャッシュも同時に無効化 (次回 resolveMp4Url で 新規 URL を取りに行く)。
-  resolveCache.delete(slug);
-  const url = `${API_BASE_URL}/api/v1/movies/${encodeURIComponent(slug)}/sample-url`;
-  try {
-    await fetch(url, { method: "DELETE", cache: "no-store" });
-  } catch {
-    // ネットワークエラーは無視 (次回アクセスでもう一度哼ぁるチャンスがある)
-  }
-}

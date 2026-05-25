@@ -60,13 +60,12 @@ export default function FeedItem({ item, isActive, isAdjacent = false, isFirst, 
   const { isAuthenticated, isBookmarked, toggle } = useBookmarks();
 
   // 表示する動画 URL の解決ロジック。
-  // - cachedSrc を optimistic に使い、無ければ API を叩く
+  // - API (resolve-mp4) を都度叩いて取得する (DB キャッシュ無し)
   // - <video> がエラーを返したら 1 回だけ force=true で再 resolve する
   // 隣接スライド (isAdjacent) でも URL 解決を走らせて、スワイプ到達時に
   // すでに <video> が読み込み済みになっているようにする。
   const { videoSrc, exhausted, handleError } = useResolvedVideoSrc({
     slug: item.slug,
-    cachedSrc: item.sample_movie_url,
     enabled: isActive || isAdjacent,
   });
 

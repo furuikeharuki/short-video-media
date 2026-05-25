@@ -20,10 +20,8 @@ import { useEffect, useRef } from "react";
  *     走らせやすくする。
  *
  * 失敗ハンドリング:
- *   - <video> が onError を発火したら親に通知し、親 hook で
- *     1. DB の sample_movie_url を NULL に戻す (invalidateSampleUrl)
- *     2. force=true で resolver を再呼び出し
- *     をトリガーさせる。これにより、ユーザーがスワイプ到達する前に
+ *   - <video> が onError を発火したら親に通知し、親 hook で force=true で
+ *     resolver を再呼び出しさせる。これにより、ユーザーがスワイプ到達する前に
  *     新しい URL を取得しておける。
  */
 

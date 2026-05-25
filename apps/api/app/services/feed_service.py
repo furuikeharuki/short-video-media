@@ -37,7 +37,6 @@ def _to_card(movie) -> MovieCard:
         slug=movie.slug,
         image_url_list=movie.image_url_list,
         image_url_large=movie.image_url_large,
-        sample_movie_url=movie.sample_movie_url,
         affiliate_url=movie.affiliate_url,
         price_list=price_list,
         price_min=movie.price_min,

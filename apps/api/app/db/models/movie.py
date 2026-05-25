@@ -31,7 +31,10 @@ class Movie(Base):
     # 画像・動画URL
     image_url_list: Mapped[str | None] = mapped_column(String)
     image_url_large: Mapped[str | None] = mapped_column(String)
-    sample_movie_url: Mapped[str | None] = mapped_column(String)
+    # sample_movie_url (MP4 直リンク) は DB に保持しない。
+    # apps/api 側の resolve-mp4 endpoint がユーザー再生時に in-process httpx で
+    # 都度抽出する (DB キャッシュ無し)。トークン寿命管理から解放されるため
+    # 期限切れ問題が原理的に発生しない。
     sample_embed_url: Mapped[str | None] = mapped_column(String)
 
     # アフィリエイト

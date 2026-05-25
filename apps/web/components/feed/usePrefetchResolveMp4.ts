@@ -16,8 +16,6 @@ import { resolveMp4Url } from "@/lib/api/resolve-mp4";
  *
  * 仕様:
  *   - currentIndex+1 〜 currentIndex+PREFETCH_AHEAD のスライドを対象。
- *   - sample_movie_url を既に持っているスライドはスキップ
- *     (optimistic に再生できるので resolver を温める必要がない)。
  *   - レスポンスは捨てる。in-flight デデュープ + 60 秒キャッシュは API 側に任せる。
  *   - currentIndex が変わったら飛んでいる prefetch を abort。
  *   - アンマウント時にも abort。
@@ -41,7 +39,7 @@ export function usePrefetchResolveMp4(
     const inFlight = inFlightRef.current;
 
     // currentIndex が変わった瞬間、まずは対象外になった進行中 prefetch を abort してロードを減らす。
-    // (進行中のものはサーバー側の Playwright は止まらないが、クライアントのオープンソケットは閉じる)。
+    // クライアントのオープンソケットを閉じることで上流のリソースを節約する。
     // その上で PREFETCH_DEBOUNCE_MS 待ってから新規 prefetch を出す。
     const newTargetSlugs = new Set<string>();
     for (let offset = 1; offset <= PREFETCH_AHEAD; offset += 1) {
@@ -49,7 +47,6 @@ export function usePrefetchResolveMp4(
       if (idx >= items.length) break;
       const item = items[idx];
       if (!item) continue;
-      if (item.sample_movie_url) continue;
       if (!item.slug) continue;
       newTargetSlugs.add(item.slug);
     }

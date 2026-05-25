@@ -1,15 +1,13 @@
 # ============================================================================
 # infra/xserver/docker-compose.yml
 # ----------------------------------------------------------------------------
-# Xserver VPS 上で api / resolver / jobs-worker / postgres / Caddy を
-# 起動するための Compose ファイル。Vercel (web) は外部にあるため対象外。
+# Xserver VPS 上で api / jobs-worker / postgres / Caddy を起動するための
+# Compose ファイル。Vercel (web) は外部にあるため対象外。
 #
-# resolver (DMM MP4 URL 抽出 / Playwright) は以前 apps/resolver として独立
-# サービスだったが、apps/api パッケージへ統合済み (app.resolver)。本 compose
-# 内で apps/api/Dockerfile.resolver からビルドする resolver サービスとして
-# 起動する。コードは api と同じパッケージを共有し、resolver サービスのみ
-# Playwright + Chromium を内包する。
-# api → resolver は同 docker network 内の http://resolver:8080 で叩く。
+# DMM サンプル動画 MP4 URL 抽出はかつて Playwright 製の resolver コンテナで
+# 行っていたが、DMM html5_player ページの `var args = {...}` から直接
+# 取り出せることが分かったため、apps/api 内 (httpx) で in-process に解決
+# する方式に切り替え、resolver コンテナは廃止した。
 #
 # 起動:
 #   cd infra/xserver
@@ -101,13 +99,6 @@ services:
       DEPLOY_TARGET: xserver
       PORT: "8000"
       TZ: Asia/Tokyo
-      # resolver は同 compose network 内の `resolver` サービスを指す。
-      # ここはハードコードしておく。`${RESOLVER_BASE_URL:-...}` の形だと .env に
-      # 旧設定 (例: http://host.docker.internal:8080) が残っていた場合に
-      # docker compose の変数展開がそちらを採用してしまい、api コンテナから
-      # DNS 解決できず "Name or service not known" で 502 になる。
-      # 値は env_file (.env) の RESOLVER_BASE_URL を上書きする。
-      RESOLVER_BASE_URL: http://resolver:8080
     # ヘルスチェックは /api/v1/health (200 を返す) を叩く。
     # 旧設定では `/` を叩いていたが、FastAPI 側にルートエンドポイントが
     # なく 404 が返るため urllib.request.urlopen が HTTPError を送出し、
@@ -129,56 +120,6 @@ services:
           memory: 512M
 
   # --------------------------------------------------------------------------
-  # Resolver (Playwright Chromium で DMM litevideo iframe から MP4 URL 抽出)
-  # --------------------------------------------------------------------------
-  # 以前は apps/resolver として独立した FastAPI サービスだったが、
-  # apps/api パッケージ (app.resolver) へ統合済み。本サービスは
-  # apps/api/Dockerfile.resolver (mcr.microsoft.com/playwright/python ベース,
-  # ~2GB) からビルドされ、resolver でのみ Playwright + Chromium を載せる。
-  # api コンテナは引き続き slim Python image (~150MB) のまま。
-  #
-  # メモリ上限: Xserver VPS 2GB プランで Chromium + concurrency=2 を捌くため
-  # 768M を確保。RESOLVER_CONCURRENCY を上げる場合は要見直し。
-  #
-  # 外部公開はしない (expose のみ)。api → resolver は同 network 内の
-  # http://resolver:8080 で到達する。
-  resolver:
-    build:
-      # 通常 api と同じ apps/api コードを使うため、context は apps/api。
-      # Dockerfile.resolver が `COPY pyproject.toml` / `COPY app` を行う。
-      context: ../../apps/api
-      dockerfile: Dockerfile.resolver
-    restart: unless-stopped
-    env_file:
-      - .env
-    environment:
-      TZ: Asia/Tokyo
-      # 同時実行 (Playwright pages). Xserver 2GB なら 2 推奨。
-      RESOLVER_CONCURRENCY: ${RESOLVER_CONCURRENCY:-2}
-      RESOLVER_NAV_TIMEOUT_MS: ${RESOLVER_NAV_TIMEOUT_MS:-15000}
-      RESOLVER_WAIT_VIDEO_TIMEOUT_MS: ${RESOLVER_WAIT_VIDEO_TIMEOUT_MS:-8000}
-      RESOLVER_LOG_LEVEL: ${RESOLVER_LOG_LEVEL:-INFO}
-    expose:
-      - "8080"
-    healthcheck:
-      # resolver の /health は 200 を返す。api 側と同じく明示的に == 200 で判定。
-      # (urllib は 4xx/5xx を例外で投げるため、いずれにせよ非 200 は失敗扱い)
-      test:
-        - "CMD"
-        - "python"
-        - "-c"
-        - "import urllib.request,sys; sys.exit(0) if urllib.request.urlopen('http://127.0.0.1:8080/health', timeout=3).status == 200 else sys.exit(1)"
-      interval: 30s
-      timeout: 5s
-      retries: 5
-      # Chromium 起動に時間がかかるため start_period は長めに。
-      start_period: 60s
-    deploy:
-      resources:
-        limits:
-          memory: 768M
-
-  # --------------------------------------------------------------------------
   # jobs worker (APScheduler 常駐)
   # --------------------------------------------------------------------------
   # Railway の jobs-worker サービスを Xserver に持ってきたもの。
@@ -198,9 +139,6 @@ services:
       APP_ENV: production
       DEPLOY_TARGET: xserver
       TZ: Asia/Tokyo
-      # resolver は同 compose network 内の resolver サービスを指す。
-      # api と同様にハードコード (.env の旧値で上書きされない)。
-      RESOLVER_BASE_URL: http://resolver:8080
       # 起動直後の bootstrap は誤発火を避けるためデフォルト false。
       # 初回データ取り込みが必要な時だけ .env で true にすること。
       SCHEDULER_BOOTSTRAP: ${SCHEDULER_BOOTSTRAP:-false}
@@ -213,10 +151,8 @@ services:
   # --------------------------------------------------------------------------
   # Caddy (reverse proxy + 自動 Let's Encrypt)
   # --------------------------------------------------------------------------
-  # 旧 apps/resolver の Caddy が VPS 上に別途稼働している場合は、本サービスを
-  # 起動せず Caddyfile を旧側に統合するか、別ポート (8443) で待ち受けること。
   # Compose 内には常に置いておき、用途に応じて profiles で起動制御する。
-  # resolver サービスは外部公開しないため、Caddy のリバプロ対象は api のみ。
+  # リバプロ対象は api のみ。
   caddy:
     image: caddy:2-alpine
     restart: unless-stopped

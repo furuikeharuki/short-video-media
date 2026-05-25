@@ -20,8 +20,7 @@ sys.path.insert(0, str(_HERE.parents[1]))
 import os
 
 os.environ.setdefault("DATABASE_URL", "postgresql://u:p@h/db")
-os.environ.setdefault("RESOLVER_BASE_URL", "http://resolver:8080")
-os.environ.setdefault("RESOLVER_API_KEY", "test")
+os.environ.setdefault("DMM_AFFILIATE_ID", "test-affi-001")
 
 from src import resolve_sample_urls as rsu  # noqa: E402
 
@@ -57,7 +56,7 @@ class _FakeSession:
 
 
 def _run(force_all: bool):
-    rows = []  # 空にして resolver 呼び出しが走らないようにする
+    rows = []  # 空にして extractor 呼び出しが走らないようにする
     fake_session_cls = lambda: _FakeSession(rows)  # noqa: E731
 
     fake_engine = MagicMock()

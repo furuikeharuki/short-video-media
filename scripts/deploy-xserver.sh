@@ -91,8 +91,7 @@ log "docker compose up -d..."
 docker compose -f "$COMPOSE_FILE" up -d --remove-orphans $SERVICES
 
 # ---- ヘルスチェック --------------------------------------------------------
-# api と resolver それぞれの healthcheck が healthy になるまで待つ。
-# resolver は Chromium 起動に 30〜60 秒かかるため、api より長めに見る。
+# api の healthcheck が healthy になるまで待つ。
 wait_for_healthy() {
   local svc="$1"
   local max_iter="$2"
@@ -113,11 +112,6 @@ wait_for_healthy() {
 }
 
 wait_for_healthy api 30 || fail "api health check failed"
-# resolver サービスが compose に定義されている場合のみチェック。
-# 未定義の環境 (旧 compose) ではスキップ。
-if docker compose -f "$COMPOSE_FILE" config --services 2>/dev/null | grep -qx 'resolver'; then
-  wait_for_healthy resolver 36 || fail "resolver health check failed"
-fi
 
 # ---- 古いイメージ掃除 -----------------------------------------------------
 # ディスクが枯渇しがちな VPS では重要。dangling のみで安全。

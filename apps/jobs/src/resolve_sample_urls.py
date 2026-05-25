@@ -1,19 +1,21 @@
-"""resolver サービスを HTTP で叩いて movies.sample_movie_url をバックフィルするジョブ。
+"""movies.sample_movie_url をバックフィルするジョブ。
 
 背景:
-    sync_catalog.py は `sample_movie_url=None` で保存し、resolver がユーザー初回再生時に
-    動的に解決する設計だが、初回アクセスのたびに 9 秒待ち (resolver の Playwright
-    実行) が発生してしまう。
+    sync_catalog.py は `sample_movie_url=None` で保存し、解決はユーザー初回
+    再生時に動的に行う設計だが、初回アクセスごとに DMM への 2 リクエスト分
+    のレイテンシが発生する。
 
-    このジョブは `sample_movie_url IS NULL` の movies を対象に、Xserver VPS Tokyo の
-    resolver サービスを HTTP で並列に叩き、MP4 URL を取得して DB に書き戻すことで
-    ユーザー体験を先回りで改善する。
+    このジョブは `sample_movie_url IS NULL` の movies を対象に、apps/api と
+    同じ ``app.resolver.extractor.extract_mp4_url`` (in-process httpx) で
+    MP4 URL を並列抽出して DB に書き戻す。
+
+    かつては Xserver VPS 上の resolver サービスを HTTP で叩いていたが、
+    resolver コンテナを廃止して in-process 抽出に統一した。
 
 実行要件:
     - DATABASE_URL 環境変数
-    - RESOLVER_BASE_URL 環境変数 (e.g. http://162.43.24.128)
-    - RESOLVER_API_KEY 環境変数 (Bearer 認証)
-    - RESOLVER_TIMEOUT_SEC 環境変数 (任意、デフォルト 60)
+    - DMM_AFFILIATE_ID 環境変数
+    - RESOLVER_TIMEOUT_SEC 環境変数 (任意、デフォルト 10)
 
 使い方:
     # NULL の movies を全部処理 (並列度 4)
@@ -38,15 +40,20 @@ import sys
 import time
 from dataclasses import dataclass
 
-import httpx
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 # 直接モデル定義に依存せず、テーブルを最小限触る。
-# apps/api の Movie モデルを再利用するために sys.path を調整する。
+# apps/api の Movie モデル・extractor を再利用するために sys.path を調整する。
 _REPO_ROOT = os.path.normpath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
 sys.path.insert(0, os.path.join(_REPO_ROOT, "apps", "api"))
 from app.db.models.movie import Movie  # noqa: E402
+from app.resolver.extractor import (  # noqa: E402
+    ResolveNotFound,
+    ResolveTimeout,
+    ResolveUpstream,
+    extract_mp4_url,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -65,64 +72,45 @@ class ResolveCounters:
     not_found: int = 0
     timeout: int = 0
     upstream_error: int = 0
-    unavailable: int = 0
     other_error: int = 0
 
     def summary(self) -> str:
         return (
             f"total={self.total} success={self.success} "
             f"not_found={self.not_found} timeout={self.timeout} "
-            f"upstream_error={self.upstream_error} unavailable={self.unavailable} "
-            f"other_error={self.other_error}"
+            f"upstream_error={self.upstream_error} other_error={self.other_error}"
         )
 
 
-async def _call_resolver(
-    client: httpx.AsyncClient,
-    base_url: str,
-    api_key: str,
+async def _call_extractor(
     content_id: str,
+    affiliate_id: str,
     timeout_sec: float,
 ) -> tuple[str | None, str | None]:
-    """resolver を叩いて (mp4_url, error_kind) を返す。"""
-    url = f"{base_url.rstrip('/')}/resolve"
+    """extractor を呼んで (mp4_url, error_kind) を返す。"""
     try:
-        res = await client.post(
-            url,
-            json={"content_id": content_id},
-            headers={"Authorization": f"Bearer {api_key}"},
-            timeout=timeout_sec,
+        result = await extract_mp4_url(
+            content_id=content_id,
+            affiliate_id=affiliate_id,
+            timeout_s=timeout_sec,
         )
-    except httpx.TimeoutException:
+    except ResolveTimeout:
         return None, "timeout"
-    except httpx.HTTPError as e:
-        logger.warning("resolver HTTP error for %s: %s", content_id, e)
-        return None, "unavailable"
-
-    if res.status_code == 404:
+    except ResolveNotFound:
         return None, "not_found"
-    if res.status_code >= 500:
+    except ResolveUpstream as e:
+        logger.warning("upstream error for %s: %s", content_id, e)
         return None, "upstream_error"
-    if res.status_code != 200:
+    except Exception as e:  # pylint: disable=broad-except
+        logger.warning("unexpected error for %s: %s", content_id, e)
         return None, "other_error"
-
-    try:
-        body = res.json()
-    except Exception:
-        return None, "other_error"
-
-    mp4 = body.get("mp4_url") or body.get("url") or None
-    if not mp4:
-        return None, "other_error"
-    return mp4, None
+    return result.mp4_url, None
 
 
 async def _process_one(
     sem: asyncio.Semaphore,
-    client: httpx.AsyncClient,
     Session,
-    base_url: str,
-    api_key: str,
+    affiliate_id: str,
     timeout_sec: float,
     movie_id: str,
     content_id: str,
@@ -132,9 +120,7 @@ async def _process_one(
 ) -> None:
     async with sem:
         t0 = time.monotonic()
-        mp4, err = await _call_resolver(
-            client, base_url, api_key, content_id, timeout_sec
-        )
+        mp4, err = await _call_extractor(content_id, affiliate_id, timeout_sec)
         elapsed = time.monotonic() - t0
 
         if err is not None:
@@ -176,13 +162,10 @@ async def main(
     db_url = os.getenv("DATABASE_URL")
     if not db_url:
         raise SystemExit("DATABASE_URL が設定されていません")
-    base_url = os.getenv("RESOLVER_BASE_URL")
-    if not base_url:
-        raise SystemExit("RESOLVER_BASE_URL が設定されていません")
-    api_key = os.getenv("RESOLVER_API_KEY")
-    if not api_key:
-        raise SystemExit("RESOLVER_API_KEY が設定されていません")
-    timeout_sec = float(os.getenv("RESOLVER_TIMEOUT_SEC", "60"))
+    affiliate_id = os.getenv("DMM_AFFILIATE_ID", "").strip()
+    if not affiliate_id:
+        raise SystemExit("DMM_AFFILIATE_ID が設定されていません")
+    timeout_sec = float(os.getenv("RESOLVER_TIMEOUT_SEC", "10"))
 
     print(
         f"[resolve_sample_urls] start concurrency={concurrency} "
@@ -223,16 +206,15 @@ async def main(
         print("[resolve_sample_urls] nothing to do")
         return
 
-    # resolver を並列に叩く
+    # extractor を並列に呼ぶ
     sem = asyncio.Semaphore(concurrency)
-    async with httpx.AsyncClient() as client:
-        await asyncio.gather(*[
-            _process_one(
-                sem, client, Session, base_url, api_key, timeout_sec,
-                movie_id, content_id, slug, dry_run, counters,
-            )
-            for movie_id, content_id, slug in targets
-        ])
+    await asyncio.gather(*[
+        _process_one(
+            sem, Session, affiliate_id, timeout_sec,
+            movie_id, content_id, slug, dry_run, counters,
+        )
+        for movie_id, content_id, slug in targets
+    ])
 
     await engine.dispose()
     print(f"[resolve_sample_urls] done: {counters.summary()}")
@@ -246,7 +228,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument(
         "--concurrency", type=int, default=4,
-        help="同時並列数 (デフォルト 4、VPS resolver の RESOLVER_CONCURRENCY=8 に合わせる)",
+        help="同時並列数 (デフォルト 4)",
     )
     parser.add_argument(
         "--limit", type=int, default=None,

@@ -30,9 +30,7 @@ on:
   push:
     branches: [main]
     paths:
-      # apps/api 配下には app.resolver (旧 apps/resolver) も含まれる。
-      # apps/resolver は statub と README のみ残しているのでデプロイ条件には
-      # 含めない (commit があってもデプロイは走らない)。
+      # apps/api 配下には app.resolver (DMM MP4 抽出 / in-process httpx) も含まれる。
       - "apps/api/**"
       - "apps/jobs/**"
       - "infra/xserver/**"

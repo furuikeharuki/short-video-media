@@ -138,7 +138,7 @@ def test_run_resolve_sample_urls_defaults(clean_env):
     with patch.object(sched, "resolve_main", mock_main):
         asyncio.run(sched._run_resolve_sample_urls())
     kwargs = mock_main.await_args.kwargs
-    assert kwargs["concurrency"] == 8  # RESOLVE_CONCURRENCY デフォルト
+    assert kwargs["concurrency"] == 4  # RESOLVE_CONCURRENCY デフォルト
     assert kwargs["limit"] is None
     assert kwargs["dry_run"] is False
     assert kwargs["force_all"] is False
@@ -166,7 +166,7 @@ def test_run_resolve_sample_urls_full_refresh_defaults(clean_env):
     with patch.object(sched, "resolve_main", mock_main):
         asyncio.run(sched._run_resolve_sample_urls_full_refresh())
     kwargs = mock_main.await_args.kwargs
-    assert kwargs["concurrency"] == 8
+    assert kwargs["concurrency"] == 4
     assert kwargs["limit"] is None
     assert kwargs["dry_run"] is False
     assert kwargs["force_all"] is True

@@ -30,9 +30,10 @@ async def read_movie(slug: str, db: AsyncSession = Depends(get_db)) -> MovieDeta
 # 背景:
 #   - DMM のサンプル URL は /pv/<token>/<cid>.mp4 形式の動的署名付きに移行しており、
 #     サーバーにスタティックに URL を推測させる旧ロジックが使えない。
-#   - resolver サービス (Xserver VPS) が Playwright で抽出した URL を返す。
+#   - apps/api 内 (httpx) で DMM の html5_player ページから直接抽出する。
+#     以前は Playwright 製の resolver サービスが別ホストで動いていたが廃止済み。
 #   - movies.sample_movie_url をキャッシュとして使い、
-#     空 / force=true なら resolver を呼んで書き戻す。
+#     空 / force=true なら抽出を実行して書き戻す。
 # UX:
 #   - 初回は DB キャッシュをすぐ返す (高速)。
 #   - <video> が再生失敗したら web が force=true でリトライ → 再 resolve。

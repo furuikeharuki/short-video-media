@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useCallback, useState } from "react";
 
-import { createVideoTimer, isVideoTimingEnabled } from "@/lib/videoTiming";
+import { createVideoTimer, isVideoTimingEnabled, vtElementRole } from "@/lib/videoTiming";
 import {
   PRO_ACTRESS_HEAD_SKIP_SEC,
   PRO_ACTRESS_MIN_DURATION_SEC,
@@ -535,9 +535,15 @@ export function useFeedPlayback({ slug, title, isActive, videoSrc, onOpenModal, 
       // タイマー精度の都合で 4.9 のような値も来るので、わずかにマージンを取って判定する
       if (video.currentTime + 0.05 < lower) {
         if (isVideoTimingEnabled()) {
+          // element 識別 (low / high / unknown) を含めて、どの <video> から
+          // enforce が発火したかを後追いで切り分けられるようにする。
+          // active=videoRef.current と一致するなら、再生中の要素が enforce 対象であり、
+          // 一致しない場合は隣接スライドや swap 直後の旧要素 (= low) が発火源と分かる。
+          const role = vtElementRole(video);
+          const isActiveEl = videoRef.current === video;
           // eslint-disable-next-line no-console
           console.debug(
-            `vt ${slug}: pro-actress enforce currentTime=${video.currentTime.toFixed(2)} -> ${lower}`,
+            `vt ${slug}: pro-actress enforce element=${role}${isActiveEl ? "/active" : ""} currentTime=${video.currentTime.toFixed(2)} -> ${lower} paused=${video.paused} rs=${video.readyState}`,
           );
         }
         try { video.currentTime = lower; } catch { /* ignore */ }

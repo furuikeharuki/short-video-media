@@ -6,6 +6,7 @@ import { useBookmarks } from "@/components/auth/BookmarksProvider";
 import { signIn } from "next-auth/react";
 import { useFeedPlayback } from "./feed/useFeedPlayback";
 import { useResolvedVideoSrc } from "./feed/useResolvedVideoSrc";
+import { createVideoTimer, isVideoTimingEnabled } from "@/lib/videoTiming";
 import FeedItemVideo from "./feed/FeedItemVideo";
 import FeedItemMeta from "./feed/FeedItemMeta";
 import FeedItemSideActions from "./feed/FeedItemSideActions";
@@ -244,6 +245,44 @@ export default function FeedItem({ item, isActive, isAdjacent = false, isFirst, 
   useEffect(() => {
     setVideoReadyState(false);
   }, [item.slug, videoSrc]);
+
+  // 開発用: video の lifecycle 時刻を計測してログ出力する。
+  // 本番では isVideoTimingEnabled() が false なので addEventListener しない。
+  useEffect(() => {
+    if (!isVideoTimingEnabled()) return;
+    if (!isActive) return;
+    if (!videoSrc) return;
+    const video = videoRef.current;
+    if (!video) return;
+
+    const timer = createVideoTimer(item.slug);
+    timer.mark("video:src-attached");
+
+    const onLoadStart = () => timer.mark("loadstart");
+    const onLoadedMetadata = () => timer.mark("loadedmetadata");
+    const onCanPlay = () => timer.mark("canplay");
+    const onPlaying = () => timer.mark("playing");
+    const onWaiting = () => timer.mark("waiting");
+    const onStalled = () => timer.mark("stalled");
+    const onError = () => timer.mark("error");
+
+    video.addEventListener("loadstart", onLoadStart);
+    video.addEventListener("loadedmetadata", onLoadedMetadata);
+    video.addEventListener("canplay", onCanPlay);
+    video.addEventListener("playing", onPlaying);
+    video.addEventListener("waiting", onWaiting);
+    video.addEventListener("stalled", onStalled);
+    video.addEventListener("error", onError);
+    return () => {
+      video.removeEventListener("loadstart", onLoadStart);
+      video.removeEventListener("loadedmetadata", onLoadedMetadata);
+      video.removeEventListener("canplay", onCanPlay);
+      video.removeEventListener("playing", onPlaying);
+      video.removeEventListener("waiting", onWaiting);
+      video.removeEventListener("stalled", onStalled);
+      video.removeEventListener("error", onError);
+    };
+  }, [isActive, videoSrc, item.slug, videoRef]);
 
   // 中央のスライド (isActive=true) と隣接スライド (isAdjacent=true) で <video> を描画する。
   // 隣接スライドの <video> は preload="auto" でメディアバイトの先読みを進めておくが、

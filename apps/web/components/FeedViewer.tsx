@@ -423,7 +423,9 @@ export default function FeedViewer({
           key={slot.id}
           slug={slot.slug}
           src={slot.src}
-          preload={isRapidSwiping ? "metadata" : "auto"}
+          // rapid swipe 中は preload を強制的に "metadata" まで弱めて中央 <video> の
+          // 帯域を奪わない。それ以外はスロットごとのポリシー (Chrome=auto / Safari=metadata) を採用。
+          preload={isRapidSwiping ? "metadata" : slot.preload}
           onError={handleSlotError}
         />
       ))}

@@ -3,6 +3,8 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import { resolveMp4Url } from "@/lib/api/resolve-mp4";
+import { ensurePreconnect } from "@/lib/networkPrefs";
+import { createVideoTimer } from "@/lib/videoTiming";
 
 /**
  * フィード上の 1 作品について「実際に再生可能な MP4 URL」を解決して保持する hook。
@@ -100,14 +102,20 @@ export function useResolvedVideoSrc({ slug, enabled }: Args): Result {
 
     const controller = new AbortController();
     inFlightRef.current = controller;
+    const timer = createVideoTimer(slug);
+    timer.mark("resolve:start");
     void resolveMp4Url(slug, { signal: controller.signal })
       .then((res) => {
         if (controller.signal.aborted) {
           return;
         }
         if (res?.mp4_url) {
+          timer.mark("resolve:ok");
+          // 解決した CDN origin (cc3001 系) に dyn preconnect。TCP/TLS を前倒し。
+          ensurePreconnect(res.mp4_url);
           setState({ phase: "ready", src: res.mp4_url });
         } else {
+          timer.mark("resolve:exhausted");
           setState({ phase: "exhausted", src: null });
         }
       })
@@ -142,6 +150,7 @@ export function useResolvedVideoSrc({ slug, enabled }: Args): Result {
       .then((res) => {
         if (controller.signal.aborted) return;
         if (res?.mp4_url) {
+          ensurePreconnect(res.mp4_url);
           setState({ phase: "ready", src: res.mp4_url });
           return;
         }

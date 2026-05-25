@@ -208,7 +208,10 @@ export function usePrefetchVideoBytes(
       vtPrefetchLog(
         `slot index=${currentIndex + target.offset} slug=${target.slug} offset=+${target.offset} mode=${policy.preload} immediate=${immediate}`,
       );
-      void resolveMp4Url(target.slug, { signal: controller.signal })
+      void resolveMp4Url(target.slug, {
+        signal: controller.signal,
+        priority: "normal",
+      })
         .then((res) => {
           if (controller.signal.aborted) return;
           if (!res?.mp4_url) return;
@@ -288,7 +291,11 @@ export function usePrefetchVideoBytes(
       const controller = new AbortController();
       inFlightRef.current.set(slug, controller);
 
-      void resolveMp4Url(slug, { force: true, signal: controller.signal })
+      void resolveMp4Url(slug, {
+        force: true,
+        signal: controller.signal,
+        priority: "high",
+      })
         .then((res) => {
           if (controller.signal.aborted) return;
           if (!res?.mp4_url) return;

@@ -22,27 +22,27 @@ import { isVideoTimingEnabled } from "@/lib/videoTiming";
  *   - 共通の `resolveMp4Url` を使うため、近距離 prefetch / active 再生と
  *     完全に同じ in-flight デデュープ + resolveCache に乗る。
  *     片方が走っていればもう片方は即タダ乗り。
- *   - 同時実行は 2 本まで (WARM_CONCURRENCY)。近距離 prefetch を邪魔しないよう
- *     warm 専用のローカルキューで絞る (resolveMp4Url 側のグローバル
- *     `MAX_CONCURRENT_FETCHES=8` の中で 2 枠を消費する形)。
+ *   - 同時実行制御は `resolveMp4Url` 側の優先度別スロット (priority="low" は
+ *     `MAX_CONCURRENT_LOW=2` で絞られる) に任せる。本 hook 側で重ねて throttling
+ *     しない。ログ上は「`queued`: resolveMp4Url 呼び出し時点」「`start`: 実 HTTP
+ *     fetch が始まった瞬間 (onStart 通知)」を分けて出す。
  *   - rapid swipe 中 / Save-Data / 2g・slow-2g は完全停止 (近距離 prefetch と
  *     同じ判定を `getPrefetchPolicy().aheadCount === 0` で借用)。
  *   - currentIndex が変わったら、新窓に入っていない warm ジョブは abort/skip。
  *   - 同一 slug の resolve 成功は記憶し、再スケジュールしない。失敗は
  *     `FAILURE_TTL_MS` 後に再試行可能に戻す (近距離 prefetch と同方針)。
- *   - ログは `?vt=1` 時のみ。1 スケジューリングで実際に start/skip した
+ *   - ログは `?vt=1` 時のみ。1 スケジューリングで実際に queue/start/skip した
  *     ものだけ出す (毎レンダーで吐かない)。
  */
 
 const WARM_START = 6;
 const WARM_END = 15;
-const WARM_CONCURRENCY = 2;
 const FAILURE_TTL_MS = 30_000;
 /**
- * バッチ内の各 warm resolve 起動間に挟む小休止。
- * 解決済みなら 0 ms 即ヒットだが、未解決のときに 2 本同時 + 隣接 prefetch が
- * 重なるとサーバ側の DMM html5_player 取得が混んで 504 になりやすいので、
- * バッチを少しズラして体感の帯域を残す。
+ * バッチ内で resolveMp4Url を呼び出す間に挟む小休止。
+ * 同 slug が active や近距離 prefetch とぶつかると in-flight 共有でタダ乗りされるが、
+ * 未解決の遠距離 slug が一気に 10 枚キュー投入されるとログの可読性が落ちるので
+ * スタガーを残す。実 HTTP 同時実行は resolve-mp4 側の low-priority cap (2) で絞られる。
  */
 const WARM_STAGGER_MS = 150;
 
@@ -140,9 +140,6 @@ export function useWarmResolveMp4(
 
     let cancelled = false;
     const timers: ReturnType<typeof setTimeout>[] = [];
-    /** warm 専用の同時実行カウンタ。最大 WARM_CONCURRENCY。 */
-    let running = 0;
-    let nextIdx = 0;
 
     const fire = (target: Target) => {
       if (cancelled) return;
@@ -152,16 +149,27 @@ export function useWarmResolveMp4(
         vtWarmLog(
           `resolve skip cached index=${target.index} offset=+${target.offset} slug=${target.slug}`,
         );
-        pump();
         return;
       }
       const controller = new AbortController();
       inFlight.set(target.slug, controller);
-      running += 1;
       vtWarmLog(
-        `resolve start index=${target.index} offset=+${target.offset} slug=${target.slug}`,
+        `resolve queued index=${target.index} offset=+${target.offset} slug=${target.slug}`,
       );
-      void resolveMp4Url(target.slug, { signal: controller.signal })
+      void resolveMp4Url(target.slug, {
+        signal: controller.signal,
+        priority: "low",
+        onStart: () => {
+          vtWarmLog(
+            `resolve start index=${target.index} offset=+${target.offset} slug=${target.slug}`,
+          );
+        },
+        onReuse: (kind) => {
+          vtWarmLog(
+            `resolve reuse=${kind} index=${target.index} offset=+${target.offset} slug=${target.slug}`,
+          );
+        },
+      })
         .then((res) => {
           if (controller.signal.aborted) return;
           const got = !!res?.mp4_url;
@@ -186,28 +194,19 @@ export function useWarmResolveMp4(
           if (inFlight.get(target.slug) === controller) {
             inFlight.delete(target.slug);
           }
-          running -= 1;
-          pump();
         });
     };
 
-    /** WARM_CONCURRENCY 枠まで埋めるディスパッチャ。 */
-    const pump = () => {
-      if (cancelled) return;
-      while (running < WARM_CONCURRENCY && nextIdx < pending.length) {
-        const target = pending[nextIdx];
-        nextIdx += 1;
-        // 2 本目以降は少しスタガーを挟んで一気にバーストしない。
-        if (running === 0 && nextIdx === 1) {
-          fire(target);
-        } else {
-          const t = setTimeout(() => fire(target), WARM_STAGGER_MS);
-          timers.push(t);
-        }
+    // 全候補を一度にキュー投入する (resolveMp4Url 側 low-priority cap=2 が実 HTTP 並列を絞る)。
+    // 1 件目は即発火、以降はスタガーを挟んでログを散らす。
+    pending.forEach((target, i) => {
+      if (i === 0) {
+        fire(target);
+      } else {
+        const t = setTimeout(() => fire(target), WARM_STAGGER_MS * i);
+        timers.push(t);
       }
-    };
-
-    pump();
+    });
 
     return () => {
       cancelled = true;

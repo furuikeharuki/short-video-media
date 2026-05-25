@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useCallback, useState } from "react";
 
-import { createVideoTimer, isVideoTimingEnabled, vtElementRole } from "@/lib/videoTiming";
+import { createVideoTimer, isVideoTimingEnabled } from "@/lib/videoTiming";
 import {
   PRO_ACTRESS_HEAD_SKIP_SEC,
   PRO_ACTRESS_MIN_DURATION_SEC,
@@ -73,11 +73,7 @@ export function useFeedPlayback({ slug, title, isActive, videoSrc, onOpenModal, 
   // 初回マウント時に一回だけショートボタンフラグを消費
   consumeStartUnmutedFlag();
 
-  // dual-video 戦略 (useLowFirstVideoSrc) で、low → high の crossfade と同時に
-  // 親の videoRef.current を high <video> 要素に付け替えるため、null 許容の
-  // mutable ref として宣言する。`useRef<T>(null)` だと RefObject<T> (read-only `.current`)
-  // になるが、`useRef<T | null>(null)` で MutableRefObject<T | null> になる。
-  const videoRef     = useRef<HTMLVideoElement | null>(null);
+  const videoRef     = useRef<HTMLVideoElement>(null);
   const sectionRef   = useRef<HTMLElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const shimmerRef   = useRef<HTMLDivElement>(null);
@@ -109,15 +105,6 @@ export function useFeedPlayback({ slug, title, isActive, videoSrc, onOpenModal, 
   const pcClickTimerRef          = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const [isMuted,      setIsMuted]      = useState(globalIsMuted);
-  // dual-video スワップで `videoRef.current` が low → high に付け替わったときに、
-  // プロ女優スキップ用のイベントリスナを新しい要素に張り直すためのバージョン番号。
-  // useLowFirstVideoSrc が `notifyVideoElementChange` を呼ぶたびにインクリメントされる。
-  // この値を プロ女優スキップ effect の deps に含めることで、当該 effect が再実行されて
-  // クリーンアップで旧要素から外し、再度新要素 (= videoRef.current) にリスナを張れる。
-  const [videoElementVersion, setVideoElementVersion] = useState(0);
-  const notifyVideoElementChange = useCallback(() => {
-    setVideoElementVersion((v) => v + 1);
-  }, []);
 
   // プロ女優スキップを適用すべきかどうかを ref に保持。<video> ごとの動的判定で、
   // メタデータロード後に duration を見て確定する (短すぎる動画は無効化)。
@@ -401,11 +388,9 @@ export function useFeedPlayback({ slug, title, isActive, videoSrc, onOpenModal, 
   }, [isActive]);
 
   // 親 (FeedViewer) で isActive=true になったタイミングで自動再生を試みる。
-  // <video> 要素は isActive && currentSrc !== null のときだけマウントされるため、resolver で URL を遅延
-  // 取得したケースでは isActive=true / videoSrc=URL になった時点でもまだ videoRef.current は null。
-  // そのため deps に videoSrc に加えて videoElementVersion を含め、useLowFirstVideoSrc の
-  // lowVideoCallbackRef が「null → 要素」遷移で notifyVideoElementChange() を呼んだ直後にも
-  // effect を再実行させ、resolve 後の自動再生取りこぼしを防ぐ。
+  // <video> 要素は isActive && videoSrc !== null のときだけマウントされるため、resolver
+  // で URL を遅延取得したケースでも videoSrc を deps に含めることで、URL 到着・<video>
+  // マウント直後に effect を再実行して自動再生を起動する。
   // 同じ src での再マウントやスクロールでの再アクティブ化もこれでカバーされる。
   useEffect(() => {
     if (!isActive) return;
@@ -435,7 +420,7 @@ export function useFeedPlayback({ slug, title, isActive, videoSrc, onOpenModal, 
       return;
     }
     playVideo(video, false);
-  }, [isActive, videoSrc, playVideo, videoElementVersion]);
+  }, [isActive, videoSrc, playVideo]);
 
   // videoSrc が変わったとき (新しい <video> と同じだが src だけ差し替わったときも含む) は
   // hasPlayedRef を false にリセットして、初回ロード (loadstart) ではサムネを出せるようにする。
@@ -535,15 +520,9 @@ export function useFeedPlayback({ slug, title, isActive, videoSrc, onOpenModal, 
       // タイマー精度の都合で 4.9 のような値も来るので、わずかにマージンを取って判定する
       if (video.currentTime + 0.05 < lower) {
         if (isVideoTimingEnabled()) {
-          // element 識別 (low / high / unknown) を含めて、どの <video> から
-          // enforce が発火したかを後追いで切り分けられるようにする。
-          // active=videoRef.current と一致するなら、再生中の要素が enforce 対象であり、
-          // 一致しない場合は隣接スライドや swap 直後の旧要素 (= low) が発火源と分かる。
-          const role = vtElementRole(video);
-          const isActiveEl = videoRef.current === video;
           // eslint-disable-next-line no-console
           console.debug(
-            `vt ${slug}: pro-actress enforce element=${role}${isActiveEl ? "/active" : ""} currentTime=${video.currentTime.toFixed(2)} -> ${lower} paused=${video.paused} rs=${video.readyState}`,
+            `vt ${slug}: pro-actress enforce currentTime=${video.currentTime.toFixed(2)} -> ${lower} paused=${video.paused} rs=${video.readyState}`,
           );
         }
         try { video.currentTime = lower; } catch { /* ignore */ }
@@ -609,21 +588,12 @@ export function useFeedPlayback({ slug, title, isActive, videoSrc, onOpenModal, 
       video.removeEventListener("seeked", handleSeeked);
       video.removeEventListener("ended", handleEnded);
     };
-  }, [slug, videoSrc, isProActress, playVideo, videoElementVersion]);
+  }, [slug, videoSrc, isProActress, playVideo]);
 
   // 再生中の読み込み停滞 (waiting/stalled) と、再生再開 (playing/canplaythrough) を検知して
   // スピナーの表示・非表示を切り替える。isActive 中のときだけビデオ要素が
   // 存在するため、それに依存したイベントリスナをその単位で貼り替える。
-  //
-  // 重要: dual-video スワップ (useLowFirstVideoSrc) で videoRef.current が
-  // low → high に付け替わったときは、effect が再実行されて新しい high <video> に
-  // 張り直す。ただし high はスワップ起動時点ですでに `playing` 状態になっており、
-  // 再バインド後に追加で `playing` イベントが飛ぶ保証はない。そのため
-  // 「再バインド時点の active 要素が既に再生中なら即座にスピナーを消す」
-  // 同期チェックを必ず走らせる。これを入れないと、
-  //   - スワップ前に low 側で waiting で出ていたスピナー
-  //   - 初期 JSX の display:flex のまま残ったスピナー
-  // が high 再生中に消えず、「音声はなっているのに画面はロード中」状態になる。
+  // 再バインド時点で既に再生中ならスピナーを即消ししておく。
   useEffect(() => {
     if (!isActive) return;
     const video = videoRef.current;
@@ -668,13 +638,7 @@ export function useFeedPlayback({ slug, title, isActive, videoSrc, onOpenModal, 
     video.addEventListener("stalled", handleStalled);
 
     // 再バインド時の同期チェック。
-    // active 要素 (= 視覚的に表示中で音声を出す方) がすでに「実質再生中」なら
-    // スピナーを必ず消す。dual-video スワップ後の高画質 <video> がここに該当する。
-    //   - paused が false
-    //   - readyState >= HAVE_CURRENT_DATA (= 2、現在の 1 フレームをデコード済み)
-    // の両方を満たすときに即座にスピナーを消す。
-    //
-    // 逆に paused 中・readyState 不足のときは何もしない (waiting/stalled の通常経路に任せる)。
+    // paused=false かつ readyState >= HAVE_CURRENT_DATA (=2) なら即スピナーを消す。
     if (!video.paused && video.readyState >= 2) {
       const shimmer = shimmerRef.current;
       if (shimmer) shimmer.style.display = "none";
@@ -693,7 +657,7 @@ export function useFeedPlayback({ slug, title, isActive, videoSrc, onOpenModal, 
       video.removeEventListener("canplaythrough", handleCanPlayThrough);
       video.removeEventListener("stalled", handleStalled);
     };
-  }, [isActive, setSpinnerVisible, videoElementVersion, slug]);
+  }, [isActive, setSpinnerVisible, slug]);
 
   // フォールバック: 念のため IntersectionObserver でも監視する。
   // (端末向きを変えたときや SSR ハイドレート直後など、isActive prop の同期前に発火するケースに備える)
@@ -926,11 +890,5 @@ export function useFeedPlayback({ slug, title, isActive, videoSrc, onOpenModal, 
     handleMouseUp,
     handleMouseLeave,
     handlePcClick,
-    /**
-     * dual-video スワップで `videoRef.current` の指す DOM 要素が変わった直後に
-     * 呼び出すコールバック。プロ女優スキップ / 再生スピナー effect の deps を
-     * 進めて再実行させ、新しい要素にイベントリスナを張り直す。
-     */
-    notifyVideoElementChange,
   };
 }

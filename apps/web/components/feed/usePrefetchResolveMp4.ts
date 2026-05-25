@@ -4,59 +4,62 @@ import { useEffect, useRef } from "react";
 
 import type { MovieCard } from "@/lib/api/feed";
 import { resolveMp4Url } from "@/lib/api/resolve-mp4";
+import { isVideoTimingEnabled } from "@/lib/videoTiming";
 
 /**
- * 現在再生中のスライドより先 N 枚分の MP4 URL を resolver に事前解決させておく hook。
+ * 現在のスライド (active) + 直後 N 枚分の MP4 URL を resolver に事前解決させておく hook。
  *
- * 目的:
- *   - ユーザーがスワイプして次のスライドに到達した瞬間に再生が始まるよう、
- *     resolver の 1 時間成功キャッシュを温めておく。
- *   - <video> 要素は増やさない (モバイル Safari の同時接続上限を避けるため
- *     WINDOW_SIZE=1 を維持)。あくまで API レスポンスのキャッシュだけ温める。
+ * 単一 <video> 戦略への移行に伴い、低画質ファースト戦略は撤去された。
+ * 代わりに resolve 先読みを priority-based に強化し、ユーザーの再生体感を改善する:
+ *
+ *   - active (priority=0) は高速スワイプ中でも即座に発火。ユーザーが今見ている
+ *     スライドの resolve が一番大事。`useResolvedVideoSrc` 側でも resolve は走るが、
+ *     そちらは <video> マウント後に動くため、active を本 hook で先取りすると
+ *     並列で resolve が始まり早く着地できる。
+ *   - active + 1..PREFETCH_AHEAD (priority>=1) は高速スワイプが落ち着いてから
+ *     `PREFETCH_DEBOUNCE_MS` 後に順次発火。
  *
  * 仕様:
- *   - currentIndex+1 〜 currentIndex+PREFETCH_AHEAD のスライドを対象。
- *   - レスポンスは捨てる。in-flight デデュープ + 1 時間キャッシュは API 側に任せる。
- *   - currentIndex が変わったら飛んでいる prefetch を abort。
- *   - 高速スワイプ中 (isRapidSwiping) は新規 prefetch を発火しない。
- *     スワイプ速度が落ち着いて isRapidSwiping=false に戻り、さらに
- *     PREFETCH_DEBOUNCE_MS 静止してから初めて prefetch を実行する。
- *   - アンマウント時にも abort。
+ *   - in-flight デデュープと並列度上限は `resolveMp4Url` 側で管理 (resolveCache /
+ *     MAX_CONCURRENT_FETCHES)。本 hook ではそれを尊重するだけ。
+ *   - currentIndex が変わったら、対象外になった prefetch は abort して帯域を節約。
+ *   - キャッシュ済み URL は `resolveMp4Url` が即返すので、本 hook の発火コストはほぼゼロ。
+ *   - アンマウント時に全 prefetch を abort。
  */
 
-// currentIndex の +1 〜 +5 を事前解決。API 側の 1 時間キャッシュと
-// クライアント側 in-flight デデュープにより、再訪時の追加コストはほぼゼロ。
 const PREFETCH_AHEAD = 5;
-// スクロール停止デバウンス: currentIndex がこの期間変わらなかったら「スクロール停止」とみなして prefetch を起動する。
-// これを入れないと、20 枚一気スクロールしたときに 100 件以上の resolve リクエストが resolver VPS にキューイングして、
-// 実際に見ているスライドの resolve がキューの後ろに回されて遅くなる。
-// isRapidSwiping ガードと併用することで、「高速スワイプ → スワイプ速度が落ち着く →
-// さらに 400ms 静止 → ようやく prefetch」という二段ガードになる。
 const PREFETCH_DEBOUNCE_MS = 400;
+
+function vtPrefetchLog(message: string) {
+  if (!isVideoTimingEnabled()) return;
+  // eslint-disable-next-line no-console
+  console.debug(`vt prefetch ${message}`);
+}
 
 export function usePrefetchResolveMp4(
   items: MovieCard[],
   currentIndex: number,
   isRapidSwiping: boolean = false,
 ): void {
-  // 同時に飛ばしている prefetch を slug -> AbortController で管理。
   const inFlightRef = useRef<Map<string, AbortController>>(new Map());
 
   useEffect(() => {
     const inFlight = inFlightRef.current;
 
-    // currentIndex が変わった瞬間、まずは対象外になった進行中 prefetch を abort してロードを減らす。
-    // クライアントのオープンソケットを閉じることで上流のリソースを節約する。
-    // その上で PREFETCH_DEBOUNCE_MS 待ってから新規 prefetch を出す。
-    const newTargetSlugs = new Set<string>();
-    for (let offset = 1; offset <= PREFETCH_AHEAD; offset += 1) {
+    // 対象: priority=0 (active) と priority=1..PREFETCH_AHEAD。
+    // priority=0 は高速スワイプ中でも即発火、priority>=1 はデバウンス待ちで発火。
+    type Target = { slug: string; priority: number };
+    const targets: Target[] = [];
+    for (let offset = 0; offset <= PREFETCH_AHEAD; offset += 1) {
       const idx = currentIndex + offset;
-      if (idx >= items.length) break;
+      if (idx < 0 || idx >= items.length) continue;
       const item = items[idx];
-      if (!item) continue;
-      if (!item.slug) continue;
-      newTargetSlugs.add(item.slug);
+      if (!item || !item.slug) continue;
+      targets.push({ slug: item.slug, priority: offset });
     }
+    const newTargetSlugs = new Set(targets.map((t) => t.slug));
+
+    // 対象外になった進行中 prefetch を abort。
     for (const [slug, controller] of inFlight.entries()) {
       if (!newTargetSlugs.has(slug)) {
         controller.abort();
@@ -64,25 +67,52 @@ export function usePrefetchResolveMp4(
       }
     }
 
-    // 高速スワイプ中は currentIndex が刻々と変わる。新規 prefetch は走らせず、
-    // スワイプ停止後に改めてこの effect が走るのを待つ。古い prefetch は上の
-    // ループで abort 済み。
+    // active (priority=0) は常に即発火。高速スワイプ中でも遅らせない。
+    const active = targets.find((t) => t.priority === 0);
+    if (active && !inFlight.has(active.slug)) {
+      const controller = new AbortController();
+      inFlight.set(active.slug, controller);
+      vtPrefetchLog(`resolve start index=${currentIndex} priority=0 slug=${active.slug}`);
+      void resolveMp4Url(active.slug, { signal: controller.signal })
+        .then((res) => {
+          if (controller.signal.aborted) return;
+          vtPrefetchLog(
+            `resolve ok index=${currentIndex} priority=0 slug=${active.slug} got=${!!res?.mp4_url}`,
+          );
+        })
+        .finally(() => {
+          if (inFlight.get(active.slug) === controller) {
+            inFlight.delete(active.slug);
+          }
+        });
+    }
+
+    // priority>=1 は高速スワイプ中は発火しない。落ち着いてから debounce 経過後に発火。
     if (isRapidSwiping) {
       return;
     }
 
-    // デバウンス: 一定時間 currentIndex が変らなければ、その時点で対象の prefetch を発火する。
-    // デバウンス中に currentIndex が進んだ場合 は setTimeout の cleanup でキャンセルされる。
+    const upcoming = targets.filter((t) => t.priority >= 1);
     const timer = setTimeout(() => {
-      for (const slug of newTargetSlugs) {
-        if (inFlight.has(slug)) continue;
+      for (const target of upcoming) {
+        if (inFlight.has(target.slug)) continue;
         const controller = new AbortController();
-        inFlight.set(slug, controller);
-        void resolveMp4Url(slug, { signal: controller.signal }).finally(() => {
-          if (inFlight.get(slug) === controller) {
-            inFlight.delete(slug);
-          }
-        });
+        inFlight.set(target.slug, controller);
+        vtPrefetchLog(
+          `resolve start index=${currentIndex + target.priority} priority=${target.priority} slug=${target.slug}`,
+        );
+        void resolveMp4Url(target.slug, { signal: controller.signal })
+          .then((res) => {
+            if (controller.signal.aborted) return;
+            vtPrefetchLog(
+              `resolve ok index=${currentIndex + target.priority} priority=${target.priority} slug=${target.slug} got=${!!res?.mp4_url}`,
+            );
+          })
+          .finally(() => {
+            if (inFlight.get(target.slug) === controller) {
+              inFlight.delete(target.slug);
+            }
+          });
       }
     }, PREFETCH_DEBOUNCE_MS);
 
@@ -91,7 +121,6 @@ export function usePrefetchResolveMp4(
     };
   }, [items, currentIndex, isRapidSwiping]);
 
-  // アンマウント時に全 prefetch を abort。
   useEffect(() => {
     const inFlight = inFlightRef.current;
     return () => {

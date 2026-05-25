@@ -129,6 +129,14 @@ export function useLowFirstVideoSrc({
   // すべて満たした時点で swap を発火するためのフラグ。
   const highReadyRef = useRef(false);
   const highSyncedRef = useRef(false);
+  // 直近のシーク先 (target) 秒数。`seeked` / `timeupdate` で high.currentTime がここに
+  // 到達してから swap する。プロ女優 (minStartTime>0) ケースで、0 秒のフレームが
+  // crossfade の瞬間に一瞬見えるのを防ぐ。
+  const highSeekTargetRef = useRef<number | null>(null);
+  // high.currentTime が target を満たしているか (= 「先頭 5 秒未満」状態を抜けたか)。
+  const highAtTargetRef = useRef(false);
+  // dev timing 計測用: シーク開始ログを 1 回だけ出すフラグ。
+  const highSeekStartLoggedRef = useRef(false);
   // 直近の slug 値。slug 変更で内部状態を全リセット。
   const lastSlugRef = useRef(slug);
 
@@ -141,6 +149,9 @@ export function useLowFirstVideoSrc({
       swappedRef.current = false;
       highReadyRef.current = false;
       highSyncedRef.current = false;
+      highSeekTargetRef.current = null;
+      highAtTargetRef.current = false;
+      highSeekStartLoggedRef.current = false;
       setHighVideoSrc(null);
       setShowHigh(false);
       setCurrentSrc(lowSrc ?? null);
@@ -197,17 +208,46 @@ export function useLowFirstVideoSrc({
     // currentTime が 0 付近のことがあるため、最低でも minStartTime まで持ち上げる。
     // そうしないと high <video> が 0 秒から再生し、crossfade 直後に一瞬 5 秒未満が見える。
     if (Number.isFinite(low.currentTime) && Number.isFinite(high.duration) && high.duration > 0) {
-      const desired = Math.max(minStartTime, low.currentTime);
+      const lowT = Number.isFinite(low.currentTime) ? low.currentTime : 0;
+      // プロ女優ケースで low.currentTime が 0/未確定なら、必ず minStartTime まで持ち上げる。
+      const baseline = lowT > 0 ? lowT : minStartTime;
+      const desired = Math.max(minStartTime, baseline);
       const target = Math.min(desired, Math.max(0, high.duration - 0.05));
-      // 既に近い位置にあればシークしない (微小な currentTime の差はそのまま許容)。
-      if (Math.abs(high.currentTime - target) > 0.25) {
+      highSeekTargetRef.current = target;
+      // すでに target に到達しているなら seek 不要 (微小な差は許容)。
+      if (Math.abs(high.currentTime - target) <= 0.25) {
+        highAtTargetRef.current = true;
+      } else {
         try {
+          if (isVideoTimingEnabled() && !highSeekStartLoggedRef.current) {
+            highSeekStartLoggedRef.current = true;
+            // eslint-disable-next-line no-console
+            console.debug(
+              `vt ${slug}: high seek start target=${target.toFixed(2)} (low=${lowT.toFixed(2)} min=${minStartTime})`,
+            );
+          }
           high.currentTime = target;
         } catch {
           /* readyState 不足 */
         }
       }
       highSyncedRef.current = true;
+    } else if (minStartTime > 0) {
+      // duration がまだ取れていなくても、ベストエフォートで minStartTime にセット。
+      // 一部ブラウザは loadedmetadata 前の currentTime 代入を silently accept する。
+      highSeekTargetRef.current = minStartTime;
+      try {
+        if (isVideoTimingEnabled() && !highSeekStartLoggedRef.current) {
+          highSeekStartLoggedRef.current = true;
+          // eslint-disable-next-line no-console
+          console.debug(
+            `vt ${slug}: high seek start (pre-metadata) target=${minStartTime}`,
+          );
+        }
+        high.currentTime = minStartTime;
+      } catch {
+        /* ignore */
+      }
     }
     // ミュート / playbackRate / loop / playsInline を low に合わせる。
     try {
@@ -232,7 +272,7 @@ export function useLowFirstVideoSrc({
         });
       }
     }
-  }, [minStartTime]);
+  }, [minStartTime, slug]);
 
   // 「ロード完了 (canplay) して、かつ playing が来ている」を満たしたタイミングで crossfade。
   // playing が来る前に crossfade すると hidden 側が黒画面を表示してしまう可能性があるため、
@@ -262,15 +302,34 @@ export function useLowFirstVideoSrc({
     // 必ず minStartTime まで持ち上げ、5 秒スキップ仕様を crossfade 後も維持する。
     if (!highSyncedRef.current && Number.isFinite(high.duration) && high.duration > 0) {
       try {
-        const desired = Math.max(minStartTime, low.currentTime);
+        const lowT = Number.isFinite(low.currentTime) ? low.currentTime : 0;
+        const baseline = lowT > 0 ? lowT : minStartTime;
+        const desired = Math.max(minStartTime, baseline);
         const target = Math.min(desired, Math.max(0, high.duration - 0.05));
+        highSeekTargetRef.current = target;
         if (Math.abs(high.currentTime - target) > 0.25) {
           high.currentTime = target;
+        } else {
+          highAtTargetRef.current = true;
         }
       } catch {
         /* ignore */
       }
       highSyncedRef.current = true;
+    }
+
+    // プロ女優 (minStartTime > 0) ケースでは、high が target に到達するまで swap しない。
+    // - target が未確定 (duration NaN) なら、ベストエフォートで minStartTime と比較。
+    // - すでに到達済み (highAtTargetRef) なら通す。
+    // - currentTime が target - tolerance を下回るならまだ早い → 後続の seeked / timeupdate で
+    //   再試行させる (このまま return しても、retry リスナや seeked ハンドラがリトリガする)。
+    if (minStartTime > 0) {
+      const target = highSeekTargetRef.current ?? minStartTime;
+      const cur = Number.isFinite(high.currentTime) ? high.currentTime : 0;
+      if (!highAtTargetRef.current && cur + 0.05 < target) {
+        return;
+      }
+      highAtTargetRef.current = true;
     }
 
     // 低画質側の状態 (muted / playbackRate / paused) を引き継ぐ。
@@ -373,6 +432,75 @@ export function useLowFirstVideoSrc({
     };
   }, [enabled, highVideoSrc, swapToHigh]);
 
+  // 高画質 <video> 側でも minStartTime を強制する。loadedmetadata / seeking / timeupdate /
+  // play で currentTime < minStartTime を検知したら minStartTime に戻す。
+  // crossfade 前に「0 秒のフレーム」が一瞬でも見えないように、high <video> 自身が
+  // 先頭 5 秒の手前に居続けないようガードする。
+  useEffect(() => {
+    if (minStartTime <= 0) return;
+    const high = highVideoRef.current;
+    if (!high) return;
+
+    const enforce = () => {
+      if (swappedRef.current) return;
+      // duration を取得済みでないと比較できない
+      if (!Number.isFinite(high.duration) || high.duration <= minStartTime + 0.05) return;
+      if (high.currentTime + 0.05 < minStartTime) {
+        try {
+          high.currentTime = minStartTime;
+        } catch {
+          /* ignore */
+        }
+      } else {
+        highAtTargetRef.current = true;
+      }
+    };
+    const onSeeked = () => {
+      if (swappedRef.current) return;
+      const target = highSeekTargetRef.current ?? minStartTime;
+      if (Number.isFinite(high.currentTime) && high.currentTime + 0.05 >= target) {
+        highAtTargetRef.current = true;
+        if (isVideoTimingEnabled()) {
+          // eslint-disable-next-line no-console
+          console.debug(
+            `vt ${slug}: high seek done currentTime=${high.currentTime.toFixed(2)} target=${target.toFixed(2)}`,
+          );
+        }
+        // target 到達後にすぐ swap を試みる (high が playing なら crossfade 即発火)。
+        swapToHigh();
+      } else {
+        enforce();
+      }
+    };
+    const onTimeUpdate = () => {
+      if (swappedRef.current) return;
+      if (!highAtTargetRef.current) {
+        const target = highSeekTargetRef.current ?? minStartTime;
+        if (Number.isFinite(high.currentTime) && high.currentTime + 0.05 >= target) {
+          highAtTargetRef.current = true;
+          // ここでも swap をリトライ (canplay→playing が target 前に来た場合の回収経路)。
+          swapToHigh();
+        }
+      }
+      enforce();
+    };
+
+    high.addEventListener("loadedmetadata", enforce);
+    high.addEventListener("seeking", enforce);
+    high.addEventListener("play", enforce);
+    high.addEventListener("seeked", onSeeked);
+    high.addEventListener("timeupdate", onTimeUpdate);
+    // 初期評価
+    enforce();
+    return () => {
+      high.removeEventListener("loadedmetadata", enforce);
+      high.removeEventListener("seeking", enforce);
+      high.removeEventListener("play", enforce);
+      high.removeEventListener("seeked", onSeeked);
+      high.removeEventListener("timeupdate", onTimeUpdate);
+    };
+  }, [minStartTime, slug, highVideoSrc, swapToHigh]);
+
   // 高画質 <video> イベントハンドラ。
   const handleProbeCanPlay = useCallback(() => {
     if (swappedRef.current) return;
@@ -380,6 +508,7 @@ export function useLowFirstVideoSrc({
     trySyncAndPlay();
     // ブラウザによっては playing イベントが来ない (即時 paused のまま) ケースがある。
     // canplay で readyState >= HAVE_FUTURE_DATA なら crossfade してしまって良い。
+    // ただし minStartTime > 0 のときは swapToHigh 内で target 未到達ならガードされる。
     const high = highVideoRef.current;
     if (high && high.readyState >= 3) {
       // HAVE_FUTURE_DATA 以上 → playing イベントを待たずに crossfade 可能
@@ -410,12 +539,21 @@ export function useLowFirstVideoSrc({
   // 親 (useFeedPlayback) の共有 videoRef は、まだ swap していない間は low 要素を指す。
   const lowVideoCallbackRef = useCallback(
     (el: HTMLVideoElement | null) => {
+      const prev = lowVideoRef.current;
       lowVideoRef.current = el;
       if (!swappedRef.current) {
         videoRef.current = el;
+        // null → 要素 への遷移 (= low <video> が今マウントされた) で
+        // useFeedPlayback 側の effect deps を進めて自動再生を起動する。
+        // resolver で lowSrc が遅延取得され、isActive=true / videoSrc=URL が
+        // 揃った後にようやく <video> が DOM に挿入されるケースで、再生 effect が
+        // 取りこぼされる問題への対策。
+        if (el && prev !== el) {
+          onVideoElementChange?.();
+        }
       }
     },
-    [videoRef],
+    [videoRef, onVideoElementChange],
   );
 
   // high <video> 要素を受け取るコールバック ref。

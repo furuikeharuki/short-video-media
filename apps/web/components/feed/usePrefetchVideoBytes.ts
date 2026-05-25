@@ -39,9 +39,10 @@ import { isVideoTimingEnabled } from "@/lib/videoTiming";
  */
 const PREFETCH_START_OFFSET = 1;
 
-// rapid swipe が落ち着いた直後に current+1 の resolve をすぐ走らせるための短デバウンス。
-// 0 ms にすると React の同期再レンダで余計な resolve が走り得るため最小値だけ確保。
-const NEXT_PREFETCH_DEBOUNCE_MS = 50;
+// current+1 は debounce なしで即時発火する。React のレンダー直後に走らせるため
+// microtask (queueMicrotask 相当の Promise.resolve().then) でキックする。
+// 中央 <video> がスワイプ確定するまでの数百 ms に競合しないよう、+1 だけは
+// 「次に確実に表示される」優先扱いで遅延を入れない。
 
 // current+1 以降のスロット (+2 など) は中央 <video> の安定再生を優先したいので
 // 従来通り少し待ってから resolve する。
@@ -132,26 +133,43 @@ export function usePrefetchVideoBytes(
     const inFlight = inFlightRef.current;
     const slugToId = slugToIdRef.current;
 
-    // slug -> id 逆引きを更新
+    // rapid swipe 中は current+1 のみを許可し、+2/+3 は targets から外して
+    // slot を確実に +1 用に解放する。policy.aheadCount=0 (Save-Data / 2g) の
+    // ときは targets が空のままなのでこの分岐でも何も足さない。
+    const activeTargets =
+      isRapidSwiping && targets.length > 0
+        ? targets.filter((t) => t.offset === PREFETCH_START_OFFSET)
+        : targets;
+
+    // slug -> id 逆引きを更新 (activeTargets ベース)
     slugToId.clear();
-    for (const t of targets) {
+    for (const t of activeTargets) {
       slugToId.set(t.slug, t.id);
     }
 
     // スクロール中 / Save-Data 等で targets が空のとき: slots と進行中 resolve をクリアして
     // 隠し <video> をアンマウントし、中央の <video> への帯域集中を保つ。
+    // rapid swipe 中で +1 のみ許可の場合は、+2/+3 の slot を evict して +1 用に空ける。
     setSlots((prev) => {
-      if (targets.length === 0) {
+      if (activeTargets.length === 0) {
         return prev.length === 0 ? prev : [];
       }
-      // 既存 slot のうち target に残っているものは保持。それ以外はアンマウント。
-      const wanted = new Set(targets.map((t) => t.id));
-      const filtered = prev.filter((s) => wanted.has(s.id));
+      const wanted = new Set(activeTargets.map((t) => t.id));
+      const filtered = prev.filter((s) => {
+        const keep = wanted.has(s.id);
+        if (!keep && isRapidSwiping && s.offset > PREFETCH_START_OFFSET) {
+          vtPrefetchLog(
+            `evict offset=+${s.offset} slug=${s.slug} for +${PREFETCH_START_OFFSET} (rapid)`,
+          );
+        }
+        return keep;
+      });
       return filtered.length === prev.length ? prev : filtered;
     });
 
     // target から外れた slug の進行中 resolve は abort。
-    const targetSlugs = new Set(targets.map((t) => t.slug));
+    // rapid 中は +2/+3 の resolve も abort して +1 の帯域に譲る。
+    const targetSlugs = new Set(activeTargets.map((t) => t.slug));
     for (const [slug, controller] of inFlight.entries()) {
       if (!targetSlugs.has(slug)) {
         controller.abort();
@@ -159,20 +177,27 @@ export function usePrefetchVideoBytes(
       }
     }
 
-    if (isRapidSwiping || targets.length === 0) {
+    if (activeTargets.length === 0) {
       return;
     }
 
-    // current+1 はほぼ即時に発火し、+2 以降は中央 <video> 安定再生のため少し遅らせる。
-    const nextTarget = targets.find((t) => t.offset === PREFETCH_START_OFFSET);
-    const upcomingTargets = targets.filter((t) => t.offset > PREFETCH_START_OFFSET);
+    // current+1 は debounce なしで即時発火 (rapid swipe 中も含む)。
+    // +2 以降は中央 <video> 安定再生のため少し遅らせる (rapid 中は activeTargets に
+    // 含まれないので発火しない)。
+    const nextTarget = activeTargets.find((t) => t.offset === PREFETCH_START_OFFSET);
+    const upcomingTargets = activeTargets.filter((t) => t.offset > PREFETCH_START_OFFSET);
 
-    const fire = (target: Target) => {
+    const fire = (target: Target, immediate: boolean) => {
       if (inFlight.has(target.slug)) return;
       const controller = new AbortController();
       inFlight.set(target.slug, controller);
+      if (isRapidSwiping && target.offset === PREFETCH_START_OFFSET) {
+        vtPrefetchLog(
+          `rapid allow +${target.offset} slug=${target.slug} index=${currentIndex + target.offset}`,
+        );
+      }
       vtPrefetchLog(
-        `slot index=${currentIndex + target.offset} slug=${target.slug} offset=+${target.offset} mode=${policy.preload}`,
+        `slot index=${currentIndex + target.offset} slug=${target.slug} offset=+${target.offset} mode=${policy.preload} immediate=${immediate}`,
       );
       void resolveMp4Url(target.slug, { signal: controller.signal })
         .then((res) => {
@@ -182,6 +207,7 @@ export function usePrefetchVideoBytes(
           ensurePreconnect(res.mp4_url);
           prefetchedSlugsRef.current.add(target.slug);
           setSlots((prev) => {
+            // 既に同 id slot があれば差し替え不要。それ以外は +1 を最優先で push。
             if (prev.some((s) => s.id === target.id)) return prev;
             return [
               ...prev,
@@ -202,18 +228,23 @@ export function usePrefetchVideoBytes(
         });
     };
 
-    const nextTimer = nextTarget
-      ? setTimeout(() => fire(nextTarget), NEXT_PREFETCH_DEBOUNCE_MS)
-      : null;
+    // +1 は microtask で即時発火 (React の同期再レンダ完了直後)。
+    let nextCancelled = false;
+    if (nextTarget) {
+      Promise.resolve().then(() => {
+        if (nextCancelled) return;
+        fire(nextTarget, true);
+      });
+    }
     const upcomingTimer =
       upcomingTargets.length > 0
         ? setTimeout(() => {
-            for (const target of upcomingTargets) fire(target);
+            for (const target of upcomingTargets) fire(target, false);
           }, UPCOMING_PREFETCH_DEBOUNCE_MS)
         : null;
 
     return () => {
-      if (nextTimer) clearTimeout(nextTimer);
+      nextCancelled = true;
       if (upcomingTimer) clearTimeout(upcomingTimer);
     };
     // targetsKey / isRapidSwiping / policy.preload・aheadCount が変わったときに走り直す。

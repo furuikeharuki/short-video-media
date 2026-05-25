@@ -423,18 +423,23 @@ export default function FeedViewer({
 
   return (
     <div ref={containerRef} className="feed-container">
-      {prefetchSlots.map((slot) => (
-        <PrefetchVideoBuffer
-          key={slot.id}
-          slug={slot.slug}
-          src={slot.src}
-          // rapid swipe 中は preload を強制的に "metadata" まで弱めて中央 <video> の
-          // 帯域を奪わない。それ以外はスロットごとのポリシー (Chrome=auto / Safari=metadata) を採用。
-          preload={isRapidSwiping ? "metadata" : slot.preload}
-          offset={slot.offset}
-          onError={handleSlotError}
-        />
-      ))}
+      {prefetchSlots.map((slot) => {
+        // rapid swipe 中は +2 以降を弱めて中央 <video> の帯域を温存するが、
+        // +1 だけは「次に確実に表示される」スロットなので slot.preload をそのまま使い、
+        // Chrome ではバイトを取りに行かせる (Safari policy は metadata のまま)。
+        const preload =
+          isRapidSwiping && slot.offset > 1 ? "metadata" : slot.preload;
+        return (
+          <PrefetchVideoBuffer
+            key={slot.id}
+            slug={slot.slug}
+            src={slot.src}
+            preload={preload}
+            offset={slot.offset}
+            onError={handleSlotError}
+          />
+        );
+      })}
       {windowSlides.map((slide, i) => {
         const absIndex = windowStartRef.current + i;
         const offset   = absIndex - currentIndex;

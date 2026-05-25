@@ -368,8 +368,15 @@ export function useFeedPlayback({ slug, title, isActive, videoSrc, onOpenModal, 
       await video.play();
       isPlayingRef.current = true;
       startProgressLoop();
-    } catch { /* ignore */ }
-  }, [startProgressLoop]);
+    } catch {
+      // muted + playsInline でも autoplay 拒否されたケース。
+      // dev 計測中はログだけ残す (UI は使える状態のままにする)。
+      if (isVideoTimingEnabled()) {
+        // eslint-disable-next-line no-console
+        console.debug(`vt ${slug}: autoplay blocked (muted fallback rejected)`);
+      }
+    }
+  }, [startProgressLoop, slug]);
 
   // 詳細モーダルを閉じたとき、現在アクティブなスライドなら再生を再開する。
   // （handleDetail で video.pause() しているため、モーダルを閉じても video は paused のままになるため）
@@ -394,11 +401,12 @@ export function useFeedPlayback({ slug, title, isActive, videoSrc, onOpenModal, 
   }, [isActive]);
 
   // 親 (FeedViewer) で isActive=true になったタイミングで自動再生を試みる。
-  // <video> 要素は isActive && videoSrc のときだけマウントされるため、resolver で URL を遅延
-  // 取得したケースでは isActive=true になった時点では videoRef.current はまだ null。
-  // そのため deps に videoSrc を含め、URL が返ってきて <video> がマウントされた直後に
-  // effect が再実行されるようにする。同じ src での再マウントやスクロールでの再アクティブ化
-  // もこれでカバーされる。
+  // <video> 要素は isActive && currentSrc !== null のときだけマウントされるため、resolver で URL を遅延
+  // 取得したケースでは isActive=true / videoSrc=URL になった時点でもまだ videoRef.current は null。
+  // そのため deps に videoSrc に加えて videoElementVersion を含め、useLowFirstVideoSrc の
+  // lowVideoCallbackRef が「null → 要素」遷移で notifyVideoElementChange() を呼んだ直後にも
+  // effect を再実行させ、resolve 後の自動再生取りこぼしを防ぐ。
+  // 同じ src での再マウントやスクロールでの再アクティブ化もこれでカバーされる。
   useEffect(() => {
     if (!isActive) return;
     if (!videoSrc) return;
@@ -422,8 +430,12 @@ export function useFeedPlayback({ slug, title, isActive, videoSrc, onOpenModal, 
         /* load() 例外は握り潰し */
       }
     }
+    // すでに再生中ならわざわざ play() を呼ばない (二重 play による rapid swipe loop を避ける)。
+    if (!video.paused) {
+      return;
+    }
     playVideo(video, false);
-  }, [isActive, videoSrc, playVideo]);
+  }, [isActive, videoSrc, playVideo, videoElementVersion]);
 
   // videoSrc が変わったとき (新しい <video> と同じだが src だけ差し替わったときも含む) は
   // hasPlayedRef を false にリセットして、初回ロード (loadstart) ではサムネを出せるようにする。

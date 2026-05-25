@@ -400,6 +400,10 @@ export function useLowFirstVideoSrc({
     if (isVideoTimingEnabled()) {
       const timer = createVideoTimer(slug);
       timer.mark("quality:high-swap");
+      // eslint-disable-next-line no-console
+      console.debug(
+        `vt ${slug}: swap done active=high paused=${high.paused} rs=${high.readyState} lowPaused=${low.paused}`,
+      );
     }
   }, [enabled, highSrc, lowSrc, slug, videoRef, minStartTime, onVideoElementChange]);
 

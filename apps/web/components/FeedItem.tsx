@@ -297,6 +297,21 @@ export default function FeedItem({ item, isActive, isAdjacent = false, isFirst, 
     setVideoReadyState(false);
   }, [item.slug, videoSrc]);
 
+  // dual-video スワップで高画質 <video> が可視 (showHigh=true) になった瞬間も
+  // videoReady を立てる。high <video> 自身は React の onLoadedData / onCanPlay /
+  // onSeeked を持っておらず (= FeedItemVideo の low 側にのみバインドされる)、
+  // low の loadeddata が高画質に切り替わる前に発火していなかったケースで
+  // thumbnail-cover が再生中の high <video> を覆い続け、
+  // 「音声はなっているのに画面はロード中」状態を引き起こすため。
+  // setVideoReady (= videoRef.current の opacity を 1 に) も同時に呼ぶ。
+  useEffect(() => {
+    if (!showHigh) return;
+    setVideoReady(true);
+    setVideoReadyState(true);
+    setSpinnerVisible(false);
+    setShimmerVisible(false);
+  }, [showHigh, setVideoReady, setSpinnerVisible, setShimmerVisible]);
+
   // 開発用: video の lifecycle 時刻を計測してログ出力する。
   // 本番では isVideoTimingEnabled() が false なので addEventListener しない。
   useEffect(() => {

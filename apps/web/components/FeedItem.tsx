@@ -129,6 +129,7 @@ export default function FeedItem({ item, isActive, isAdjacent = false, isFirst, 
     handleMouseUp,
     handleMouseLeave,
     handlePcClick,
+    notifyVideoElementChange,
   } = useFeedPlayback({
     slug: item.slug,
     title: item.title,
@@ -145,8 +146,16 @@ export default function FeedItem({ item, isActive, isAdjacent = false, isFirst, 
   });
 
   // useFeedPlayback で確保された videoRef を渡して low → high スワップを制御する。
-  // currentSrc がメイン <video> の実 src になる: 初期は lowSrc、canplay 後に highSrc。
-  const { currentSrc, highProbe } = useLowFirstVideoSrc({
+  // dual-video 版: メイン (low) <video> の src は据え置きで、裏で full-size hidden の
+  // 高画質 <video> を muted で再生 → playing 到達で crossfade。停止フェーズが入らない。
+  const {
+    currentSrc,
+    highVideoSrc,
+    showHigh,
+    lowVideoCallbackRef,
+    highVideoCallbackRef,
+    highProbeHandlers,
+  } = useLowFirstVideoSrc({
     lowSrc: lowSrc ?? videoSrc,
     highSrc: highSrc ?? videoSrc,
     videoRef,
@@ -157,6 +166,10 @@ export default function FeedItem({ item, isActive, isAdjacent = false, isFirst, 
     // プロ女優作品は先頭 5 秒スキップ仕様。high 画質 swap 時に currentTime を 5 秒未満に
     // 戻さないよう、最低開始秒数を渡す。非プロ女優作品は 0 (=従来通り直前位置を維持)。
     minStartTime: isProActress ? PRO_ACTRESS_HEAD_SKIP_SEC : 0,
+    // crossfade で videoRef.current が low → high に変わったら、useFeedPlayback の
+    // プロ女優スキップ / スピナー effect を再実行して、新しい要素にイベントリスナを
+    // 張り直してもらう。
+    onVideoElementChange: notifyVideoElementChange,
   });
 
   // preload 戦略:
@@ -337,10 +350,15 @@ export default function FeedItem({ item, isActive, isAdjacent = false, isFirst, 
               spinnerRef={spinnerRef}
               fastBadgeRef={fastBadgeRef}
               overlayRef={overlayRef}
-              videoRef={videoRef}
+              lowVideoCallbackRef={lowVideoCallbackRef}
               thumbnailUrl={item.image_url_large ?? item.image_url_list ?? ""}
               thumbnailAlt={item.title}
-              highProbe={highProbe}
+              highProbe={{
+                src: highVideoSrc,
+                show: showHigh,
+                callbackRef: highVideoCallbackRef,
+                handlers: highProbeHandlers,
+              }}
               onLoadStart={handleLoadStart}
               onLoadedMetadata={handleLoadedMetadata}
               onLoadedData={handleLoadedData}

@@ -226,6 +226,68 @@ async def test_extract_picks_low_high_from_bitrates_with_suffix_fallback(
 
 
 @pytest.mark.asyncio
+async def test_extract_bitrates_descending_order_still_picks_low_smallest(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """args.bitrates が降順 (高ビットレート先頭) で並んでいても low/high が逆転しない。
+
+    DMM html5_player は実際には bitrates を降順で返すケースがあるため、
+    昇順前提のソートがあっても low_mp4_url = 最低ビットレート、high_mp4_url = 最高
+    ビットレートに振り分けられることを担保する。「最初は高画質→低画質に切り替わる」
+    というユーザー報告 (PR #167 後) の再発防止用回帰テスト。
+    """
+    raw_html = (
+        '<script>var args = {'
+        '"src": "https://cc3001.dmm.co.jp/pv/x/y_mhb_w.mp4",'
+        '"bitrates": ['
+        '{"bitrate": 1500, "src": "//cdn/high_mhb_w.mp4"},'
+        '{"bitrate": 800, "src": "//cdn/mid_dm_w.mp4"},'
+        '{"bitrate": 300, "src": "//cdn/low_dmb_w.mp4"}'
+        ']};</script>'
+    )
+    handler = _two_stage_handler(
+        litevideo_body=_litevideo_html(),
+        player_body=raw_html,
+    )
+    _install_transport(monkeypatch, handler)
+
+    result = await extract_mp4_url("descending_bitrates", "affi-001")
+    # 入力順に関わらず low = 最小ビットレート、high = 最大ビットレート。
+    assert result.low_mp4_url == "https://cdn/low_dmb_w.mp4"
+    assert result.high_mp4_url == "https://cdn/high_mhb_w.mp4"
+    # low != high (= スワップが有効に発火する)。
+    assert result.low_mp4_url != result.high_mp4_url
+
+
+@pytest.mark.asyncio
+async def test_extract_bitrates_with_string_bitrate_values(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """bitrate キーが文字列値 ("1500" 等) でも数値として比較される。
+
+    DMM html5_player では bitrate がしばしば文字列で埋め込まれているため、
+    `int(float(...))` でパースし low/high が正しく振り分けられることを担保する。
+    """
+    raw_html = (
+        '<script>var args = {'
+        '"src": "https://cc3001.dmm.co.jp/pv/x/y.mp4",'
+        '"bitrates": ['
+        '{"bitrate": "300", "src": "//cdn/low.mp4"},'
+        '{"bitrate": "1500", "src": "//cdn/high.mp4"}'
+        ']};</script>'
+    )
+    handler = _two_stage_handler(
+        litevideo_body=_litevideo_html(),
+        player_body=raw_html,
+    )
+    _install_transport(monkeypatch, handler)
+
+    result = await extract_mp4_url("string_bitrates", "affi-001")
+    assert result.low_mp4_url == "https://cdn/low.mp4"
+    assert result.high_mp4_url == "https://cdn/high.mp4"
+
+
+@pytest.mark.asyncio
 async def test_extract_single_bitrate_keeps_low_equal_high(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

@@ -132,11 +132,12 @@ export default function FeedViewer({
   // 近距離 prefetch / active と同じ resolveCache を共有するので、ユーザーが
   // そこに到達するまでに URL が温まっている確率を上げる。
   useWarmResolveMp4(movieItems, currentIndex, isRapidSwiping);
-  const { slots: prefetchSlots, handleSlotError } = usePrefetchVideoBytes(
-    movieItems,
-    currentIndex,
-    isRapidSwiping,
-  );
+  const {
+    slots: prefetchSlots,
+    handleSlotError,
+    handleSlotMetadata,
+    handleSlotCanPlay,
+  } = usePrefetchVideoBytes(movieItems, currentIndex, isRapidSwiping);
 
   const [dragPx, setDragPx] = useState(0);
   const dragStartY         = useRef(0);
@@ -437,6 +438,8 @@ export default function FeedViewer({
             preload={preload}
             offset={slot.offset}
             onError={handleSlotError}
+            onMetadata={handleSlotMetadata}
+            onCanPlay={handleSlotCanPlay}
           />
         );
       })}

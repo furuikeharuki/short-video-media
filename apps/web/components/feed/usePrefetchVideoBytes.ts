@@ -73,6 +73,8 @@ interface Target {
   offset: number;
 }
 
+export type PrefetchReadiness = "metadata" | "canplay";
+
 export function usePrefetchVideoBytes(
   items: MovieCard[],
   currentIndex: number,
@@ -80,6 +82,8 @@ export function usePrefetchVideoBytes(
 ): {
   slots: PrefetchSlot[];
   handleSlotError: (slug: string) => void;
+  handleSlotMetadata: (slug: string) => void;
+  handleSlotCanPlay: (slug: string) => void;
 } {
   const [slots, setSlots] = useState<PrefetchSlot[]>([]);
   // 進行中の resolveMp4Url を slug -> AbortController で管理。
@@ -88,9 +92,10 @@ export function usePrefetchVideoBytes(
   const healedRef = useRef<Set<string>>(new Set());
   // slug -> MovieCard.id の逆引き。onError から slot を特定するため。
   const slugToIdRef = useRef<Map<string, string>>(new Map());
-  // dev ログ用: byte-prefetch slot が出来たことのある slug を覚えておき、
-  // active 移動時にそのスライドが裏 prefetch 済みだったか出力する。
-  const prefetchedSlugsRef = useRef<Set<string>>(new Set());
+  // dev ログ用: 隠し <video> が到達した readiness レベルを slug 単位で覚えておき、
+  // active 移動時に loadedmetadata だけ届いたのか canplay まで温まっていたのかを
+  // active ログに反映する。一度 canplay まで上がったら metadata には戻さない。
+  const readinessRef = useRef<Map<string, PrefetchReadiness>>(new Map());
   const lastActiveSlugRef = useRef<string | null>(null);
 
   // ポリシー (aheadCount / preload) を計算する。effect 内で毎回読むと
@@ -123,9 +128,13 @@ export function usePrefetchVideoBytes(
     if (!activeItem || !activeItem.slug) return;
     if (lastActiveSlugRef.current === activeItem.slug) return;
     lastActiveSlugRef.current = activeItem.slug;
-    const prefetched = prefetchedSlugsRef.current.has(activeItem.slug);
+    const readiness = readinessRef.current.get(activeItem.slug);
+    // 旧 boolean からの移行: canplay > metadata > false。
+    // Chrome の +1 (auto) は canplay 到達まで「真の prefetched」と認めず、
+    // active 到達時には canplay / metadata / false の 3 段階で出す。
+    const readinessLabel: string = readiness ?? "false";
     vtPrefetchLog(
-      `active index=${currentIndex} slug=${activeItem.slug} byte-prefetched=${prefetched}`,
+      `active index=${currentIndex} slug=${activeItem.slug} byte-prefetched=${readinessLabel}`,
     );
   }, [currentIndex, items]);
 
@@ -205,7 +214,8 @@ export function usePrefetchVideoBytes(
           if (!res?.mp4_url) return;
           // 解決した CDN origin に dyn preconnect (TCP/TLS handshake を前倒し)。
           ensurePreconnect(res.mp4_url);
-          prefetchedSlugsRef.current.add(target.slug);
+          // readiness は隠し <video> の loadedmetadata / canplay を待って判定する
+          // (resolve 成功時点ではまだバイトを取り始めてさえいない可能性があるため)。
           setSlots((prev) => {
             // 既に同 id slot があれば差し替え不要。それ以外は +1 を最優先で push。
             if (prev.some((s) => s.id === target.id)) return prev;
@@ -312,7 +322,24 @@ export function usePrefetchVideoBytes(
     [policy.preload],
   );
 
-  return { slots, handleSlotError };
+  // 隠し <video> が loadedmetadata を発火したら readiness を 'metadata' に格上げ。
+  // 一度 'canplay' まで到達した slug は格下げしない (canplay >= metadata)。
+  const handleSlotMetadata = useCallback((slug: string) => {
+    if (!slug) return;
+    const cur = readinessRef.current.get(slug);
+    if (cur === "canplay") return;
+    readinessRef.current.set(slug, "metadata");
+  }, []);
+
+  // 隠し <video> が canplay (readyState >= HAVE_FUTURE_DATA) に到達したら
+  // readiness を 'canplay' に格上げ。これが Chrome の +1 で「真の prefetched」と
+  // 認める閾値。Safari は preload="metadata" のままなので通常ここには来ない。
+  const handleSlotCanPlay = useCallback((slug: string) => {
+    if (!slug) return;
+    readinessRef.current.set(slug, "canplay");
+  }, []);
+
+  return { slots, handleSlotError, handleSlotMetadata, handleSlotCanPlay };
 }
 
 /**

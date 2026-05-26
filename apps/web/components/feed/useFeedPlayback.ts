@@ -55,6 +55,13 @@ interface UseFeedPlaybackOptions {
    * null の間 (resolver 待ちや exhausted) は <video> がそもそも存在しない。
    */
   videoSrc: string | null;
+  /**
+   * handoff promote で host に append された <video> 要素。null の間は通常の
+   * JSX `<video>` がマウントされており videoRef は React 側で設定される。
+   * non-null になったタイミングで videoRef.current が promoted 要素に差し替わる
+   * ため、active-autoplay effect の deps に含めて再走させ、自動再生を再起動する。
+   */
+  boundElement?: HTMLVideoElement | null;
   onOpenModal: (slug: string) => void;
   /**
    * 「プロ女優」(= videoa フロア) ジャンルが付いた作品かどうか。
@@ -69,7 +76,7 @@ interface UseFeedPlaybackOptions {
   isProActress?: boolean;
 }
 
-export function useFeedPlayback({ slug, title, isActive, videoSrc, onOpenModal, isProActress = false }: UseFeedPlaybackOptions) {
+export function useFeedPlayback({ slug, title, isActive, videoSrc, boundElement = null, onOpenModal, isProActress = false }: UseFeedPlaybackOptions) {
   // 初回マウント時に一回だけショートボタンフラグを消費
   consumeStartUnmutedFlag();
 
@@ -407,38 +414,134 @@ export function useFeedPlayback({ slug, title, isActive, videoSrc, onOpenModal, 
   // <video> 要素は isActive && videoSrc !== null のときだけマウントされるため、resolver
   // で URL を遅延取得したケースでも videoSrc を deps に含めることで、URL 到着・<video>
   // マウント直後に effect を再実行して自動再生を起動する。
-  // 同じ src での再マウントやスクロールでの再アクティブ化もこれでカバーされる。
+  // 加えて、handoff promote で boundElement が後から差し替わるケースでも、
+  // boundElement を deps に含めて effect を再走させて promoted 要素に対する play() を
+  // 確実に呼ぶ。これが無いと「videoRef.current が null の commit で early return →
+  // 直後の commit で videoRef が promoted 要素に書き換わるが effect 再走の契機が無い」
+  // パスで autoplay が永久に走らない。
+  //
+  // attemptActiveAutoplay は active 化 / src 解決 / 要素 rebind / canplay / metadata の
+  // どの経路で呼ばれても idempotent に「アクティブな <video> に対して 1 回 bounded
+  // で play() を試みる」セマンティクスを提供する。abort / resolved / rejected を vt
+  // ログに残す。
+  const attemptActiveAutoplay = useCallback(
+    (reason: "active-change" | "promote" | "canplay" | "metadata" | "observer") => {
+      if (!isActiveRef.current) {
+        if (isVideoTimingEnabled()) {
+          // eslint-disable-next-line no-console
+          console.debug(`vt ${slug}: active autoplay abort reason=inactive trigger=${reason}`);
+        }
+        return;
+      }
+      const video = videoRef.current;
+      if (!video) {
+        if (isVideoTimingEnabled()) {
+          // eslint-disable-next-line no-console
+          console.debug(`vt ${slug}: active autoplay abort reason=stale-element trigger=${reason}`);
+        }
+        return;
+      }
+      if (userPausedRef.current) {
+        if (isVideoTimingEnabled()) {
+          // eslint-disable-next-line no-console
+          console.debug(`vt ${slug}: active autoplay abort reason=user-paused trigger=${reason}`);
+        }
+        return;
+      }
+      if (!video.paused) {
+        if (isVideoTimingEnabled()) {
+          // eslint-disable-next-line no-console
+          console.debug(
+            `vt ${slug}: active autoplay abort reason=already-playing trigger=${reason} rs=${video.readyState}`,
+          );
+        }
+        return;
+      }
+      // MediaError 状態を持ち越したまま中央にスワイプしてきた <video> は、play() が
+      // reject されるだけで再生できないので src を同じ URL で再ロードさせて
+      // MediaError をリセットする (HTTP キャッシュから 206 で再利用される)。
+      if (video.error !== null) {
+        try { video.load(); } catch { /* ignore */ }
+      }
+      isMutedRef.current = globalIsMuted;
+      setIsMuted(globalIsMuted);
+      video.muted = globalIsMuted;
+      if (isVideoTimingEnabled()) {
+        // eslint-disable-next-line no-console
+        console.debug(
+          `vt ${slug}: active autoplay start reason=${reason} paused=${video.paused} rs=${video.readyState} muted=${video.muted}`,
+        );
+      }
+      // playVideo (= 既存の muted フォールバック / proActress 先頭 5 秒 seek 込み) に
+      // そのまま委譲する。playVideo 内で resolve/reject は握り潰されているが、
+      // vt 観測用には play() 自体を直接呼んで resolve/reject をログに残す。
+      const playPromise = video.play();
+      if (playPromise === undefined) {
+        // 古い Safari など Promise を返さないブラウザの保険。
+        isPlayingRef.current = true;
+        startProgressLoop();
+        return;
+      }
+      playPromise.then(
+        () => {
+          if (videoRef.current !== video) return;
+          if (!isActiveRef.current) return;
+          if (userPausedRef.current) return;
+          isPlayingRef.current = true;
+          startProgressLoop();
+          if (isVideoTimingEnabled()) {
+            // eslint-disable-next-line no-console
+            console.debug(
+              `vt ${slug}: active autoplay resolved reason=${reason} paused=${video.paused} rs=${video.readyState}`,
+            );
+          }
+        },
+        (err: unknown) => {
+          const e = err as { name?: string; message?: string } | null;
+          const name = e?.name ?? "Error";
+          const message = e?.message ?? String(err);
+          if (isVideoTimingEnabled()) {
+            // eslint-disable-next-line no-console
+            console.debug(
+              `vt ${slug}: active autoplay rejected reason=${reason} name=${name} message=${message} paused=${video.paused} rs=${video.readyState}`,
+            );
+          }
+          // muted fallback。playVideo の中で muted=true → play() を 1 度だけ呼ぶ。
+          // ループしないよう既に再生中 / 非 active / user-paused なら skip。
+          if (videoRef.current !== video) return;
+          if (!isActiveRef.current) return;
+          if (userPausedRef.current) return;
+          if (!video.paused) return;
+          void playVideo(video, false);
+        },
+      );
+    },
+    [playVideo, slug, startProgressLoop],
+  );
+
+  // active-change / src 解決 / 要素 rebind (promoted swap) のいずれかで自動再生を起動。
   useEffect(() => {
     if (!isActive) return;
     if (!videoSrc) return;
     const video = videoRef.current;
-    if (!video) return;
+    if (!video) {
+      // この commit では videoRef がまだ null。boundElement が non-null に
+      // 変化したときに deps 再評価で再走するのでログだけ残して return。
+      if (isVideoTimingEnabled()) {
+        // eslint-disable-next-line no-console
+        console.debug(
+          `vt ${slug}: active autoplay defer reason=no-element bound=${boundElement ? "set" : "null"}`,
+        );
+      }
+      return;
+    }
     isActiveRef.current = true;
     // 新しく active になったスライドは自動再生対象。前作品で残った userPausedRef は破棄する。
     userPausedRef.current = false;
-    isMutedRef.current = globalIsMuted;
-    setIsMuted(globalIsMuted);
-    // 同期で muted 属性を反映してから play を呼ぶ
-    video.muted = globalIsMuted;
-    // 隣接スライド (isActive=false) で起きた onError は PR #91 以降無視しているため、
-    // <video> が MediaError 状態のまま中央にスワイプしてくるケースがある。
-    // MediaError 中の <video> は play() を呼んでも reject されるだけで再生できないため、
-    // ここで video.load() を呼んで src を同じ URL で再ロードさせ、MediaError をリセットする。
-    // load() は networkState=NETWORK_LOADING をキックするので　1 度ロード済みの bytes は
-    // HTTP キャッシュ (Range リクエストの 206 レスポンス) から再利用される。
-    if (video.error !== null) {
-      try {
-        video.load();
-      } catch {
-        /* load() 例外は握り潰し */
-      }
-    }
-    // すでに再生中ならわざわざ play() を呼ばない (二重 play による rapid swipe loop を避ける)。
-    if (!video.paused) {
-      return;
-    }
-    playVideo(video, false);
-  }, [isActive, videoSrc, playVideo]);
+    // promote 由来 (boundElement non-null) と通常マウントを reason で区別する。
+    // 同じ commit で promoted swap + active 化が起きるケースは promote 側を優先。
+    attemptActiveAutoplay(boundElement ? "promote" : "active-change");
+  }, [isActive, videoSrc, boundElement, attemptActiveAutoplay, slug]);
 
   // videoSrc が変わったとき (新しい <video> と同じだが src だけ差し替わったときも含む) は
   // hasPlayedRef を false にリセットして、初回ロード (loadstart) ではサムネを出せるようにする。
@@ -794,6 +897,65 @@ export function useFeedPlayback({ slug, title, isActive, videoSrc, onOpenModal, 
     };
   }, [slug, videoSrc, isProActress, playVideo, startProgressLoop]);
 
+  // 自動再生のセーフティネット: active な要素が canplay / loadeddata / loadedmetadata
+  // に到達した時点でまだ paused かつ user-paused でないなら、attemptActiveAutoplay を
+  // 再起動する。これにより:
+  //   - 「active-change effect で play() を呼んだが readyState 不足で reject
+  //     された」ようなケースで、後発の canplay で確実に再試行できる。
+  //   - 「proActress 経路は走らない (non-proActress 作品)」のに promoted swap
+  //     直後に readyState が一時的に下がるエッジケースでも canplay で復帰できる。
+  //   - 直接 video.play() を呼ぶので autoplay policy 拒否は active autoplay rejected
+  //     としてログに出る (silent fail を防ぐ)。
+  // proActress の play-retry とは reason が独立しており、両者が同 commit に走っても
+  // playPromise の早期 abort ガード (paused / userPaused / stale-element) で安全に
+  // idempotent。
+  useEffect(() => {
+    if (!isActive) return;
+    if (!videoSrc) return;
+    const video = videoRef.current;
+    if (!video) return;
+    const handle = (reason: "canplay" | "metadata") => () => {
+      if (!isActiveRef.current) return;
+      if (userPausedRef.current) return;
+      if (!video.paused) return;
+      attemptActiveAutoplay(reason);
+    };
+    const onCanPlay = handle("canplay");
+    const onLoadedData = handle("canplay");
+    const onLoadedMeta = handle("metadata");
+    video.addEventListener("canplay", onCanPlay);
+    video.addEventListener("loadeddata", onLoadedData);
+    video.addEventListener("loadedmetadata", onLoadedMeta);
+    // 再バインド直後 (= promoted swap) で既に readyState >= 2 / 3 ならイベントが
+    // 来ない可能性が高いので同期チェックして trigger。microtask で送ることで
+    // 親 layout effect の videoRef 書き込みが確実に終わってから走る。
+    if (video.paused && !userPausedRef.current) {
+      const rs = video.readyState;
+      if (rs >= 3) {
+        queueMicrotask(() => {
+          if (!isActiveRef.current) return;
+          if (userPausedRef.current) return;
+          if (!video.paused) return;
+          if (videoRef.current !== video) return;
+          attemptActiveAutoplay("canplay");
+        });
+      } else if (rs >= 1) {
+        queueMicrotask(() => {
+          if (!isActiveRef.current) return;
+          if (userPausedRef.current) return;
+          if (!video.paused) return;
+          if (videoRef.current !== video) return;
+          attemptActiveAutoplay("metadata");
+        });
+      }
+    }
+    return () => {
+      video.removeEventListener("canplay", onCanPlay);
+      video.removeEventListener("loadeddata", onLoadedData);
+      video.removeEventListener("loadedmetadata", onLoadedMeta);
+    };
+  }, [isActive, videoSrc, boundElement, attemptActiveAutoplay]);
+
   // 再生中の読み込み停滞 (waiting/stalled) と、再生再開 (playing/canplaythrough) を検知して
   // スピナーの表示・非表示を切り替える。isActive 中のときだけビデオ要素が
   // 存在するため、それに依存したイベントリスナをその単位で貼り替える。
@@ -878,16 +1040,17 @@ export function useFeedPlayback({ slug, title, isActive, videoSrc, onOpenModal, 
     const playObserver = new IntersectionObserver(([entry]) => {
       if (!entry.isIntersecting) return;
       if (!isActiveRef.current) return;
+      if (userPausedRef.current) return;
       if (video.paused) {
         // 既に active だが paused のとき (モーダル戻りなど) は再生再開
-        playVideo(video, false);
+        attemptActiveAutoplay("observer");
       }
     }, { threshold: PLAY_THRESHOLD });
     playObserver.observe(video);
     return () => {
       playObserver.disconnect();
     };
-  }, [playVideo, isActive, videoSrc]);
+  }, [attemptActiveAutoplay, isActive, videoSrc, boundElement]);
 
   // 長押しメニュー・右クリックメニューをフィードアイテム全体で拒否する。
   // 動画コンテナだけだと、サムネイルのみ表示中のスライドやボトムバーの押下でコンテキストメニューが出てしまうため、

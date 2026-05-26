@@ -66,48 +66,91 @@ const RESET_COOLDOWN_MS = 300;
 let errorFilterInstalled = false;
 
 /**
- * ad-provider.js の `Cannot read properties of null (reading 'length')` を
- * window.onerror から握りつぶす filter を 1 回だけ仕掛ける。
+ * ad-provider.js 系の third-party 広告スクリプト由来の例外を
+ * window.onerror / unhandledrejection から握りつぶす filter を 1 回だけ仕掛ける。
  *
  * React のグローバル error listener / devtools の error 表示が走るとそれ自体が
  * メインスレッドを取り、最初の動画フレーム描画を削ってしまう。広告ライブラリの
  * 内部例外はこちらでハンドリングしようがないので、`event.preventDefault()` で
  * 抑えるだけにする。
  *
+ * 抑制対象 (scope を厳密に絞る — アプリ本体の例外は絶対に黙らせない):
+ *   - filename / stack に "ad-provider.js" を含む (ExoClick 本体)
+ *   - filename / stack に既知の third-party 広告ホスト名を含む
+ *     ("magsrv", "pemsrv", "saretarget", "exoclick") — PMR critical error 等。
+ *
  * 注意:
  *   - capture フェーズで取らないと React 側が先に拾うのでこちらでは抑えられない。
- *   - 抑える対象は `filename` または `error.stack` に "ad-provider.js" を含むものに限定し、
- *     アプリ本体の例外までは黙らせない。
+ *   - filename / stack のどちらにも該当しなければ素通しする。
  */
+const AD_SCRIPT_MARKERS = [
+  "ad-provider.js",
+  "magsrv.com",
+  "pemsrv.com",
+  "saretarget",
+  "exoclick",
+];
+
+function matchesAdScript(filename: string, stack: string): boolean {
+  for (const marker of AD_SCRIPT_MARKERS) {
+    if (filename.includes(marker) || stack.includes(marker)) return true;
+  }
+  return false;
+}
+
+function vtLogSuppressed(kind: string, message: string): void {
+  if (typeof window === "undefined") return;
+  try {
+    if (
+      process.env.NODE_ENV !== "production" ||
+      window.location?.search?.includes("vt=1")
+    ) {
+      // eslint-disable-next-line no-console
+      console.debug(`vt ads-gate suppressed ${kind}: ${message}`);
+    }
+  } catch {
+    /* ignore */
+  }
+}
+
 function ensureErrorFilter(): void {
   if (errorFilterInstalled) return;
   if (typeof window === "undefined") return;
   errorFilterInstalled = true;
 
-  const handler = (e: ErrorEvent): void => {
+  const errorHandler = (e: ErrorEvent): void => {
     const filename = e.filename ?? "";
     const stack = (e.error as { stack?: string } | null | undefined)?.stack ?? "";
-    if (filename.includes("ad-provider.js") || stack.includes("ad-provider.js")) {
-      // ad-provider 内部の null/length 例外は無害なので noise を消すだけ。
-      // ロギングしたい場合は dev/vt=1 のみ。
+    if (matchesAdScript(filename, stack)) {
       e.preventDefault();
       e.stopImmediatePropagation();
-      try {
-        if (
-          process.env.NODE_ENV !== "production" ||
-          window.location?.search?.includes("vt=1")
-        ) {
-          // eslint-disable-next-line no-console
-          console.debug(
-            `vt ads-gate suppressed ad-provider error: ${e.message ?? ""}`,
-          );
-        }
-      } catch {
-        /* ignore */
-      }
+      vtLogSuppressed("ad-script error", e.message ?? "");
     }
   };
-  window.addEventListener("error", handler, /* capture */ true);
+  window.addEventListener("error", errorHandler, /* capture */ true);
+
+  // saretarget 等の third-party は Promise.reject() を window.error ではなく
+  // unhandledrejection で投げる。React や devtools が拾うと同じく main thread
+  // を持っていかれるので、stack に ad host が出る reason のみ抑制する。
+  const rejectionHandler = (e: PromiseRejectionEvent): void => {
+    const reason = e.reason as { stack?: string; message?: string } | string | null | undefined;
+    let stack = "";
+    let message = "";
+    if (typeof reason === "string") {
+      message = reason;
+    } else if (reason && typeof reason === "object") {
+      stack = reason.stack ?? "";
+      message = reason.message ?? "";
+    }
+    // unhandledrejection には filename が無いので stack/message のみで判定する。
+    // アプリ本体由来の reject は通常 stack に "_next" / "webpack-internal" を
+    // 含むので、ad marker に一致する場合のみ抑制すれば誤爆しない。
+    if (matchesAdScript("", stack) || matchesAdScript("", message)) {
+      e.preventDefault();
+      vtLogSuppressed("ad-script rejection", message);
+    }
+  };
+  window.addEventListener("unhandledrejection", rejectionHandler, /* capture */ true);
 }
 
 function ensureGlobal(): void {

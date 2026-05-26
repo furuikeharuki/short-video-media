@@ -110,7 +110,17 @@ export default function FeedItem({ item, isActive, isAdjacent = false, isFirst, 
       const readiness = getReadiness(item.slug) ?? "canplay";
       const wasPending = pendingLoggedRef.current === item.slug;
       const el = claimForFeed(item.slug, videoSrc);
-      if (!el) return false;
+      if (!el) {
+        // render フェーズで sync 読みした hasPromotableElement と、layout effect 内
+        // の claimForFeed の間で entry が消えるレース (TTL / 別 active による
+        // markStaleClaim 等)。stale 扱いで host fallback に倒し、永久に
+        // thumbnail-cover で stuck するのを防ぐ。
+        if (wasPending) unpinSlug(item.slug);
+        pendingLoggedRef.current = null;
+        markStaleClaim(item.slug, "no-entry");
+        setPendingAbandonedSlug(item.slug);
+        return false;
+      }
       promotedSlugRef.current = item.slug;
       // promote 完了 → pending pin を解除。entry は claimForFeed で registry
       // から消えているので unpinSlug は実質 no-op だが、念のため呼ぶ。

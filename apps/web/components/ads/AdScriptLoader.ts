@@ -12,6 +12,16 @@
  * push する。ad-provider.js は AdProvider が配列のうちはキューを溜め、ロード後に
  * 自身の `push` 実装に差し替えて未処理 ins を走査する。
  *
+ * --- 「null length」例外について ---
+ *
+ * ad-provider.js は内部で `<ins data-zoneid>` 群を `getElementsByClassName` 等で
+ * 引いてループするが、引いた結果が空 / 一部 null だと
+ * `Cannot read properties of null (reading 'length')` を吐く。
+ * これは ad-provider 内部のバグだが、こちらでは
+ *   1. <ins> が DOM に居ない状況では push しない
+ *   2. window-level に error filter を入れて React scheduler を巻き込まない
+ * の 2 段構えで影響を抑える。
+ *
  * --- SPA でのナビゲーション復帰 ---
  *
  * ad-provider.js は SPA で後から DOM に挿入された <ins> を取りこぼすことがある。
@@ -53,6 +63,53 @@ const scriptInjected: Record<Provider, boolean> = {
  */
 const RESET_COOLDOWN_MS = 300;
 
+let errorFilterInstalled = false;
+
+/**
+ * ad-provider.js の `Cannot read properties of null (reading 'length')` を
+ * window.onerror から握りつぶす filter を 1 回だけ仕掛ける。
+ *
+ * React のグローバル error listener / devtools の error 表示が走るとそれ自体が
+ * メインスレッドを取り、最初の動画フレーム描画を削ってしまう。広告ライブラリの
+ * 内部例外はこちらでハンドリングしようがないので、`event.preventDefault()` で
+ * 抑えるだけにする。
+ *
+ * 注意:
+ *   - capture フェーズで取らないと React 側が先に拾うのでこちらでは抑えられない。
+ *   - 抑える対象は `filename` または `error.stack` に "ad-provider.js" を含むものに限定し、
+ *     アプリ本体の例外までは黙らせない。
+ */
+function ensureErrorFilter(): void {
+  if (errorFilterInstalled) return;
+  if (typeof window === "undefined") return;
+  errorFilterInstalled = true;
+
+  const handler = (e: ErrorEvent): void => {
+    const filename = e.filename ?? "";
+    const stack = (e.error as { stack?: string } | null | undefined)?.stack ?? "";
+    if (filename.includes("ad-provider.js") || stack.includes("ad-provider.js")) {
+      // ad-provider 内部の null/length 例外は無害なので noise を消すだけ。
+      // ロギングしたい場合は dev/vt=1 のみ。
+      e.preventDefault();
+      e.stopImmediatePropagation();
+      try {
+        if (
+          process.env.NODE_ENV !== "production" ||
+          window.location?.search?.includes("vt=1")
+        ) {
+          // eslint-disable-next-line no-console
+          console.debug(
+            `vt ads-gate suppressed ad-provider error: ${e.message ?? ""}`,
+          );
+        }
+      } catch {
+        /* ignore */
+      }
+    }
+  };
+  window.addEventListener("error", handler, /* capture */ true);
+}
+
 function ensureGlobal(): void {
   if (typeof window === "undefined") return;
   if (!Array.isArray(window.AdProvider)) {
@@ -61,12 +118,28 @@ function ensureGlobal(): void {
 }
 
 /**
+ * 該当 provider 用の <ins data-zoneid> が DOM に 1 つでも居るか。
+ *
+ * 居ない状態で `AdProvider.push({serve:{}})` を呼ぶと ad-provider.js が内部で
+ * `null.length` を踏みやすいので、こちら側でガードする。
+ *
+ * ExoClick の <ins> はクラス名 (`eas6a97888e...`) で識別される設計なので、
+ * "ad-provider script を必要としている <ins>" 全般を `[class^="eas6a97888"]`
+ * で取る。zone ごとにクラスが違うため細分化はしない (= 1 つでも対象の <ins>
+ * があれば push する)。
+ */
+function hasInsForProvider(): boolean {
+  if (typeof document === "undefined") return false;
+  return document.querySelector('ins[class^="eas6a97888"][data-zoneid]') != null;
+}
+
+/**
  * provider 用 ad-provider.js を 1 回だけ <head> に挿入する。
  *
  * 公式タグ同様 async でロードし、完了を待たない。
  *
- * "ads-ready" ゲート (adReadyGate) を通すことで、最初の active 動画が canplay
- * に達するか、idle タイマー (4s) が発火するまでスクリプトの実 fetch / 評価を
+ * "ads-ready" ゲート (adReadyGate) を通すことで、最初の active 動画が playing
+ * に達するか、idle タイマー (10s) が発火するまでスクリプトの実 fetch / 評価を
  * 遅延させる。これにより初回再生開始までのメインスレッドを ad-provider.js の
  * パース・実行・内部例外で奪われない。
  *
@@ -93,6 +166,14 @@ function ensureProviderScript(provider: Provider): void {
       `script[data-ad-provider="${provider}"]`,
     );
     if (already) return;
+    // ready 到達時点でこの provider 用 <ins> が DOM に居ないなら、まだスクリプトを
+    // 入れない (入れても何もしないどころか null/length 例外を起こすため)。
+    // 後で <ins> が DOM に入ったタイミングで serveAd / resetAndServeAd が呼ばれた
+    // 際にもう一度ここを通すため、scriptInjected を false に戻しておく。
+    if (!hasInsForProvider()) {
+      scriptInjected[provider] = false;
+      return;
+    }
     const s = document.createElement("script");
     s.async = true;
     s.type = "application/javascript";
@@ -107,11 +188,22 @@ function ensureProviderScript(provider: Provider): void {
  *
  * 呼び元は <ins> を DOM に描画したあとの useEffect 内でこれをたたく。
  * script のロード完了は待たない (待つと配列キュー差し替え後の挙動と噛み合わない)。
+ *
+ * <ins> が DOM に 1 つも居ない状態では push をスキップする (ad-provider.js 内部の
+ * null/length 例外を回避するため)。
  */
 export function serveAd(provider: Provider): void {
   if (typeof window === "undefined") return;
+  ensureErrorFilter();
   ensureGlobal();
   ensureProviderScript(provider);
+  if (!hasInsForProvider()) {
+    // 呼び元の <ins> がまだ DOM に居ない (= マウント直後で ref がついていない、
+    // または広告が無効化されている等)。push を打つと ad-provider が空配列を
+    // 走査して null/length 例外を吐くので、ここでスキップする。
+    // 次に <ins> が見えてからの useEffect 内 serveAd でリトライされる前提。
+    return;
+  }
   try {
     window.AdProvider!.push({ serve: {} });
   } catch {
@@ -132,9 +224,15 @@ export function serveAd(provider: Provider): void {
  *   3) scriptInjected[provider]=false にして次回 ensureProviderScript で再注入
  *   4) 即時 push({serve:{}}) (ロード前ならキューに溜まり、ロード後の初期
  *      スキャンで未処理 <ins> 群と一緒に処理される)
+ *
+ * <ins> が DOM に居ない場合は reset 自体をスキップする (= 何もしない)。
  */
 export function resetAndServeAd(provider: Provider): void {
   if (typeof window === "undefined") return;
+  ensureErrorFilter();
+  if (!hasInsForProvider()) {
+    return;
+  }
   const now = Date.now();
   // lastResetAt を window に持たせる。
   // モジュールレベル変数は Next.js の Hot Module Replacement でリセットされないが、

@@ -74,11 +74,17 @@ export function registerPrefetchElement(args: {
   const { slug, src, preload } = args;
   const existing = registry.get(slug);
   if (existing) {
-    if (existing.src === src && existing.el.isConnected) {
-      // 同 slug / 同 src で既に登録済みならそのまま再利用
+    // 同 slug / 同 src / 同 preload で既存要素が DOM 上に生きていれば再利用。
+    // readiness / バッファをそのまま温存して loadedmetadata 再発火を避ける。
+    if (
+      existing.src === src &&
+      existing.el.preload === preload &&
+      existing.el.isConnected
+    ) {
+      vtHandoffLog(`reuse slug=${slug} preload=${preload}`);
       return existing.el;
     }
-    // src 変更 (force-resolve リトライなど) → 古いノードを破棄
+    // src / preload 変更 (force-resolve リトライなど) → 古いノードを破棄
     destroyElement(existing.el);
     registry.delete(slug);
   }

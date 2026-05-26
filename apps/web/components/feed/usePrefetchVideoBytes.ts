@@ -97,6 +97,10 @@ export function usePrefetchVideoBytes(
   handleSlotCanPlay: (slug: string) => void;
 } {
   const [slots, setSlots] = useState<PrefetchSlot[]>([]);
+  // effect 内から最新 slots を sync 読みするための ref (state 反映前に
+  // 同 effect サイクルで複数 target を判定するため)。
+  const slotsRef = useRef<PrefetchSlot[]>(slots);
+  slotsRef.current = slots;
   // 進行中の resolveMp4Url を slug -> AbortController で管理。
   const inFlightRef = useRef<Map<string, AbortController>>(new Map());
   // 既に self-heal を 1 回試した slug。同 slug への無限リトライを防ぐ。
@@ -209,6 +213,21 @@ export function usePrefetchVideoBytes(
 
     const fire = (target: Target, immediate: boolean) => {
       if (inFlight.has(target.slug)) return;
+      // 既に同 id/slug の slot がある (= 既に preload 中の <video> 要素が
+      // handoff registry に温まっている) ならば、resolve も log も再発火しない。
+      // PrefetchVideoBuffer / registerPrefetchElement 側でも要素は使い回されるので、
+      // ここで二重ログを止めて vt 出力をノイズなく保つ。
+      const existingSlot = slotsRef.current.find((s) => s.id === target.id);
+      if (
+        existingSlot &&
+        existingSlot.slug === target.slug &&
+        existingSlot.preload === policy.preload
+      ) {
+        vtPrefetchLog(
+          `slot reuse index=${target.targetIndex} slug=${target.slug} offset=+${target.offset}`,
+        );
+        return;
+      }
       const controller = new AbortController();
       inFlight.set(target.slug, controller);
       if (isRapidSwiping && target.offset === PREFETCH_START_OFFSET) {

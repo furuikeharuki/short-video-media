@@ -20,6 +20,7 @@ import {
   claimForFeed,
   getReadiness,
   hasPromotableElement,
+  subscribe as subscribeVideoHandoff,
 } from "@/lib/videoHandoff";
 
 interface Props {
@@ -68,17 +69,28 @@ export default function FeedItem({ item, isActive, isAdjacent = false, isFirst, 
   const [promotedElement, setPromotedElement] =
     useState<HTMLVideoElement | null>(null);
   const promotedSlugRef = useRef<string | null>(null);
+  // active へ移行した時点で promotable な隠し要素があれば即時 claim する。
+  // hasPromotableElement は registry を sync に読むので render フェーズで判定でき、
+  // expectingPromotion=true を渡せば JSX <video> の一時マウントを完全に回避できる。
   const canPromote =
     isActive && !!videoSrc && hasPromotableElement(item.slug, videoSrc);
-  useLayoutEffect(() => {
-    if (!isActive) return;
-    if (!videoSrc) return;
-    if (promotedSlugRef.current === item.slug) return;
-    if (!hasPromotableElement(item.slug, videoSrc)) return;
+  const tryClaim = useCallback(() => {
+    if (!isActive) return false;
+    if (!videoSrc) return false;
+    if (promotedSlugRef.current === item.slug) return true;
+    if (!hasPromotableElement(item.slug, videoSrc)) return false;
     // readiness を先に読んでからログする (claim 後はレジストリが空になる)
     const readiness = getReadiness(item.slug) ?? "canplay";
     const el = claimForFeed(item.slug, videoSrc);
-    if (!el) return;
+    if (!el) {
+      if (isVideoTimingEnabled()) {
+        // eslint-disable-next-line no-console
+        console.debug(
+          `vt handoff claim miss slug=${item.slug} reason=race`,
+        );
+      }
+      return false;
+    }
     promotedSlugRef.current = item.slug;
     setPromotedElement(el);
     if (isVideoTimingEnabled()) {
@@ -87,7 +99,25 @@ export default function FeedItem({ item, isActive, isAdjacent = false, isFirst, 
         `vt byte-prefetch promote slug=${item.slug} readiness=${readiness}`,
       );
     }
+    return true;
   }, [isActive, videoSrc, item.slug]);
+  // active 化 / videoSrc 解決のタイミングでまず claim を試す。
+  // useLayoutEffect は passive useEffect より前に走るので、隣接 PrefetchVideoBuffer
+  // の cleanup (releasePrefetchElement) より先に claim を取れる。
+  useLayoutEffect(() => {
+    tryClaim();
+  }, [tryClaim]);
+  // canplay 到達が active 化より遅れる場合 (resolve 中など) に備え、registry の
+  // 状態変化を購読して claim を再試行する。promote 済み or 非 active なら no-op。
+  useEffect(() => {
+    if (!isActive) return;
+    if (promotedSlugRef.current === item.slug) return;
+    if (!videoSrc) return;
+    const unsub = subscribeVideoHandoff(() => {
+      tryClaim();
+    });
+    return unsub;
+  }, [isActive, videoSrc, item.slug, tryClaim]);
   // slug 変更で promoted を捨てる (別作品にスワイプして戻ってきた等)。
   useEffect(() => {
     if (promotedSlugRef.current && promotedSlugRef.current !== item.slug) {

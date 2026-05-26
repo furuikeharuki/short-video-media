@@ -350,6 +350,7 @@ export default function FeedItem({ item, isActive, isAdjacent = false, isFirst, 
     title: item.title,
     isActive,
     videoSrc,
+    boundElement: promotedElement,
     onOpenModal: handleOpenModal,
     isProActress,
   });

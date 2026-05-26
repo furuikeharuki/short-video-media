@@ -123,6 +123,18 @@ export function useFeedPlayback({ slug, title, isActive, videoSrc, onOpenModal, 
   // slug が変わった (新しい作品にスワイプ) ときは time を 0 にリセット。
   const lastPlaybackRef = useRef<{ slug: string; time: number }>({ slug: "", time: 0 });
 
+  // ユーザーが明示的にポーズしたかどうか。fireTogglePlay の pause / handleDetail (modal 開く)
+  // で true、playVideo / modal-close での再開で false に戻す。
+  // pro-actress minStart の seek 後 play() リトライで「ユーザーが止めた動画を勝手に再生再開しない」
+  // ためのガード。
+  const userPausedRef = useRef(false);
+  // pro-actress minStart enforce で seek した直後、active かつ paused なら 1 回だけ play() を
+  // 再試行するためのフラグ。seeked → (必要なら canplay) で消費する。
+  // - true: 次の seeked / canplay で play retry をスケジュール
+  // - false: リトライ不要 (= まだ enforce していない / すでにリトライ済み)
+  // 同じ seek イベントで二重に発火させないため、リトライ実行時 / イベント受領時に即座に false に戻す。
+  const proActressPlayRetryPendingRef = useRef(false);
+
   // slug が変わったら lastPlaybackRef をリセット。同じ <video> 上で src が差し替わる force リトライのときだけ
   // 以前の位置を保持したいため、videoSrc 変化ではリセットしないことに注意。
   useEffect(() => {
@@ -374,6 +386,7 @@ export function useFeedPlayback({ slug, title, isActive, videoSrc, onOpenModal, 
       if (!isActiveRef.current) return;
       if (video.paused) {
         // モーダルを開いて閉じる一連のユーザー操作をジェスチャーとみなして unmuted 再生を試みる
+        userPausedRef.current = false;
         playVideo(video, true);
       }
     };
@@ -398,6 +411,8 @@ export function useFeedPlayback({ slug, title, isActive, videoSrc, onOpenModal, 
     const video = videoRef.current;
     if (!video) return;
     isActiveRef.current = true;
+    // 新しく active になったスライドは自動再生対象。前作品で残った userPausedRef は破棄する。
+    userPausedRef.current = false;
     isMutedRef.current = globalIsMuted;
     setIsMuted(globalIsMuted);
     // 同期で muted 属性を反映してから play を呼ぶ
@@ -451,6 +466,10 @@ export function useFeedPlayback({ slug, title, isActive, videoSrc, onOpenModal, 
     if (isActive) return;
     const video = videoRef.current;
     isActiveRef.current = false;
+    // 隣接スライドに戻ったので、まだ未消化の play retry 予約と userPaused 状態は破棄する
+    // (次に中央に戻ったときは userPausedRef=false 起点で再評価される)。
+    proActressPlayRetryPendingRef.current = false;
+    userPausedRef.current = false;
     stopProgressLoop();
     if (video) {
       video.pause();
@@ -533,6 +552,18 @@ export function useFeedPlayback({ slug, title, isActive, videoSrc, onOpenModal, 
           );
         }
         try { video.currentTime = lower; } catch { /* ignore */ }
+        // active かつ autoplay 対象 (= ユーザーが明示的に止めていない) で、enforce 直後に
+        // 動画が paused のままなら、seeked / canplay 後に一度だけ play() を再試行する。
+        // ブラウザによっては play() を await した後の currentTime 設定で再生開始がキャンセル
+        // されてしまい、結果として「5 秒に飛んだが paused のまま」になるケースがあるため。
+        // 二重トリガー防止のため pending フラグで idempotent にしている。
+        if (
+          isActiveRef.current &&
+          !userPausedRef.current &&
+          video.paused
+        ) {
+          proActressPlayRetryPendingRef.current = true;
+        }
       }
     };
 
@@ -564,7 +595,39 @@ export function useFeedPlayback({ slug, title, isActive, videoSrc, onOpenModal, 
       enforceLowerBound();
     };
     const handleSeeking = () => enforceLowerBound();
-    const handleSeeked = () => enforceLowerBound();
+    const tryConsumePlayRetry = (eventName: "seeked" | "canplay") => {
+      if (!proActressPlayRetryPendingRef.current) return;
+      if (!isActiveRef.current) {
+        proActressPlayRetryPendingRef.current = false;
+        return;
+      }
+      if (userPausedRef.current) {
+        proActressPlayRetryPendingRef.current = false;
+        return;
+      }
+      if (!video.paused) {
+        // すでに再生中。リトライ不要。
+        proActressPlayRetryPendingRef.current = false;
+        return;
+      }
+      // pending を先に消費しておく。playVideo 側で seek が再度発火しても
+      // ループしないように idempotent にする。
+      proActressPlayRetryPendingRef.current = false;
+      if (isVideoTimingEnabled()) {
+        // eslint-disable-next-line no-console
+        console.debug(
+          `vt ${slug}: pro-actress play retry after minStart seek (on ${eventName} rs=${video.readyState})`,
+        );
+      }
+      void playVideo(video, false);
+    };
+    const handleSeeked = () => {
+      enforceLowerBound();
+      tryConsumePlayRetry("seeked");
+    };
+    const handleCanPlay = () => {
+      tryConsumePlayRetry("canplay");
+    };
     const handleEnded = () => {
       // 既存ループ仕様 (HTMLVideoElement の loop 属性は未使用、再生終端で何が起きるかは
       // ブラウザ依存) に合わせ、明示的に 5 秒に戻して再生再開する。
@@ -587,13 +650,17 @@ export function useFeedPlayback({ slug, title, isActive, videoSrc, onOpenModal, 
     video.addEventListener("timeupdate", handleTimeUpdate);
     video.addEventListener("seeking", handleSeeking);
     video.addEventListener("seeked", handleSeeked);
+    video.addEventListener("canplay", handleCanPlay);
     video.addEventListener("ended", handleEnded);
     return () => {
       video.removeEventListener("loadedmetadata", handleLoadedMeta);
       video.removeEventListener("timeupdate", handleTimeUpdate);
       video.removeEventListener("seeking", handleSeeking);
       video.removeEventListener("seeked", handleSeeked);
+      video.removeEventListener("canplay", handleCanPlay);
       video.removeEventListener("ended", handleEnded);
+      // 次の <video> インスタンスに pending 状態が漏れないようリセット。
+      proActressPlayRetryPendingRef.current = false;
     };
   }, [slug, videoSrc, isProActress, playVideo]);
 
@@ -726,9 +793,13 @@ export function useFeedPlayback({ slug, title, isActive, videoSrc, onOpenModal, 
     const video = videoRef.current;
     if (!video) return;
     if (video.paused) {
+      userPausedRef.current = false;
       await playVideo(video, true);
       showOverlay("play");
     } else {
+      userPausedRef.current = true;
+      // 一時停止と同時に minStart seek 後の play リトライ予約も破棄する。
+      proActressPlayRetryPendingRef.current = false;
       video.pause();
       isPlayingRef.current = false;
       stopProgressLoop();
@@ -774,6 +845,8 @@ export function useFeedPlayback({ slug, title, isActive, videoSrc, onOpenModal, 
     e.preventDefault();
     const video = videoRef.current;
     if (video && !video.paused) {
+      userPausedRef.current = true;
+      proActressPlayRetryPendingRef.current = false;
       video.pause();
       isPlayingRef.current = false;
       stopProgressLoop();

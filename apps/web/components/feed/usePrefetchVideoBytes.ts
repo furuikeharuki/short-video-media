@@ -7,11 +7,37 @@ import { resolveMp4Url } from "@/lib/api/resolve-mp4";
 import { ensurePreconnect, getPrefetchPolicy } from "@/lib/networkPrefs";
 import { isVideoTimingEnabled } from "@/lib/videoTiming";
 import {
+  consumeJustClaimed,
   consumeStaleClaim,
   getReadiness,
   peekStaleClaim,
   syncNearProtection,
 } from "@/lib/videoHandoff";
+
+/**
+ * 設計上の不変条件 (PR #196 で導入):
+ *   readiness の source-of-truth は handoff registry 1 本に統合する。
+ *   この hook はもう独自の slug→readiness 永続 Map (旧 readinessRef) を持たない。
+ *
+ * 過去の不整合 (entry-missing で readiness=canplay と表示されていたケース):
+ *   - hidden <video> が canplay を発火 → readinessRef.set(slug, "canplay")
+ *   - WINDOW_SIZE=1 で別 slug にスワイプ → FeedItem unmount → promoted <video>
+ *     破棄 → registry entry が claim 済みで消滅
+ *   - 直前 slug が再び +1..+3 に戻ってきたが、registry には新規 metadata 段階の
+ *     entry しか無い (or まだ無い)
+ *   - 旧 readinessRef は永続的に "canplay" を覚えていたため、active 化時の
+ *     log で `byte-prefetched=canplay` と出るのに promote は不能で JSX <video>
+ *     ゼロロードに落ちる。
+ *
+ * 修正方針:
+ *   - readiness は常に getReadiness(slug) で registry から都度参照する。
+ *   - 隠し <video> の loadedmetadata / canplay は PrefetchVideoBuffer 経由で
+ *     updateReadiness が呼ばれ registry に集約される。本 hook の handleSlot* は
+ *     後方互換用に残すが副作用は持たない (no-op)。
+ *   - active セル / readiness window のログは registry の今を表示するだけ。
+ *     entry が無ければ false、metadata なら metadata、canplay なら canplay。
+ *     stale-claim signal (= 直前の tryClaim 失敗) は短命優先で reason を出す。
+ */
 
 /**
  * 現在再生中のスライドより先 N 枚分の動画バイトを裏で preload しておく hook。
@@ -142,10 +168,6 @@ export function usePrefetchVideoBytes(
   const healedRef = useRef<Set<string>>(new Set());
   // slug -> MovieCard.id の逆引き。onError から slot を特定するため。
   const slugToIdRef = useRef<Map<string, string>>(new Map());
-  // dev ログ用: 隠し <video> が到達した readiness レベルを slug 単位で覚えておき、
-  // active 移動時に loadedmetadata だけ届いたのか canplay まで温まっていたのかを
-  // active ログに反映する。一度 canplay まで上がったら metadata には戻さない。
-  const readinessRef = useRef<Map<string, PrefetchReadiness>>(new Map());
   const lastActiveSlugRef = useRef<string | null>(null);
 
   // ポリシー (aheadCount / preload / immediateUpcoming / warmPlusThree) を計算する。
@@ -199,47 +221,50 @@ export function usePrefetchVideoBytes(
     .join("|");
 
   // active スライドが変わったタイミングで、そのスライドが裏 prefetch 済みだったかを
-  // dev ログに出す (loadedmetadata +9s 等を取り逃したかの確認用)。
-  // 同時に current / +1 / +2 / +3 の readiness ウィンドウもログに残し、
-  // どの距離までが canplay まで温まっていたかをひと目で見られるようにする。
+  // dev ログに出す。readiness は handoff registry を唯一の source-of-truth として
+  // 都度参照する (= 上の不変条件)。
+  //
+  // FeedItem の useLayoutEffect (tryClaim) は本 effect より前に走るため、claim が
+  // 成功していれば entry は registry から外れて getReadiness は null を返す。
+  // この場合は claim 直後だけ true として扱う short-lived signal を別に消費する。
+  //
+  // window 内セル (+1..+3) は registry の今をそのまま映す。entry が無ければ false、
+  // metadata なら metadata、canplay なら canplay。これにより「ログ上は canplay
+  // なのに promote 不能」という乖離は構造的に発生しない。
   useEffect(() => {
     if (!isVideoTimingEnabled()) return;
     const activeItem = items[currentIndex];
     if (!activeItem || !activeItem.slug) return;
     if (lastActiveSlugRef.current === activeItem.slug) return;
     lastActiveSlugRef.current = activeItem.slug;
-    // active の readiness は readinessRef (隠し <video> の loadedmetadata/canplay
-    // 観測値) を最優先で見るが、registry に対応 entry が残っていない / src 不一致な
-    // ら "stale canplay" とみなして downgrade する。これをしないと
-    //   - byte-prefetched=canplay と出るのに promote されず、active が JSX <video>
-    //     を新規マウントしてゼロから読み直す
-    // という、ログと実体が乖離する状態を運用側が検知できない。downgrade した
-    // 場合は理由を 1 行で残す。
-    const reconciled = reconcileReadiness(
-      activeItem.slug,
-      readinessRef.current.get(activeItem.slug) ?? null,
-      true,
-    );
-    if (reconciled.downgraded) {
-      const was = reconciled.was ?? "null";
-      const eff = reconciled.effective ?? "false";
-      readinessRef.current.delete(activeItem.slug);
+    // current セル:
+    //   1) 直前の tryClaim 失敗 (stale signal) があれば最優先で false + 理由。
+    //   2) 直前の tryClaim 成功 (justClaimed signal) があれば canplay
+    //      (claim で entry が registry から消えたが promote 成立を意味する)。
+    //   3) どちらも無ければ registry を直接読む。
+    const stale = consumeStaleClaim(activeItem.slug);
+    const justClaimed = stale === null && consumeJustClaimed(activeItem.slug);
+    let activeLabel: "canplay" | "metadata" | "false";
+    let activeReason: string | null = null;
+    if (stale !== null) {
+      activeLabel = "false";
+      activeReason = `promote-${stale}`;
+    } else if (justClaimed) {
+      activeLabel = "canplay";
+    } else {
+      activeLabel = registryLabel(activeItem.slug);
+    }
+    if (activeReason) {
       vtPrefetchLog(
-        `readiness stale slug=${activeItem.slug} was=${was} reason=${reconciled.reason}`,
-      );
-      vtPrefetchLog(
-        `readiness downgraded slug=${activeItem.slug} from=${was} to=${eff} reason=${reconciled.reason}`,
+        `readiness stale slug=${activeItem.slug} reason=${activeReason}`,
       );
     }
-    const readinessLabel: string = reconciled.effective ?? "false";
     vtPrefetchLog(
-      `active index=${currentIndex} slug=${activeItem.slug} byte-prefetched=${readinessLabel}`,
+      `active index=${currentIndex} slug=${activeItem.slug} byte-prefetched=${activeLabel}`,
     );
-    // 続けて readiness window を出す。current から +3 までを 1 行にまとめる。
-    // 各セルは canplay / metadata / false。slot がそもそも存在しない distance も
-    // false 扱いで出す。窓内の slug も active 同様に reconcileReadiness で検証し、
-    // 「ref では canplay だが registry に entry が無い」状態を ref から消した上で
-    // false として表示する。これにより readiness window が事実と乖離しない。
+    // readiness window: current..+3。各セルとも registry を直接読む。
+    // window セルでも stale-claim signal を peek (consume せず) して、立っている
+    // 間は false 表示する。consume は当該 slug が active に来たときに行う。
     const cells: string[] = [];
     for (let d = 0; d <= NEAR_PROTECT_MAX_OFFSET; d += 1) {
       const idx = currentIndex + d;
@@ -248,26 +273,20 @@ export function usePrefetchVideoBytes(
         cells.push(d === 0 ? "current=oob" : `+${d}=oob`);
         continue;
       }
-      const cellReconciled = reconcileReadiness(
-        it.slug,
-        readinessRef.current.get(it.slug) ?? null,
-        false,
-      );
-      if (cellReconciled.downgraded) {
-        readinessRef.current.delete(it.slug);
-        vtPrefetchLog(
-          `readiness stale slug=${it.slug} was=${cellReconciled.was} reason=${cellReconciled.reason} window=+${d}`,
-        );
+      let label: string;
+      if (d === 0) {
+        label = activeLabel;
+      } else if (peekStaleClaim(it.slug) !== null) {
+        label = "false";
+      } else {
+        label = registryLabel(it.slug);
       }
-      const r = cellReconciled.effective ?? "false";
-      cells.push(d === 0 ? `current=${r}` : `+${d}=${r}`);
+      cells.push(d === 0 ? `current=${label}` : `+${d}=${label}`);
     }
     vtPrefetchLog(`readiness window ${cells.join(" ")}`);
-    // active がまだ canplay まで温まっていなかった場合は短い alert ログも出す。
-    // (運用上「sub-1s 再生に届かなかった swipe がどれくらいあったか」を数えるため。)
-    if (readinessLabel !== "canplay") {
+    if (activeLabel !== "canplay") {
       vtPrefetchLog(
-        `active not-ready slug=${activeItem.slug} readiness=${readinessLabel} index=${currentIndex}`,
+        `active not-ready slug=${activeItem.slug} readiness=${activeLabel} index=${currentIndex}`,
       );
     }
   }, [currentIndex, items]);
@@ -509,102 +528,30 @@ export function usePrefetchVideoBytes(
     [policy.preload],
   );
 
-  // 隠し <video> が loadedmetadata を発火したら readiness を 'metadata' に格上げ。
-  // 一度 'canplay' まで到達した slug は格下げしない (canplay >= metadata)。
-  const handleSlotMetadata = useCallback((slug: string) => {
-    if (!slug) return;
-    const cur = readinessRef.current.get(slug);
-    if (cur === "canplay") return;
-    readinessRef.current.set(slug, "metadata");
+  // 後方互換のために残す no-op handler。registry への readiness 反映は
+  // PrefetchVideoBuffer 側で updateReadiness が直接呼ばれているので、本 hook では
+  // 何も覚えない (= 「永続的に canplay と覚え続ける ref」問題を構造的に排除する)。
+  const handleSlotMetadata = useCallback((_slug: string) => {
+    // no-op (registry が source-of-truth)
   }, []);
-
-  // 隠し <video> が canplay (readyState >= HAVE_FUTURE_DATA) に到達したら
-  // readiness を 'canplay' に格上げ。これが Chrome の +1 で「真の prefetched」と
-  // 認める閾値。Safari は preload="metadata" のままなので通常ここには来ない。
-  const handleSlotCanPlay = useCallback((slug: string) => {
-    if (!slug) return;
-    readinessRef.current.set(slug, "canplay");
+  const handleSlotCanPlay = useCallback((_slug: string) => {
+    // no-op (registry が source-of-truth)
   }, []);
 
   return { slots, handleSlotError, handleSlotMetadata, handleSlotCanPlay };
 }
 
 /**
- * `readinessRef` (隠し <video> 側で観測した最大 readiness) と、handoff registry
- * の現状を突き合わせる。
- *
- * readinessRef は loadedmetadata/canplay イベントを 1 回受けたら slug 単位で
- * 永続的に "canplay" を覚え続ける (一度温まったものを格下げしないため)。一方で
- * registry 側の entry は TTL / cap eviction / claim で消える。両者が乖離する
- * と、active 化時に「byte-prefetched=canplay」と出ているのに promote されない
- * (entry が既に無いので claim 不能 → JSX <video> をゼロから読み直し) という、
- * 観測と挙動が一致しない状況になる。
- *
- * 本関数は active / readiness window のログを出す前に呼び、
- *   - localReadiness="canplay" だが registry にも getReadiness にも痕跡が無い
- *   - localReadiness="canplay" だが registry entry の readiness が metadata 以下
- * のケースを stale 扱いとして downgrade する。
- * downgrade した場合は呼出側で readinessRef からも消し、以後の「active not-ready」
- * カウントが正しい母数になるようにする。
+ * registry を唯一の真実として読む。
+ *   - entry なし → "false"
+ *   - entry readiness="metadata" → "metadata"
+ *   - entry readiness="canplay" → "canplay"
  */
-function reconcileReadiness(
-  slug: string,
-  localReadiness: PrefetchReadiness | null,
-  isActiveCell: boolean,
-): {
-  effective: PrefetchReadiness | null;
-  downgraded: boolean;
-  was: PrefetchReadiness | null;
-  reason: string;
-} {
-  const handoff = getReadiness(slug);
-  // FeedItem.tryClaim が直近で claim 失敗を検出していたら、その情報を最優先で
-  // 反映する。registry エントリが残っていても (例えば src 不一致 / not-canplay)、
-  // promote 不能 = active が JSX <video> をゼロから立ち上げ直す状態なので、
-  // 「byte-prefetched=canplay」を出すと観測と実体が乖離する。stale flag は
-  // 1 回 set → 1 回 consume の短命シグナルで、active セル (current) のみが
-  // consume する。window 内の他セルは peek (consume せず) して downgrade を
-  // 表示するだけにし、当該 slug が次に active になったときに consume させる。
-  const stale = isActiveCell ? consumeStaleClaim(slug) : peekStaleClaim(slug);
-  if (stale !== null) {
-    return {
-      effective: null,
-      downgraded: true,
-      was: localReadiness,
-      reason: `promote-${stale}`,
-    };
-  }
-  if (localReadiness !== "canplay") {
-    // 元々 canplay を主張していないので downgrade 判定対象外。registry 側の
-    // 観測が上回っているならそちらを返す。
-    return {
-      effective: localReadiness ?? handoff,
-      downgraded: false,
-      was: localReadiness,
-      reason: "ok",
-    };
-  }
-  // localReadiness === "canplay" → registry と整合するか確認する。
-  if (handoff === "canplay") {
-    return { effective: "canplay", downgraded: false, was: localReadiness, reason: "ok" };
-  }
-  if (handoff === "metadata") {
-    // 隠し要素は loadedmetadata までしか戻っていない (canplay 観測後に何らかの
-    // 理由で entry が再登録された等)。stale 扱い。
-    return {
-      effective: "metadata",
-      downgraded: true,
-      was: localReadiness,
-      reason: "entry-readiness-lower",
-    };
-  }
-  // handoff === null → registry に entry なし (TTL / cap evict / 既に claim)。
-  return {
-    effective: null,
-    downgraded: true,
-    was: localReadiness,
-    reason: "entry-missing",
-  };
+function registryLabel(slug: string): "canplay" | "metadata" | "false" {
+  const r = getReadiness(slug);
+  if (r === "canplay") return "canplay";
+  if (r === "metadata") return "metadata";
+  return "false";
 }
 
 /**

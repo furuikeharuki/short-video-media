@@ -25,7 +25,6 @@ import {
   subscribe as subscribeVideoHandoff,
   unpinSlug,
 } from "@/lib/videoHandoff";
-import { getPrefetchPolicy } from "@/lib/networkPrefs";
 
 interface Props {
   item: MovieCard;
@@ -49,15 +48,6 @@ interface Props {
 // ハードタイムアウト: <video> が loadeddata も error も発火しないまま
 // これだけ経ったら、ネットワーク進行不能とみなして onError 相当のリトライを走らせる。
 const VIDEO_HARD_TIMEOUT_MS = 25000;
-
-// active 化直後、隠し handoff entry がまだ registry に到達していない可能性がある。
-// JSX <video> を即マウントすると別 <video> 要素で新規 GET が走るので、まず短時間
-// だけ host placeholder のまま subscribe で claim を待つ。
-//
-// 120ms は「+1 隣接 <video> が canplay/metadata を発火してプールへ retain される
-// までの観測実測値」より少しだけ余裕を見たバジェット。これ以上待つとサムネ
-// だけが残って体感的な「動画が起動しない」感が出る。
-const HANDOFF_CLAIM_GRACE_MS = 120;
 
 export default function FeedItem({ item, isActive, isAdjacent = false, isFirst, isSecond = false, isRapidSwiping = false }: Props) {
   const [modalSlug, setModalSlug] = useState<string | null>(null);
@@ -92,15 +82,6 @@ export default function FeedItem({ item, isActive, isAdjacent = false, isFirst, 
   const [pendingAbandonedSlug, setPendingAbandonedSlug] =
     useState<string | null>(null);
   const activeReadyRef = useRef(false);
-  // claim grace: active 化時点で handoff entry がまだ registry に無い場合、
-  // HANDOFF_CLAIM_GRACE_MS だけ JSX <video> マウントを保留して subscribe で claim を
-  // 待つ。grace 中の slug が入っている間は expectingPromotion 扱いし host だけ
-  // 描画する。timeout / abandon / promote のいずれかで slug をクリアする。
-  const [graceActiveSlug, setGraceActiveSlug] = useState<string | null>(null);
-  const graceStartedAtRef = useRef<number>(0);
-  // 既に grace を 1 度実施した slug。再 arm 抑止用 (timeout 後の effect 再実行で
-  // 無限ループに陥らないため)。slug 変更でリセット。
-  const [graceConsumedSlug, setGraceConsumedSlug] = useState<string | null>(null);
   // active へ移行した時点で promotable な隠し要素があれば即時 claim する。
   // hasPromotableElement は registry を sync に読むので render フェーズで判定でき、
   // expectingPromotion=true を渡せば JSX <video> の一時マウントを完全に回避できる。
@@ -111,8 +92,7 @@ export default function FeedItem({ item, isActive, isAdjacent = false, isFirst, 
     !!videoSrc &&
     pendingAbandonedSlug !== item.slug &&
     (hasPromotableElement(item.slug, videoSrc) ||
-      hasPendingElement(item.slug, videoSrc) ||
-      graceActiveSlug === item.slug);
+      hasPendingElement(item.slug, videoSrc));
   const tryClaim = useCallback(() => {
     if (!isActive) return false;
     if (!videoSrc) return false;
@@ -129,17 +109,6 @@ export default function FeedItem({ item, isActive, isAdjacent = false, isFirst, 
       // から消えているので unpinSlug は実質 no-op だが、念のため呼ぶ。
       if (wasPending) unpinSlug(item.slug);
       pendingLoggedRef.current = null;
-      // grace 中に claim hit したら grace を解除する。
-      if (graceActiveSlug === item.slug) {
-        if (isVideoTimingEnabled()) {
-          const elapsed = Date.now() - graceStartedAtRef.current;
-          // eslint-disable-next-line no-console
-          console.debug(
-            `vt handoff claim grace hit slug=${item.slug} readiness=${readiness} elapsed=${elapsed}ms`,
-          );
-        }
-        setGraceActiveSlug(null);
-      }
       setPromotedElement(el);
       if (isVideoTimingEnabled()) {
         // eslint-disable-next-line no-console
@@ -190,18 +159,6 @@ export default function FeedItem({ item, isActive, isAdjacent = false, isFirst, 
         );
       }
       pendingLoggedRef.current = item.slug;
-      // pending entry を掴めたので grace は終了 (以降は pending 経路で待つ)。
-      if (graceActiveSlug === item.slug) {
-        if (isVideoTimingEnabled()) {
-          const readiness = getReadiness(item.slug) ?? "metadata";
-          const elapsed = Date.now() - graceStartedAtRef.current;
-          // eslint-disable-next-line no-console
-          console.debug(
-            `vt handoff claim grace hit slug=${item.slug} readiness=${readiness} elapsed=${elapsed}ms`,
-          );
-        }
-        setGraceActiveSlug(null);
-      }
       return false;
     }
     // 該当 entry が registry から消えていた / src 不一致 → 1 度だけ詳細 miss ログを出す。
@@ -219,7 +176,7 @@ export default function FeedItem({ item, isActive, isAdjacent = false, isFirst, 
       setPendingAbandonedSlug(item.slug);
     }
     return false;
-  }, [isActive, videoSrc, item.slug, pendingAbandonedSlug, graceActiveSlug]);
+  }, [isActive, videoSrc, item.slug, pendingAbandonedSlug]);
   // active 化 / videoSrc 解決のタイミングでまず claim を試す。
   // useLayoutEffect は passive useEffect より前に走るので、隣接 PrefetchVideoBuffer
   // の cleanup (releasePrefetchElement) より先に claim を取れる。
@@ -238,63 +195,6 @@ export default function FeedItem({ item, isActive, isAdjacent = false, isFirst, 
     });
     return unsub;
   }, [isActive, videoSrc, item.slug, tryClaim]);
-  // claim grace: active 化時点で handoff entry がまだ registry に到達していない
-  // ケースに備えて、JSX <video> マウントを HANDOFF_CLAIM_GRACE_MS だけ保留する。
-  // 既に promotable / pending entry があればそちらの経路で処理されるので grace
-  // 不要。Save-Data / 2g の様に prefetch 自体が動かない環境 (aheadCount=0) では
-  // 同期的に判別できるので grace をスキップしてすぐ JSX <video> をマウントする。
-  useEffect(() => {
-    if (!isActive) return;
-    if (!videoSrc) return;
-    if (promotedSlugRef.current === item.slug) return;
-    if (pendingAbandonedSlug === item.slug) return;
-    // 既に claim 可能 / pending が掴めるなら grace 不要 (subscribe / immediate claim で処理)。
-    if (hasPromotableElement(item.slug, videoSrc)) return;
-    if (hasPendingElement(item.slug, videoSrc)) return;
-    // 先読みが完全に無効な環境では handoff entry が永久に来ない → grace スキップ。
-    try {
-      if (getPrefetchPolicy().aheadCount === 0) return;
-    } catch {
-      // 何かおかしくても安全側 (= grace を張る) に倒す。
-    }
-    if (graceActiveSlug === item.slug) return;
-    if (graceConsumedSlug === item.slug) return;
-    graceStartedAtRef.current = Date.now();
-    setGraceActiveSlug(item.slug);
-    if (isVideoTimingEnabled()) {
-      // eslint-disable-next-line no-console
-      console.debug(
-        `vt handoff claim grace start slug=${item.slug} timeout=${HANDOFF_CLAIM_GRACE_MS}ms`,
-      );
-    }
-    const slug = item.slug;
-    const timer = setTimeout(() => {
-      // タイムアウト時点でもう一度 claim を試す。それでもダメなら諦めて
-      // JSX <video> を mount させる。
-      const claimed = tryClaim();
-      if (claimed) return;
-      if (isVideoTimingEnabled()) {
-        const elapsed = Date.now() - graceStartedAtRef.current;
-        // eslint-disable-next-line no-console
-        console.debug(
-          `vt handoff claim grace timeout slug=${slug} elapsed=${elapsed}ms`,
-        );
-      }
-      setGraceConsumedSlug(slug);
-      setGraceActiveSlug((prev) => (prev === slug ? null : prev));
-    }, HANDOFF_CLAIM_GRACE_MS);
-    return () => {
-      clearTimeout(timer);
-    };
-  }, [
-    isActive,
-    videoSrc,
-    item.slug,
-    pendingAbandonedSlug,
-    graceActiveSlug,
-    graceConsumedSlug,
-    tryClaim,
-  ]);
   // slug 変更で promoted / pending 状態を捨てる (別作品にスワイプして戻ってきた等)。
   useEffect(() => {
     if (promotedSlugRef.current && promotedSlugRef.current !== item.slug) {
@@ -317,10 +217,6 @@ export default function FeedItem({ item, isActive, isAdjacent = false, isFirst, 
     pendingLoggedRef.current = null;
     setPendingAbandonedSlug((prev) => (prev === item.slug ? prev : null));
     activeReadyRef.current = false;
-    // slug が変わったら前の grace は無効化する。新 slug 用 grace は別 effect で
-    // 再 arm される。
-    setGraceActiveSlug((prev) => (prev === item.slug ? prev : null));
-    setGraceConsumedSlug((prev) => (prev === item.slug ? prev : null));
   }, [item.slug]);
   // アンマウント / 非 active 化で残った pending pin を解除する。
   // pinned entry を解放しないと、別ユーザー操作で同 slug が active になるまで
@@ -337,8 +233,6 @@ export default function FeedItem({ item, isActive, isAdjacent = false, isFirst, 
       }
       pendingLoggedRef.current = null;
     }
-    // 非 active になったら待機中の grace も解除。
-    setGraceActiveSlug((prev) => (prev === item.slug ? null : prev));
   }, [isActive, item.slug]);
   useEffect(() => {
     return () => {

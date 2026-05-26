@@ -50,6 +50,12 @@ interface HandoffEntry {
    * buffer が unmount したが destroy せずプールに retain しているときは true。
    */
   detached: boolean;
+  /**
+   * active 側が pending-handoff として claim 中の slug ならピンされる。
+   * pin されている間は cap / TTL のクリーンアップで evict されない。
+   * 解除は promote / abandon / slug-change を起こした active 側が行う。
+   */
+  pinned: boolean;
 }
 
 type Listener = () => void;
@@ -108,6 +114,7 @@ function cleanupExpired() {
   const now = Date.now();
   for (const [slug, entry] of registry) {
     if (!entry.detached) continue;
+    if (entry.pinned) continue;
     const ttl =
       entry.readiness === "canplay" ? POOL_TTL_CANPLAY_MS : POOL_TTL_PENDING_MS;
     if (now - entry.pooledAt > ttl) {
@@ -145,7 +152,12 @@ function vtHandoffLog(message: string) {
  *   (canplay 済みは最後まで残す)。
  */
 function trimPoolIfNeeded() {
-  const detached = Array.from(registry.values()).filter((e) => e.detached);
+  // pinned entry は active 側が pending-handoff として claim 中なので絶対に
+  // evict しない。cap 計算からも除外する (pin された entry が cap を埋めても、
+  // 残りの非 pinned 枠だけで cap を判定する)。
+  const detached = Array.from(registry.values()).filter(
+    (e) => e.detached && !e.pinned,
+  );
   const nonCanplay = detached
     .filter((e) => e.readiness !== "canplay")
     .sort((a, b) => a.pooledAt - b.pooledAt);
@@ -159,8 +171,19 @@ function trimPoolIfNeeded() {
       );
     }
   }
-  const remaining = Array.from(registry.values()).filter((e) => e.detached);
-  if (remaining.length <= MAX_POOLED_ELEMENTS) return;
+  const remaining = Array.from(registry.values()).filter(
+    (e) => e.detached && !e.pinned,
+  );
+  if (remaining.length <= MAX_POOLED_ELEMENTS) {
+    // 全 detached が pinned で cap オーバーしているケースだけログ。
+    const totalDetached = Array.from(registry.values()).filter((e) => e.detached);
+    if (totalDetached.length > MAX_POOLED_ELEMENTS) {
+      vtHandoffLog(
+        `pool evict skip pinned detached=${totalDetached.length} cap=${MAX_POOLED_ELEMENTS}`,
+      );
+    }
+    return;
+  }
   // 削除優先度: readiness=metadata を先に / その中で古いものから。
   remaining.sort((a, b) => {
     const rankA = a.readiness === "canplay" ? 1 : 0;
@@ -237,6 +260,7 @@ export function registerPrefetchElement(args: {
     readiness: "metadata",
     pooledAt: Date.now(),
     detached: false,
+    pinned: false,
   });
   vtHandoffLog(`register slug=${slug} preload=${preload}`);
   notify();
@@ -352,6 +376,35 @@ export function releasePrefetchElement(slug: string, el: HTMLVideoElement | null
   vtHandoffLog(`pool retain slug=${slug} readiness=${entry.readiness}`);
   trimPoolIfNeeded();
   notify();
+}
+
+/**
+ * active 側が pending-handoff の claim 中であることを registry に伝える。
+ * pin されている間は cap / TTL クリーンアップで evict されない。
+ * canplay 到達による promote、または abandon を起こした active 側が
+ * `unpinSlug` で必ず解除する。
+ *
+ * 戻り値: pin に成功したか (= 該当 slug / src の entry が registry に存在するか)。
+ */
+export function pinSlug(slug: string, src: string): boolean {
+  const entry = registry.get(slug);
+  if (!entry) return false;
+  if (entry.src !== src) return false;
+  if (entry.pinned) return true;
+  entry.pinned = true;
+  vtHandoffLog(`pool pin slug=${slug} readiness=${entry.readiness}`);
+  return true;
+}
+
+/**
+ * pinSlug で立てたピンを下ろす。entry が既に消えていれば no-op。
+ */
+export function unpinSlug(slug: string) {
+  const entry = registry.get(slug);
+  if (!entry) return;
+  if (!entry.pinned) return;
+  entry.pinned = false;
+  vtHandoffLog(`pool unpin slug=${slug} readiness=${entry.readiness}`);
 }
 
 /**

@@ -21,7 +21,9 @@ import {
   getReadiness,
   hasPendingElement,
   hasPromotableElement,
+  pinSlug,
   subscribe as subscribeVideoHandoff,
+  unpinSlug,
 } from "@/lib/videoHandoff";
 
 interface Props {
@@ -103,6 +105,9 @@ export default function FeedItem({ item, isActive, isAdjacent = false, isFirst, 
       const el = claimForFeed(item.slug, videoSrc);
       if (!el) return false;
       promotedSlugRef.current = item.slug;
+      // promote 完了 → pending pin を解除。entry は claimForFeed で registry
+      // から消えているので unpinSlug は実質 no-op だが、念のため呼ぶ。
+      if (wasPending) unpinSlug(item.slug);
       pendingLoggedRef.current = null;
       setPromotedElement(el);
       if (isVideoTimingEnabled()) {
@@ -133,18 +138,24 @@ export default function FeedItem({ item, isActive, isAdjacent = false, isFirst, 
             `vt handoff pending abandon slug=${item.slug} reason=active-playing readiness=${readiness}`,
           );
         }
+        unpinSlug(item.slug);
         pendingLoggedRef.current = null;
         setPendingAbandonedSlug(item.slug);
         return false;
       }
+      // pending に入る際は registry 側に pin を立て、cap / TTL クリーンアップで
+      // この entry が evict されないようにする。promote または abandon で必ず
+      // unpin される。
+      const wasAlreadyPending = pendingLoggedRef.current === item.slug;
+      const pinned = pinSlug(item.slug, videoSrc);
       if (
         isVideoTimingEnabled() &&
-        pendingLoggedRef.current !== item.slug
+        !wasAlreadyPending
       ) {
         const readiness = getReadiness(item.slug) ?? "metadata";
         // eslint-disable-next-line no-console
         console.debug(
-          `vt handoff claim pending slug=${item.slug} readiness=${readiness}`,
+          `vt handoff claim pending slug=${item.slug} readiness=${readiness} pinned=${pinned}`,
         );
       }
       pendingLoggedRef.current = item.slug;
@@ -153,6 +164,7 @@ export default function FeedItem({ item, isActive, isAdjacent = false, isFirst, 
     // 該当 entry が registry から消えていた / src 不一致 → 1 度だけ詳細 miss ログを出す。
     if (pendingLoggedRef.current === item.slug) {
       pendingLoggedRef.current = null;
+      unpinSlug(item.slug);
       // claimForFeed が `claim miss reason=not-found|src-mismatch` を出す。
       claimForFeed(item.slug, videoSrc);
       if (isVideoTimingEnabled()) {
@@ -191,18 +203,45 @@ export default function FeedItem({ item, isActive, isAdjacent = false, isFirst, 
     }
     if (
       pendingLoggedRef.current &&
-      pendingLoggedRef.current !== item.slug &&
-      isVideoTimingEnabled()
+      pendingLoggedRef.current !== item.slug
     ) {
-      // eslint-disable-next-line no-console
-      console.debug(
-        `vt handoff pending abandon slug=${pendingLoggedRef.current} reason=slug-changed`,
-      );
+      // 別 slug を pending pin していたなら確実に解除する。
+      unpinSlug(pendingLoggedRef.current);
+      if (isVideoTimingEnabled()) {
+        // eslint-disable-next-line no-console
+        console.debug(
+          `vt handoff pending abandon slug=${pendingLoggedRef.current} reason=slug-changed`,
+        );
+      }
     }
     pendingLoggedRef.current = null;
     setPendingAbandonedSlug((prev) => (prev === item.slug ? prev : null));
     activeReadyRef.current = false;
   }, [item.slug]);
+  // アンマウント / 非 active 化で残った pending pin を解除する。
+  // pinned entry を解放しないと、別ユーザー操作で同 slug が active になるまで
+  // pool に居座り続けて cap を圧迫する。
+  useEffect(() => {
+    if (isActive) return;
+    if (pendingLoggedRef.current === item.slug) {
+      unpinSlug(item.slug);
+      if (isVideoTimingEnabled()) {
+        // eslint-disable-next-line no-console
+        console.debug(
+          `vt handoff pending abandon slug=${item.slug} reason=inactive`,
+        );
+      }
+      pendingLoggedRef.current = null;
+    }
+  }, [isActive, item.slug]);
+  useEffect(() => {
+    return () => {
+      if (pendingLoggedRef.current) {
+        unpinSlug(pendingLoggedRef.current);
+        pendingLoggedRef.current = null;
+      }
+    };
+  }, []);
 
   const isProActress = isProActressMovie(item.genres);
 
@@ -291,25 +330,41 @@ export default function FeedItem({ item, isActive, isAdjacent = false, isFirst, 
     clearHardTimeout();
   }, [clearHardTimeout]);
 
+  const abandonPendingIfActiveReady = useCallback(() => {
+    if (pendingLoggedRef.current !== item.slug) return;
+    unpinSlug(item.slug);
+    if (isVideoTimingEnabled()) {
+      const readiness = getReadiness(item.slug) ?? "metadata";
+      // eslint-disable-next-line no-console
+      console.debug(
+        `vt handoff pending abandon slug=${item.slug} reason=active-playing readiness=${readiness}`,
+      );
+    }
+    pendingLoggedRef.current = null;
+    setPendingAbandonedSlug(item.slug);
+  }, [item.slug]);
+
   const handleLoadedData = useCallback(() => {
     videoSettledRef.current = true;
     clearHardTimeout();
     activeReadyRef.current = true;
+    abandonPendingIfActiveReady();
     setVideoReady(true);
     setVideoReadyState(true);
     setSpinnerVisible(false);
     setShimmerVisible(false);
-  }, [setVideoReady, setSpinnerVisible, setShimmerVisible, clearHardTimeout]);
+  }, [setVideoReady, setSpinnerVisible, setShimmerVisible, clearHardTimeout, abandonPendingIfActiveReady]);
 
   const handleCanPlay = useCallback(() => {
     videoSettledRef.current = true;
     clearHardTimeout();
     activeReadyRef.current = true;
+    abandonPendingIfActiveReady();
     setVideoReady(true);
     setVideoReadyState(true);
     setSpinnerVisible(false);
     setShimmerVisible(false);
-  }, [setVideoReady, setSpinnerVisible, setShimmerVisible, clearHardTimeout]);
+  }, [setVideoReady, setSpinnerVisible, setShimmerVisible, clearHardTimeout, abandonPendingIfActiveReady]);
 
   const handleSeeked = useCallback(() => {
     videoSettledRef.current = true;

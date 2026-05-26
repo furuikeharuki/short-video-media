@@ -205,6 +205,31 @@ export default function FeedItemVideo({
     }
   }, [promotedElement, preload]);
 
+  // promoted 要素の src を上位の `src` (= videoSrc) に同期する。
+  //
+  // 背景: handoff で adopt した <video> 要素は元々 prefetch buffer 登録時の src を
+  // 持っているが、active 再生中に
+  //   - useResolvedVideoSrc.handleError() で force re-resolve が走り、API が新しい
+  //     署名付き URL を返したケース (CDN 期限切れ等)
+  //   - `video-active-stuck` 経由で FeedItem が handleError を呼んだケース
+  // などで `videoSrc` (= 親の src prop) が新 URL に切り替わる。promoted 要素は
+  // FeedItemVideo の JSX 経由で src を受け取らない (host にぶら下げただけ) ので
+  // ここで明示的に同期しないと、active 要素は古い URL のまま rs=0 で固まり続ける。
+  useEffect(() => {
+    if (!promotedElement) return;
+    if (!src) return;
+    // currentSrc は絶対 URL、src 属性は相対のままになり得るので、両方と比較する。
+    if (promotedElement.src === src || promotedElement.currentSrc === src) {
+      return;
+    }
+    promotedElement.src = src;
+    try {
+      promotedElement.load();
+    } catch {
+      /* ignore */
+    }
+  }, [promotedElement, src]);
+
   return (
     <div
       ref={containerRef}

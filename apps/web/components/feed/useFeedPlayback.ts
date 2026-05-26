@@ -157,14 +157,25 @@ export function useFeedPlayback({ slug, title, isActive, videoSrc, boundElement 
   // が play() を呼んでも canplay まで待たされ、何らかの理由 (Range request が
   // 遅延 / blocked / loadeddata 来ない) で永久 pending になる事例が観測された。
   //
-  // 対策: play() を発火した瞬間に watchdog を 1 本だけ仕掛け、ACTIVE_AUTOPLAY_
-  // WATCHDOG_MS 経過しても paused のままなら 1 回だけ video.load() してから
-  // 直接 play() を呼び直す。これにより HTMLMediaElement 側の internal state を
-  // 強制リセットし、Range request を最初から発行させる。ループ防止のため、
-  // active session 1 回につき 1 回しか発火しない (active 化のたびに ref を
+  // 対策 (2 段構え):
+  //   Phase 1 (ACTIVE_AUTOPLAY_WATCHDOG_MS = 1500ms):
+  //     play() を発火した瞬間に watchdog を 1 本だけ仕掛け、経過しても paused の
+  //     ままなら 1 回だけ video.load() してから直接 play() を呼び直す。これにより
+  //     HTMLMediaElement 側の internal state を強制リセットし、Range request を
+  //     最初から発行させる。
+  //   Phase 2 (ACTIVE_AUTOPLAY_STUCK_MS = 3500ms 総):
+  //     Phase 1 の load()+play() でも readyState 0 のまま動かない (= 署名 URL が
+  //     セッション復帰後に期限切れ / CDN コネクションが完全に切断された等) ケースの
+  //     最終救済として `video-active-stuck` カスタムイベントを window に
+  //     dispatch する。FeedItem 側がこれを購読し、useResolvedVideoSrc.handleError
+  //     経由で force re-resolve を起こし、新 URL を videoSrc に反映する。新 URL は
+  //     後段 effect で promoted 要素の src に再バインドされ、load() で再生開始する。
+  // active session 1 回につき 各 phase 1 回だけ発火 (active 化のたびに ref を
   // false に戻す)。
   const activeAutoplayWatchdogRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const activeAutoplayRecoveredRef = useRef(false);
+  const activeAutoplayStuckTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const activeAutoplayStuckSignaledRef = useRef(false);
 
   // active autoplay intent の保留状態。
   //
@@ -589,8 +600,19 @@ export function useFeedPlayback({ slug, title, isActive, videoSrc, boundElement 
         clearTimeout(activeAutoplayWatchdogRef.current);
         activeAutoplayWatchdogRef.current = null;
       }
+      // Phase 2 (stuck signal) も同 active session 内で 1 回しか出さない。
+      // Phase 1 が再武装される (attemptActiveAutoplay の re-entry) ときは Phase 2
+      // タイマーも再武装する。recovered/signaled は active=false でリセット。
+      if (activeAutoplayStuckTimerRef.current != null) {
+        clearTimeout(activeAutoplayStuckTimerRef.current);
+        activeAutoplayStuckTimerRef.current = null;
+      }
       const watchdogVideo = video;
       const ACTIVE_AUTOPLAY_WATCHDOG_MS = 1500;
+      // Phase 2: Phase 1 から +2000ms (= active autoplay 開始から 3500ms 経過)。
+      // この時点でも paused かつ rs<=1 のままなら、URL 起因 (期限切れ等) と判定して
+      // force re-resolve を起こすシグナルを出す。
+      const ACTIVE_AUTOPLAY_STUCK_MS = 3500;
       activeAutoplayWatchdogRef.current = setTimeout(() => {
         activeAutoplayWatchdogRef.current = null;
         if (!isActiveRef.current) return;
@@ -648,6 +670,36 @@ export function useFeedPlayback({ slug, title, isActive, videoSrc, boundElement 
           );
         }
       }, ACTIVE_AUTOPLAY_WATCHDOG_MS);
+      // Phase 2 watchdog: Phase 1 (load+play 直接呼び直し) でも readyState が
+      // 上がらず paused のままのケースは、署名 URL 期限切れ / CDN 接続恒久切断
+      // など URL 起因の可能性が高い。`video-active-stuck` を window dispatch して
+      // FeedItem 側で force re-resolve (useResolvedVideoSrc.handleError) を起こす。
+      // 1 active session につき 1 回だけ。
+      activeAutoplayStuckTimerRef.current = setTimeout(() => {
+        activeAutoplayStuckTimerRef.current = null;
+        if (!isActiveRef.current) return;
+        if (userPausedRef.current) return;
+        if (videoRef.current !== watchdogVideo) return;
+        if (!watchdogVideo.paused) return;
+        if (activeAutoplayStuckSignaledRef.current) return;
+        // 既に十分なバッファがある (rs>=3) のに paused なら、play() 自体が autoplay
+        // policy で拒否されたなど別の原因。force-resolve は無意味なのでスキップ。
+        if (watchdogVideo.readyState >= 3) return;
+        activeAutoplayStuckSignaledRef.current = true;
+        if (isVideoTimingEnabled()) {
+          // eslint-disable-next-line no-console
+          console.debug(
+            `vt ${slug}: active autoplay stuck signal rs=${watchdogVideo.readyState} networkState=${watchdogVideo.networkState} currentTime=${watchdogVideo.currentTime.toFixed(2)} hasError=${watchdogVideo.error !== null}`,
+          );
+        }
+        try {
+          window.dispatchEvent(
+            new CustomEvent("video-active-stuck", { detail: { slug } }),
+          );
+        } catch {
+          /* ignore */
+        }
+      }, ACTIVE_AUTOPLAY_STUCK_MS);
       // playVideo (= 既存の muted フォールバック / proActress 先頭 5 秒 seek 込み) に
       // そのまま委譲する。playVideo 内で resolve/reject は握り潰されているが、
       // vt 観測用には play() 自体を直接呼んで resolve/reject をログに残す。
@@ -819,6 +871,10 @@ export function useFeedPlayback({ slug, title, isActive, videoSrc, boundElement 
         clearTimeout(activeAutoplayWatchdogRef.current);
         activeAutoplayWatchdogRef.current = null;
       }
+      if (activeAutoplayStuckTimerRef.current != null) {
+        clearTimeout(activeAutoplayStuckTimerRef.current);
+        activeAutoplayStuckTimerRef.current = null;
+      }
       // 保留 autoplay intent もアンマウントで破棄。
       pendingActiveAutoplayRef.current = null;
     };
@@ -845,12 +901,17 @@ export function useFeedPlayback({ slug, title, isActive, videoSrc, boundElement 
       proActressPlayFallbackTimerRef.current = null;
     }
     // 戻りスワイプで再 active 化するときに watchdog を再武装できるよう、ここで
-    // タイマーをクリアし recovered flag も false に戻す。
+    // タイマーをクリアし recovered/signaled flag も false に戻す。
     if (activeAutoplayWatchdogRef.current != null) {
       clearTimeout(activeAutoplayWatchdogRef.current);
       activeAutoplayWatchdogRef.current = null;
     }
+    if (activeAutoplayStuckTimerRef.current != null) {
+      clearTimeout(activeAutoplayStuckTimerRef.current);
+      activeAutoplayStuckTimerRef.current = null;
+    }
     activeAutoplayRecoveredRef.current = false;
+    activeAutoplayStuckSignaledRef.current = false;
     // active 化時の保留 autoplay intent も非アクティブで破棄する。
     pendingActiveAutoplayRef.current = null;
     userPausedRef.current = false;
@@ -1300,6 +1361,10 @@ export function useFeedPlayback({ slug, title, isActive, videoSrc, boundElement 
         clearTimeout(activeAutoplayWatchdogRef.current);
         activeAutoplayWatchdogRef.current = null;
       }
+      if (activeAutoplayStuckTimerRef.current != null) {
+        clearTimeout(activeAutoplayStuckTimerRef.current);
+        activeAutoplayStuckTimerRef.current = null;
+      }
     };
     const handleCanPlayThrough = () => {
       setSpinnerVisible(false);
@@ -1418,6 +1483,10 @@ export function useFeedPlayback({ slug, title, isActive, videoSrc, boundElement 
         clearTimeout(activeAutoplayWatchdogRef.current);
         activeAutoplayWatchdogRef.current = null;
       }
+      if (activeAutoplayStuckTimerRef.current != null) {
+        clearTimeout(activeAutoplayStuckTimerRef.current);
+        activeAutoplayStuckTimerRef.current = null;
+      }
       video.pause();
       isPlayingRef.current = false;
       stopProgressLoop();
@@ -1474,6 +1543,10 @@ export function useFeedPlayback({ slug, title, isActive, videoSrc, boundElement 
       if (activeAutoplayWatchdogRef.current != null) {
         clearTimeout(activeAutoplayWatchdogRef.current);
         activeAutoplayWatchdogRef.current = null;
+      }
+      if (activeAutoplayStuckTimerRef.current != null) {
+        clearTimeout(activeAutoplayStuckTimerRef.current);
+        activeAutoplayStuckTimerRef.current = null;
       }
       video.pause();
       isPlayingRef.current = false;

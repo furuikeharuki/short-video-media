@@ -455,6 +455,33 @@ export default function FeedItem({ item, isActive, isAdjacent = false, isFirst, 
     return clearHardTimeout;
   }, [isActive, videoSrc, handleVideoError, clearHardTimeout]);
 
+  // useFeedPlayback の Phase 2 watchdog (active autoplay stuck) からの救済要求。
+  // Phase 1 (load()+play() 直接呼び直し) でも readyState が上がらず paused のままの
+  // ケースは、URL 起因 (CDN 署名期限切れ / 接続恒久切断) の可能性が高いので、
+  // useResolvedVideoSrc.handleError() を呼んで force re-resolve を起こす。
+  // useResolvedVideoSrc.handleError は <video> の onerror からも呼ばれるが、stuck
+  // ケースでは error イベントが発火しない (= 単に Range request が永久 pending) ため
+  // 明示的なシグナルが必要。
+  useEffect(() => {
+    if (!isActive) return;
+    if (!videoSrc) return;
+    const onStuck = (e: Event) => {
+      const ce = e as CustomEvent<{ slug?: string }>;
+      if (ce.detail?.slug !== item.slug) return;
+      if (isVideoTimingEnabled()) {
+        // eslint-disable-next-line no-console
+        console.debug(
+          `vt ${item.slug}: active stuck recovery -> force-resolve`,
+        );
+      }
+      handleError();
+    };
+    window.addEventListener("video-active-stuck", onStuck);
+    return () => {
+      window.removeEventListener("video-active-stuck", onStuck);
+    };
+  }, [isActive, videoSrc, item.slug, handleError]);
+
   useEffect(() => {
     setVideoReadyState(false);
     activeReadyRef.current = false;

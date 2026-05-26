@@ -179,12 +179,24 @@ function writeSuccessCache(slug: string, value: ResolveMp4Response): void {
  */
 const MAX_CONCURRENT_FETCHES = 8;
 const MAX_CONCURRENT_LOW = 2;
+/**
+ * high priority 用の追加 burst 枠。global cap (MAX_CONCURRENT_FETCHES) を超えても
+ * この数まで high は cap-bypass で即発火できる。これにより:
+ *   - 通常 prefetch (priority="normal") / warm ("low") が global cap を埋めていても、
+ *     active (priority="high") は待たずに resolver にアクセスできる。
+ *   - 観測されていた「active resolve:ok +4.6s」のような high が cap 待ちで秒単位
+ *     滞留するケースを解消する。
+ * 余裕は控えめにして、上流 (Cloudflare / API) のバースト 504 を誘発しない程度に留める。
+ */
+const MAX_HIGH_BURST = 4;
 let activeFetches = 0;
 let activeLow = 0;
+let activeHighBurst = 0;
 
 type Waiter = {
   priority: ResolvePriority;
-  wake: () => void;
+  /** 起こされたとき、どの slot kind を割り当てたかを渡す。 */
+  wake: (kind: "global" | "high-burst") => void;
 };
 const waiters: Waiter[] = [];
 
@@ -212,33 +224,51 @@ function pickNextWaiterIndex(): number {
 }
 
 function canStartImmediately(priority: ResolvePriority): boolean {
+  if (priority === "high") {
+    // high は global cap を埋めていても burst 枠でバイパス可能。
+    if (activeFetches < MAX_CONCURRENT_FETCHES) return true;
+    if (activeHighBurst < MAX_HIGH_BURST) return true;
+    return false;
+  }
   if (activeFetches >= MAX_CONCURRENT_FETCHES) return false;
   if (priority === "low" && activeLow >= MAX_CONCURRENT_LOW) return false;
   return true;
 }
 
+/**
+ * acquireSlot の結果。
+ * - `false`: abort された (caller は fetch しない)。
+ * - `"global"`: 通常 global slot を確保した。release で activeFetches を 1 減らす。
+ * - `"high-burst"`: high の burst 枠を使った。release で activeHighBurst を 1 減らす。
+ */
+type SlotKind = false | "global" | "high-burst";
+
 function acquireSlot(
   signal: AbortSignal,
   priority: ResolvePriority,
-): Promise<boolean> {
+): Promise<SlotKind> {
   if (signal.aborted) return Promise.resolve(false);
   if (canStartImmediately(priority)) {
+    if (priority === "high" && activeFetches >= MAX_CONCURRENT_FETCHES) {
+      activeHighBurst += 1;
+      return Promise.resolve("high-burst");
+    }
     activeFetches += 1;
     if (priority === "low") activeLow += 1;
-    return Promise.resolve(true);
+    return Promise.resolve("global");
   }
-  return new Promise<boolean>((resolve) => {
+  return new Promise<SlotKind>((resolve) => {
     const waiter: Waiter = {
       priority,
-      wake: () => {
+      wake: (kind) => {
         signal.removeEventListener("abort", onAbort);
         if (signal.aborted) {
-          // 起こされたが既に abort 済み → 次の waiter に渡す
-          releaseSlot(priority);
+          // 起こされたが既に abort 済み → 受け取った slot を次の waiter に渡す
+          releaseSlot(kind, priority);
           resolve(false);
           return;
         }
-        resolve(true);
+        resolve(kind);
       },
     };
     const onAbort = () => {
@@ -252,7 +282,22 @@ function acquireSlot(
   });
 }
 
-function releaseSlot(priority: ResolvePriority): void {
+function releaseSlot(kind: Exclude<SlotKind, false>, priority: ResolvePriority): void {
+  if (kind === "high-burst") {
+    // burst 枠を 1 つ返す。
+    activeHighBurst = Math.max(0, activeHighBurst - 1);
+    // burst が空いたので、待機中の high waiter があれば優先的に起こす
+    // (低 priority は global slot 占有のままなので起こさない)。
+    for (let i = 0; i < waiters.length; i += 1) {
+      const w = waiters[i];
+      if (w.priority !== "high") continue;
+      waiters.splice(i, 1);
+      activeHighBurst += 1;
+      w.wake("high-burst");
+      break;
+    }
+    return;
+  }
   // まず開放: low サブカウンタを下げる (グローバルは waiter に引き継ぐかここで下げる)。
   if (priority === "low") {
     activeLow = Math.max(0, activeLow - 1);
@@ -265,7 +310,7 @@ function releaseSlot(priority: ResolvePriority): void {
     if (next.priority === "low") {
       activeLow += 1;
     }
-    next.wake();
+    next.wake("global");
   } else {
     activeFetches = Math.max(0, activeFetches - 1);
   }
@@ -335,8 +380,8 @@ export async function resolveMp4Url(
     // 1 度だけリトライ可能。504 / ネットワーク (タイムアウト含む) のときに発火。
     let attempt = 0;
     while (true) {
-      const acquired = await acquireSlot(controller.signal, priority);
-      if (!acquired) return null; // 全 consumer abort
+      const slotKind = await acquireSlot(controller.signal, priority);
+      if (!slotKind) return null; // 全 consumer abort
       let shouldRetry = false;
       let result: ResolveMp4Response | null = null;
       try {
@@ -376,7 +421,7 @@ export async function resolveMp4Url(
         }
       } finally {
         // sleep に入る前に必ずスロットを返し、他の slug がそのスロットを使えるようにする。
-        releaseSlot(priority);
+        releaseSlot(slotKind, priority);
       }
 
       if (!shouldRetry) return result;
@@ -462,4 +507,5 @@ export function __resetResolveCachesForTests(): void {
   waiters.length = 0;
   activeFetches = 0;
   activeLow = 0;
+  activeHighBurst = 0;
 }

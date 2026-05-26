@@ -320,6 +320,37 @@ export function usePrefetchVideoBytes(
       vtPrefetchLog(
         `active not-ready slug=${activeItem.slug} readiness=${activeLabel} index=${currentIndex}`,
       );
+      // 緊急ウォームアップ。
+      //
+      // 不変条件: 「active が ready で無い瞬間」は、必ず active の resolve が
+      // 走っているか、もしくは即時に kick する。useResolvedVideoSrc は FeedItem の
+      // mount/enabled=true タイミングで動くが、ここで先回りすることで:
+      //   - resolveCache (in-flight) を温める → useResolvedVideoSrc が onReuse で
+      //     即ヒット → ネットワーク 1 往復ぶん早く着地。
+      //   - +1 が false の場合は +1 の resolve も同時に高優先で kick して
+      //     `byte-prefetch slot pending` から脱出させる。
+      //
+      // priority="high" 指定で、warm の "low" / 通常 prefetch の "normal" を
+      // 飛び越えて global slot を確保する (resolve-mp4 側の bypass あり)。
+      const nextItem =
+        currentIndex + 1 < items.length ? items[currentIndex + 1] : null;
+      const nextLabel = nextItem?.slug ? registryLabel(nextItem.slug) : "oob";
+      vtPrefetchLog(
+        `active emergency-prefetch slug=${activeItem.slug} current=${activeLabel} next=${nextLabel}`,
+      );
+      // active 自身は fire-and-forget で resolveCache を温めるだけ。
+      // onReuse 経路は不要 (active 側の useResolvedVideoSrc が共有する)。
+      void resolveMp4Url(activeItem.slug, { priority: "high" });
+      if (
+        nextItem &&
+        nextItem.slug &&
+        nextLabel !== "canplay" &&
+        nextLabel !== "metadata"
+      ) {
+        // +1 が registry に entry 無し (= false) の場合のみ追加で kick。
+        // metadata 以上なら既に隠し <video> が走っているので二重起動は不要。
+        void resolveMp4Url(nextItem.slug, { priority: "high" });
+      }
     }
   }, [currentIndex, items]);
 
@@ -400,19 +431,58 @@ export function usePrefetchVideoBytes(
     const upcomingTargets = activeTargets.filter((t) => t.offset > PREFETCH_START_OFFSET);
 
     const fire = (target: Target, immediate: boolean) => {
-      if (inFlight.has(target.slug)) return;
       // 既に同 id/slug/preload の slot がある (= 既に preload 中の <video> 要素が
-      // handoff registry に温まっている) ならば、resolve も log も再発火しない。
-      // PrefetchVideoBuffer / registerPrefetchElement 側でも要素は使い回されるので、
-      // ここで二重ログを止めて vt 出力をノイズなく保つ。
+      // handoff registry に温まっている) ならば、resolve は再発火しない。
+      // ただし offset / targetIndex が変わっていれば更新する (例: +2 で立てた slot が
+      // active 前進で +1 に繰り上がる)。これをしないと vt の slot ログが古い offset
+      // のまま残り、「+1 slot 不在」に見えてしまう。
       const existingSlot = slotsRef.current.find((s) => s.id === target.id);
       if (
         existingSlot &&
         existingSlot.slug === target.slug &&
         existingSlot.preload === target.preload
       ) {
+        if (
+          existingSlot.offset !== target.offset ||
+          existingSlot.targetIndex !== target.targetIndex
+        ) {
+          // offset の繰り上がり (例: +2 → +1) を slot に反映し、active が claim
+          // しに来た時に readiness window で「+1 はあるが既存 entry を再利用」
+          // と読めるようにする。
+          vtPrefetchLog(
+            `slot promote-offset slug=${target.slug} from=+${existingSlot.offset} to=+${target.offset} index=${target.targetIndex}`,
+          );
+          setSlots((prev) => {
+            const idx = prev.findIndex((s) => s.id === target.id);
+            if (idx === -1) return prev;
+            const cur = prev[idx];
+            if (
+              cur.offset === target.offset &&
+              cur.targetIndex === target.targetIndex
+            ) {
+              return prev;
+            }
+            const copy = prev.slice();
+            copy[idx] = {
+              ...cur,
+              offset: target.offset,
+              targetIndex: target.targetIndex,
+            };
+            return copy;
+          });
+        } else {
+          vtPrefetchLog(
+            `slot reuse index=${target.targetIndex} slug=${target.slug} offset=+${target.offset}`,
+          );
+        }
+        return;
+      }
+      if (inFlight.has(target.slug)) {
+        // 直前 cycle で resolve を始めたがまだ slot に push されていない状態
+        // (resolve 完了前 / 隠し <video> 要素も未登録)。+1 がここに来ると active
+        // 到達時に readiness=false で待たされる。発生を観測するための診断ログ。
         vtPrefetchLog(
-          `slot reuse index=${target.targetIndex} slug=${target.slug} offset=+${target.offset}`,
+          `slot pending offset=+${target.offset} slug=${target.slug} index=${target.targetIndex} reason=resolve-in-flight`,
         );
         return;
       }

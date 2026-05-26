@@ -145,6 +145,27 @@ export function useFeedPlayback({ slug, title, isActive, videoSrc, boundElement 
   // 1 回だけ video.play() を直接呼び直す。ループ防止のため使用後に必ず null に戻す。
   const proActressPlayFallbackTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
+  // 戻りスワイプ (back-swipe) 後の promote で readyState=0 のまま play() が
+  // promise pending のまま canplay/playing も来ず黒画面+スピナーで止まるケースの
+  // 救済用 watchdog timer。
+  //
+  // 背景: 順方向に再生 (8→9→10) してから 1 つ戻る (10→9) と、FeedItem 9 は
+  // adjacent の間 isActive=false で video.pause()/currentTime=0 が走って一旦
+  // 待機状態に入る。Chrome は背景の <video> のメディアバッファを memory
+  // pressure や inactive 経過時間で破棄するため、戻ったとき promoted 要素の
+  // readyState が 0 まで落ちていることがある。この状態で attemptActiveAutoplay
+  // が play() を呼んでも canplay まで待たされ、何らかの理由 (Range request が
+  // 遅延 / blocked / loadeddata 来ない) で永久 pending になる事例が観測された。
+  //
+  // 対策: play() を発火した瞬間に watchdog を 1 本だけ仕掛け、ACTIVE_AUTOPLAY_
+  // WATCHDOG_MS 経過しても paused のままなら 1 回だけ video.load() してから
+  // 直接 play() を呼び直す。これにより HTMLMediaElement 側の internal state を
+  // 強制リセットし、Range request を最初から発行させる。ループ防止のため、
+  // active session 1 回につき 1 回しか発火しない (active 化のたびに ref を
+  // false に戻す)。
+  const activeAutoplayWatchdogRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const activeAutoplayRecoveredRef = useRef(false);
+
   // active autoplay intent の保留状態。
   //
   // 「active 化したが videoRef.current がまだ null (= 要素が bind されていない)」
@@ -534,12 +555,99 @@ export function useFeedPlayback({ slug, title, isActive, videoSrc, boundElement 
           proActressPlayRetryPendingRef.current = true;
         }
       }
+      // back-swipe 起因の promote で readyState=0 のままになっているケースを
+      // 検知して、明示的に video.load() を 1 度だけ呼んで Range request を再
+      // キックする。これが無いと、Chrome の HTMLMediaElement は内部的に「src
+      // attached だが load() 未呼び出し」状態のまま play() を待たせ続けるケース
+      // (戻りスワイプで bufferer がリセット) で永久 pending になる。
+      // promote 以外の reason ではこの状況は起きないため (active-change は新規
+      // <video> マウントで src 直設定なので React が load() を発火) promote だけ
+      // 対象にする。
+      if (
+        reason === "promote" &&
+        video.readyState === 0 &&
+        !activeAutoplayRecoveredRef.current
+      ) {
+        if (isVideoTimingEnabled()) {
+          // eslint-disable-next-line no-console
+          console.debug(
+            `vt ${slug}: active autoplay promote rs=0 force-load reason=promote`,
+          );
+        }
+        try { video.load(); } catch { /* ignore */ }
+      }
       if (isVideoTimingEnabled()) {
         // eslint-disable-next-line no-console
         console.debug(
           `vt ${slug}: active autoplay start reason=${reason} paused=${video.paused} rs=${video.readyState} muted=${video.muted} currentTime=${video.currentTime.toFixed(2)}`,
         );
       }
+      // watchdog: 既存タイマーをキャンセルしてから 1 本だけ仕掛ける。
+      // play() promise が canplay/playing を待ったまま hang したケースの救済。
+      // 同 active session で 1 回だけ video.load() + play() を呼び直す。
+      if (activeAutoplayWatchdogRef.current != null) {
+        clearTimeout(activeAutoplayWatchdogRef.current);
+        activeAutoplayWatchdogRef.current = null;
+      }
+      const watchdogVideo = video;
+      const ACTIVE_AUTOPLAY_WATCHDOG_MS = 1500;
+      activeAutoplayWatchdogRef.current = setTimeout(() => {
+        activeAutoplayWatchdogRef.current = null;
+        if (!isActiveRef.current) return;
+        if (userPausedRef.current) return;
+        if (videoRef.current !== watchdogVideo) return;
+        if (!watchdogVideo.paused) return;
+        if (activeAutoplayRecoveredRef.current) return;
+        activeAutoplayRecoveredRef.current = true;
+        if (isVideoTimingEnabled()) {
+          // eslint-disable-next-line no-console
+          console.debug(
+            `vt ${slug}: active autoplay watchdog recover reason=${reason} rs=${watchdogVideo.readyState} currentTime=${watchdogVideo.currentTime.toFixed(2)}`,
+          );
+        }
+        try { watchdogVideo.load(); } catch { /* ignore */ }
+        // load() 後は currentTime が 0 にリセットされうるので、pro-actress
+        // 先頭 5 秒 enforce を再適用してから play() を呼ぶ。
+        if (
+          isProActressRef.current &&
+          watchdogVideo.currentTime + 0.05 < PRO_ACTRESS_HEAD_SKIP_SEC
+        ) {
+          const dur = watchdogVideo.duration;
+          const tooShort = Number.isFinite(dur) && dur > 0 && dur < PRO_ACTRESS_MIN_DURATION_SEC;
+          if (!tooShort) {
+            try { watchdogVideo.currentTime = PRO_ACTRESS_HEAD_SKIP_SEC; } catch { /* ignore */ }
+          }
+        }
+        watchdogVideo.muted = globalIsMuted;
+        const p = watchdogVideo.play();
+        if (p && typeof p.then === "function") {
+          p.then(
+            () => {
+              if (isVideoTimingEnabled()) {
+                // eslint-disable-next-line no-console
+                console.debug(
+                  `vt ${slug}: active autoplay watchdog resolved rs=${watchdogVideo.readyState}`,
+                );
+              }
+            },
+            (err: unknown) => {
+              const e = err as { name?: string; message?: string } | null;
+              if (isVideoTimingEnabled()) {
+                // eslint-disable-next-line no-console
+                console.debug(
+                  `vt ${slug}: active autoplay watchdog rejected name=${e?.name ?? "Error"} message=${e?.message ?? String(err)}`,
+                );
+              }
+              // muted fallback (1 回だけ)。watchdog 自身は二度目を仕掛けない。
+              if (!isActiveRef.current) return;
+              if (userPausedRef.current) return;
+              if (videoRef.current !== watchdogVideo) return;
+              if (!watchdogVideo.paused) return;
+              void playVideo(watchdogVideo, false);
+            },
+          );
+        }
+      }, ACTIVE_AUTOPLAY_WATCHDOG_MS);
       // playVideo (= 既存の muted フォールバック / proActress 先頭 5 秒 seek 込み) に
       // そのまま委譲する。playVideo 内で resolve/reject は握り潰されているが、
       // vt 観測用には play() 自体を直接呼んで resolve/reject をログに残す。
@@ -707,6 +815,10 @@ export function useFeedPlayback({ slug, title, isActive, videoSrc, boundElement 
         clearTimeout(spinnerShowTimerRef.current);
         spinnerShowTimerRef.current = null;
       }
+      if (activeAutoplayWatchdogRef.current != null) {
+        clearTimeout(activeAutoplayWatchdogRef.current);
+        activeAutoplayWatchdogRef.current = null;
+      }
       // 保留 autoplay intent もアンマウントで破棄。
       pendingActiveAutoplayRef.current = null;
     };
@@ -732,6 +844,13 @@ export function useFeedPlayback({ slug, title, isActive, videoSrc, boundElement 
       clearTimeout(proActressPlayFallbackTimerRef.current);
       proActressPlayFallbackTimerRef.current = null;
     }
+    // 戻りスワイプで再 active 化するときに watchdog を再武装できるよう、ここで
+    // タイマーをクリアし recovered flag も false に戻す。
+    if (activeAutoplayWatchdogRef.current != null) {
+      clearTimeout(activeAutoplayWatchdogRef.current);
+      activeAutoplayWatchdogRef.current = null;
+    }
+    activeAutoplayRecoveredRef.current = false;
     // active 化時の保留 autoplay intent も非アクティブで破棄する。
     pendingActiveAutoplayRef.current = null;
     userPausedRef.current = false;
@@ -1176,6 +1295,11 @@ export function useFeedPlayback({ slug, title, isActive, videoSrc, boundElement 
       const shimmer = shimmerRef.current;
       if (shimmer) shimmer.style.display = "none";
       setSpinnerVisible(false);
+      // 再生が回り始めたら watchdog を解除する (この session では recover 不要)。
+      if (activeAutoplayWatchdogRef.current != null) {
+        clearTimeout(activeAutoplayWatchdogRef.current);
+        activeAutoplayWatchdogRef.current = null;
+      }
     };
     const handleCanPlayThrough = () => {
       setSpinnerVisible(false);
@@ -1288,8 +1412,12 @@ export function useFeedPlayback({ slug, title, isActive, videoSrc, boundElement 
         clearTimeout(proActressPlayFallbackTimerRef.current);
         proActressPlayFallbackTimerRef.current = null;
       }
-      // ユーザー pause で保留 autoplay intent も破棄する。
+      // ユーザー pause で保留 autoplay intent / watchdog も破棄する。
       pendingActiveAutoplayRef.current = null;
+      if (activeAutoplayWatchdogRef.current != null) {
+        clearTimeout(activeAutoplayWatchdogRef.current);
+        activeAutoplayWatchdogRef.current = null;
+      }
       video.pause();
       isPlayingRef.current = false;
       stopProgressLoop();
@@ -1341,8 +1469,12 @@ export function useFeedPlayback({ slug, title, isActive, videoSrc, boundElement 
         clearTimeout(proActressPlayFallbackTimerRef.current);
         proActressPlayFallbackTimerRef.current = null;
       }
-      // detail open でも保留 autoplay intent は破棄。
+      // detail open でも保留 autoplay intent / watchdog は破棄。
       pendingActiveAutoplayRef.current = null;
+      if (activeAutoplayWatchdogRef.current != null) {
+        clearTimeout(activeAutoplayWatchdogRef.current);
+        activeAutoplayWatchdogRef.current = null;
+      }
       video.pause();
       isPlayingRef.current = false;
       stopProgressLoop();

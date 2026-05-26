@@ -78,19 +78,17 @@ export default function FeedItem({ item, isActive, isAdjacent = false, isFirst, 
     if (!isActive) return false;
     if (!videoSrc) return false;
     if (promotedSlugRef.current === item.slug) return true;
+    // 事前に canplay 済み (= promotable) であることを確かめてから claim する。
+    // canplay 未到達のうちから subscribe で何度も呼ばれても、ここで早期 return
+    // するため `claim miss reason=not-canplay` のログを連打しない。
+    // src 不一致 / slug 未登録などの "本当の miss" だけは claimForFeed 内で
+    // vt ログとして残るように、別経路で 1 回だけ詳細 miss を引き出す経路は持つ
+    // (現状は不要 — subscribe で待ち、canplay 確定後にだけ進む)。
     if (!hasPromotableElement(item.slug, videoSrc)) return false;
-    // readiness を先に読んでからログする (claim 後はレジストリが空になる)
     const readiness = getReadiness(item.slug) ?? "canplay";
+    // claimForFeed は内部で `handoff claim hit/miss(reason)` を vt ログに出す。
     const el = claimForFeed(item.slug, videoSrc);
-    if (!el) {
-      if (isVideoTimingEnabled()) {
-        // eslint-disable-next-line no-console
-        console.debug(
-          `vt handoff claim miss slug=${item.slug} reason=race`,
-        );
-      }
-      return false;
-    }
+    if (!el) return false;
     promotedSlugRef.current = item.slug;
     setPromotedElement(el);
     if (isVideoTimingEnabled()) {

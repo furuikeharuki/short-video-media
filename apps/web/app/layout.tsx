@@ -4,6 +4,7 @@ import BottomNav from "@/components/BottomNav";
 import SessionProvider from "@/components/SessionProvider";
 import SavedFilterEnforcer from "@/components/SavedFilterEnforcer";
 import FullpageInterstitial from "@/components/ads/FullpageInterstitial";
+import BuildIdLogger from "@/components/BuildIdLogger";
 import {
   SITE_NAME,
   SITE_URL,
@@ -81,6 +82,14 @@ export default function RootLayout({
   modal: React.ReactNode;
 }) {
   const GA_ID = process.env.NEXT_PUBLIC_GA_MEASUREMENT_ID;
+  // デプロイ済みバンドルの識別子。Vercel が自動で渡す環境変数を使い、
+  // 落ちていればローカル/CI 用に "dev" を返す。stale-cache 切り分け用に
+  // <meta> として埋め込み、ユーザログから「いつの bundle が走っていたか」を
+  // 後追いできるようにする。クエリ ?vt=1 を付けずとも特定できるのが狙い。
+  const BUILD_ID =
+    process.env.VERCEL_GIT_COMMIT_SHA?.slice(0, 12) ||
+    process.env.NEXT_PUBLIC_VERCEL_GIT_COMMIT_SHA?.slice(0, 12) ||
+    "dev";
 
   const websiteJsonLd = {
     "@context": "https://schema.org",
@@ -106,6 +115,7 @@ export default function RootLayout({
   return (
     <html lang="ja">
       <head>
+        <meta name="x-build-id" content={BUILD_ID} />
         <link rel="preconnect" href="https://cc3001.dmm.co.jp" />
         <link rel="preconnect" href="https://cc3001.dmm.co.jp" crossOrigin="anonymous" />
         <link rel="dns-prefetch" href="https://cc3001.dmm.co.jp" />
@@ -140,6 +150,7 @@ export default function RootLayout({
               FeedClient / SearchInfiniteGrid はこの値が ready になるまで
               スピナーを出して "フィルター違反作品が一瞬見える" フラッシュを防ぐ。 */}
           <SavedFilterEnforcer>
+            <BuildIdLogger buildId={BUILD_ID} />
             <Header />
             {children}
             {modal}

@@ -134,6 +134,9 @@ export function useFeedPlayback({ slug, title, isActive, videoSrc, onOpenModal, 
   // - false: リトライ不要 (= まだ enforce していない / すでにリトライ済み)
   // 同じ seek イベントで二重に発火させないため、リトライ実行時 / イベント受領時に即座に false に戻す。
   const proActressPlayRetryPendingRef = useRef(false);
+  // play retry が「resolve したが playing が来ない」場合の最終フォールバック用 timer。
+  // 1 回だけ video.play() を直接呼び直す。ループ防止のため使用後に必ず null に戻す。
+  const proActressPlayFallbackTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // slug が変わったら lastPlaybackRef をリセット。同じ <video> 上で src が差し替わる force リトライのときだけ
   // 以前の位置を保持したいため、videoSrc 変化ではリセットしないことに注意。
@@ -469,6 +472,10 @@ export function useFeedPlayback({ slug, title, isActive, videoSrc, onOpenModal, 
     // 隣接スライドに戻ったので、まだ未消化の play retry 予約と userPaused 状態は破棄する
     // (次に中央に戻ったときは userPausedRef=false 起点で再評価される)。
     proActressPlayRetryPendingRef.current = false;
+    if (proActressPlayFallbackTimerRef.current != null) {
+      clearTimeout(proActressPlayFallbackTimerRef.current);
+      proActressPlayFallbackTimerRef.current = null;
+    }
     userPausedRef.current = false;
     stopProgressLoop();
     if (video) {
@@ -597,11 +604,36 @@ export function useFeedPlayback({ slug, title, isActive, videoSrc, onOpenModal, 
     const handleSeeking = () => enforceLowerBound();
     const tryConsumePlayRetry = (eventName: "seeked" | "canplay") => {
       if (!proActressPlayRetryPendingRef.current) return;
+      // 現在の active 要素と slug にバインド。effect closure 内では video/slug は固定だが、
+      // クリーンアップ前に新しい slug の <video> が active になっているケースに備えて
+      // ref と突き合わせて stale を弾く。
+      if (videoRef.current !== video) {
+        if (isVideoTimingEnabled()) {
+          // eslint-disable-next-line no-console
+          console.debug(
+            `vt ${slug}: pro-actress play retry abort reason=stale-element on=${eventName}`,
+          );
+        }
+        proActressPlayRetryPendingRef.current = false;
+        return;
+      }
       if (!isActiveRef.current) {
+        if (isVideoTimingEnabled()) {
+          // eslint-disable-next-line no-console
+          console.debug(
+            `vt ${slug}: pro-actress play retry abort reason=inactive on=${eventName}`,
+          );
+        }
         proActressPlayRetryPendingRef.current = false;
         return;
       }
       if (userPausedRef.current) {
+        if (isVideoTimingEnabled()) {
+          // eslint-disable-next-line no-console
+          console.debug(
+            `vt ${slug}: pro-actress play retry abort reason=user-paused on=${eventName}`,
+          );
+        }
         proActressPlayRetryPendingRef.current = false;
         return;
       }
@@ -613,13 +645,107 @@ export function useFeedPlayback({ slug, title, isActive, videoSrc, onOpenModal, 
       // pending を先に消費しておく。playVideo 側で seek が再度発火しても
       // ループしないように idempotent にする。
       proActressPlayRetryPendingRef.current = false;
+
+      const pausedBefore = video.paused;
+      const rsBefore = video.readyState;
       if (isVideoTimingEnabled()) {
         // eslint-disable-next-line no-console
         console.debug(
-          `vt ${slug}: pro-actress play retry after minStart seek (on ${eventName} rs=${video.readyState})`,
+          `vt ${slug}: pro-actress play retry start reason=${eventName} paused=${pausedBefore} rs=${rsBefore}`,
         );
       }
-      void playVideo(video, false);
+
+      // 直接 video.play() を呼び、resolve/reject を必ずログに残す。
+      // playVideo を経由しないのは:
+      //   - 既に lower bound seek 済みなのでもう一度 seek する必要がない
+      //   - play() の resolve/reject を観測したいので catch を握り潰さない
+      // 失敗時のみ muted fallback として playVideo にエスカレートする。
+      video.muted = globalIsMuted;
+      const playPromise = video.play();
+      if (playPromise === undefined) {
+        // 古い Safari など Promise を返さないブラウザの保険。
+        // 状態だけ更新して fallback timer に委ねる。
+        isPlayingRef.current = true;
+        startProgressLoop();
+      } else {
+        playPromise.then(
+          () => {
+            if (videoRef.current !== video) return;
+            if (!isActiveRef.current) return;
+            if (userPausedRef.current) return;
+            isPlayingRef.current = true;
+            startProgressLoop();
+            if (isVideoTimingEnabled()) {
+              // eslint-disable-next-line no-console
+              console.debug(
+                `vt ${slug}: pro-actress play retry resolved paused=${video.paused} rs=${video.readyState}`,
+              );
+            }
+          },
+          (err: unknown) => {
+            const e = err as { name?: string; message?: string } | null;
+            const name = e?.name ?? "Error";
+            const message = e?.message ?? String(err);
+            if (isVideoTimingEnabled()) {
+              // eslint-disable-next-line no-console
+              console.debug(
+                `vt ${slug}: pro-actress play retry rejected name=${name} message=${message} paused=${video.paused} rs=${video.readyState}`,
+              );
+            }
+            // NotAllowedError は autoplay policy。muted fallback に 1 回だけ落として終わる。
+            // それ以外も握らず muted fallback に進む (どのみち失敗するなら 1 回 muted を試して諦める)。
+            if (videoRef.current !== video) return;
+            if (!isActiveRef.current) return;
+            if (userPausedRef.current) return;
+            if (!video.paused) return;
+            void playVideo(video, false);
+          },
+        );
+      }
+
+      // play() が resolve しても playing イベントが来ないケース (一部ブラウザで
+      // currentTime 直前変更後に発生) の最終保険。bounded で 1 回だけ direct video.play() を
+      // 呼び直す。ループ防止のため timer は使用後に必ず null。
+      if (proActressPlayFallbackTimerRef.current != null) {
+        clearTimeout(proActressPlayFallbackTimerRef.current);
+      }
+      const PLAY_RETRY_FALLBACK_MS = 800;
+      proActressPlayFallbackTimerRef.current = setTimeout(() => {
+        proActressPlayFallbackTimerRef.current = null;
+        if (videoRef.current !== video) return;
+        if (!isActiveRef.current) return;
+        if (userPausedRef.current) return;
+        if (!video.paused) return; // 既に再生中なら何もしない
+        if (isVideoTimingEnabled()) {
+          // eslint-disable-next-line no-console
+          console.debug(
+            `vt ${slug}: pro-actress play retry fallback direct play paused=${video.paused} rs=${video.readyState}`,
+          );
+        }
+        const p = video.play();
+        if (p && typeof p.then === "function") {
+          p.then(
+            () => {
+              if (isVideoTimingEnabled()) {
+                // eslint-disable-next-line no-console
+                console.debug(
+                  `vt ${slug}: pro-actress play retry fallback resolved paused=${video.paused} rs=${video.readyState}`,
+                );
+              }
+            },
+            (err: unknown) => {
+              const e = err as { name?: string; message?: string } | null;
+              if (isVideoTimingEnabled()) {
+                // eslint-disable-next-line no-console
+                console.debug(
+                  `vt ${slug}: pro-actress play retry fallback rejected name=${e?.name ?? "Error"} message=${e?.message ?? String(err)}`,
+                );
+              }
+              // ここで止める。これ以上は再試行しない (autoplay policy / 端末側の制約)。
+            },
+          );
+        }
+      }, PLAY_RETRY_FALLBACK_MS);
     };
     const handleSeeked = () => {
       enforceLowerBound();
@@ -661,8 +787,12 @@ export function useFeedPlayback({ slug, title, isActive, videoSrc, onOpenModal, 
       video.removeEventListener("ended", handleEnded);
       // 次の <video> インスタンスに pending 状態が漏れないようリセット。
       proActressPlayRetryPendingRef.current = false;
+      if (proActressPlayFallbackTimerRef.current != null) {
+        clearTimeout(proActressPlayFallbackTimerRef.current);
+        proActressPlayFallbackTimerRef.current = null;
+      }
     };
-  }, [slug, videoSrc, isProActress, playVideo]);
+  }, [slug, videoSrc, isProActress, playVideo, startProgressLoop]);
 
   // 再生中の読み込み停滞 (waiting/stalled) と、再生再開 (playing/canplaythrough) を検知して
   // スピナーの表示・非表示を切り替える。isActive 中のときだけビデオ要素が
@@ -800,6 +930,10 @@ export function useFeedPlayback({ slug, title, isActive, videoSrc, onOpenModal, 
       userPausedRef.current = true;
       // 一時停止と同時に minStart seek 後の play リトライ予約も破棄する。
       proActressPlayRetryPendingRef.current = false;
+      if (proActressPlayFallbackTimerRef.current != null) {
+        clearTimeout(proActressPlayFallbackTimerRef.current);
+        proActressPlayFallbackTimerRef.current = null;
+      }
       video.pause();
       isPlayingRef.current = false;
       stopProgressLoop();
@@ -847,6 +981,10 @@ export function useFeedPlayback({ slug, title, isActive, videoSrc, onOpenModal, 
     if (video && !video.paused) {
       userPausedRef.current = true;
       proActressPlayRetryPendingRef.current = false;
+      if (proActressPlayFallbackTimerRef.current != null) {
+        clearTimeout(proActressPlayFallbackTimerRef.current);
+        proActressPlayFallbackTimerRef.current = null;
+      }
       video.pause();
       isPlayingRef.current = false;
       stopProgressLoop();

@@ -30,6 +30,61 @@ export type ResolveMp4Response = {
 };
 
 /**
+ * 単一 <video> 戦略における再生 URL の選択。
+ *
+ * 不変条件: active 再生 (useResolvedVideoSrc) と 隠し prefetch
+ * (usePrefetchVideoBytes / handoff registry) は同じ canonical URL を使う。
+ *
+ * 過去の事故:
+ *   - active は `high_mp4_url || mp4_url`、prefetch は `mp4_url` (= primary
+ *     = args.src) を使っていたため、`mp4_url !== high_mp4_url` の作品では
+ *     handoff registry の src が active 側 src と一致せず、`promote-src-mismatch`
+ *     で JSX <video> がゼロから立ち上がる。さらに prefetch 帯域が「使われない
+ *     低画質 URL」に費やされて、active 側の高画質 fetch を遅らせる二重の損失。
+ *   - DMM html5_player は `args.src` (= primary) に必ずしも最高ビットレートを
+ *     入れないことがある (bitrates 配列に `_mhb_w.mp4` があっても primary が
+ *     `_dm_w.mp4` のケース)。high_mp4_url は bitrates 由来で最高ビットレート、
+ *     mp4_url は primary なので、`high_mp4_url || mp4_url` を採用すると
+ *     確実に最高画質を選べる。
+ */
+export function pickPlaybackUrl(res: {
+  mp4_url: string;
+  high_mp4_url?: string | null;
+}): string {
+  return res.high_mp4_url || res.mp4_url;
+}
+
+/**
+ * URL 末尾ファイル名から DMM サンプル動画の画質ティアを推定する。
+ *
+ * DMM の命名規則 (低 → 高):
+ *   _sm_w.mp4  : small  (最も軽量 / SD)
+ *   _dm_w.mp4  : medium (中)
+ *   _dmb_w.mp4 : medium-bitrate (中の上、_dm_w より高ビットレート)
+ *   _mhb_w.mp4 : medium-high bitrate (HD 相当、最高画質)
+ *
+ * vt ログ用の安全な短いラベル。トークン付きクエリは含まない。
+ */
+export function inferQualityTier(url: string | null | undefined): string {
+  if (!url) return "unknown";
+  if (url.includes("_mhb_w.mp4")) return "mhb";
+  if (url.includes("_dmb_w.mp4")) return "dmb";
+  if (url.includes("_dm_w.mp4")) return "dm";
+  if (url.includes("_sm_w.mp4")) return "sm";
+  return "other";
+}
+
+/** 署名クエリを除いた host だけを vt ログ向けに取り出す。 */
+export function extractHost(url: string | null | undefined): string {
+  if (!url) return "?";
+  try {
+    return new URL(url).host;
+  } catch {
+    return "?";
+  }
+}
+
+/**
  * 優先度。
  *  - "high":   active 再生 (useResolvedVideoSrc)。waiters の先頭に割り込み、
  *              warm の低優先度上限 (activeLow) を無視して即発火。

@@ -3,7 +3,12 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import type { MovieCard } from "@/lib/api/feed";
-import { resolveMp4Url } from "@/lib/api/resolve-mp4";
+import {
+  extractHost,
+  inferQualityTier,
+  pickPlaybackUrl,
+  resolveMp4Url,
+} from "@/lib/api/resolve-mp4";
 import { ensurePreconnect, getPrefetchPolicy } from "@/lib/networkPrefs";
 import { isVideoTimingEnabled } from "@/lib/videoTiming";
 import {
@@ -102,6 +107,33 @@ function vtPrefetchLog(message: string) {
   if (!isVideoTimingEnabled()) return;
   // eslint-disable-next-line no-console
   console.debug(`vt byte-prefetch ${message}`);
+}
+
+/**
+ * prefetch が選んだ URL の画質ティアを vt ログに残す。
+ *
+ * 不変条件: 隠し <video> と active <video> は同じ canonical URL を使うため、
+ * ここで `quality` が `mhb` 以外になる場合は API が最高ビットレートとして
+ * `_mhb_w.mp4` を返していない (= DMM 側でその作品は HD 候補が無い) ことを
+ * 意味する。`drift=primary->high` は `high_mp4_url !== mp4_url` の作品で、
+ * 旧実装が src-mismatch を出していたケース。
+ */
+function logPrefetchQuality(
+  slug: string,
+  res: { mp4_url: string; high_mp4_url?: string | null },
+  picked: string,
+  offset: number,
+) {
+  if (!isVideoTimingEnabled()) return;
+  const tier = inferQualityTier(picked);
+  const host = extractHost(picked);
+  const drift =
+    res.high_mp4_url && res.high_mp4_url !== res.mp4_url
+      ? "primary->high"
+      : "none";
+  vtPrefetchLog(
+    `quality slug=${slug} offset=+${offset} quality=${tier} host=${host} drift=${drift}`,
+  );
 }
 
 interface PrefetchSlot {
@@ -401,8 +433,17 @@ export function usePrefetchVideoBytes(
         .then((res) => {
           if (controller.signal.aborted) return;
           if (!res?.mp4_url) return;
+          // active (useResolvedVideoSrc) と同じ canonical URL を使う。
+          // ここで `res.mp4_url` (= API primary = args.src) ではなく
+          // `pickPlaybackUrl(res)` (= high_mp4_url || mp4_url) を採用しないと、
+          // 隠し <video> に貼る src と active <video> の src が不一致になり、
+          // videoHandoff レジストリの src 比較で `promote-src-mismatch` が
+          // 出続けて handoff が成立しない (＝ prefetch 帯域が無駄に消費されて
+          // active の高画質取得を遅らせる)。
+          const url = pickPlaybackUrl(res);
+          logPrefetchQuality(target.slug, res, url, target.offset);
           // 解決した CDN origin に dyn preconnect (TCP/TLS handshake を前倒し)。
-          ensurePreconnect(res.mp4_url);
+          ensurePreconnect(url);
           // readiness は隠し <video> の loadedmetadata / canplay を待って判定する
           // (resolve 成功時点ではまだバイトを取り始めてさえいない可能性があるため)。
           setSlots((prev) => {
@@ -413,7 +454,7 @@ export function usePrefetchVideoBytes(
               {
                 id: target.id,
                 slug: target.slug,
-                src: res.mp4_url,
+                src: url,
                 preload: target.preload,
                 offset: target.offset,
                 targetIndex: target.targetIndex,
@@ -491,7 +532,9 @@ export function usePrefetchVideoBytes(
         .then((res) => {
           if (controller.signal.aborted) return;
           if (!res?.mp4_url) return;
-          ensurePreconnect(res.mp4_url);
+          // self-heal 後も active と同じ canonical URL を使う (src-mismatch 防止)。
+          const url = pickPlaybackUrl(res);
+          ensurePreconnect(url);
           const id = slugToIdRef.current.get(slug);
           if (!id) return; // 既に対象範囲外
           setSlots((prev) => {
@@ -506,7 +549,7 @@ export function usePrefetchVideoBytes(
             const next: PrefetchSlot = {
               id,
               slug,
-              src: res.mp4_url,
+              src: url,
               preload: existingPreload,
               offset: existingOffset,
               targetIndex: existingTargetIndex,

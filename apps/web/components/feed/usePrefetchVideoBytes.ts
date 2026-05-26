@@ -6,6 +6,7 @@ import type { MovieCard } from "@/lib/api/feed";
 import { resolveMp4Url } from "@/lib/api/resolve-mp4";
 import { ensurePreconnect, getPrefetchPolicy } from "@/lib/networkPrefs";
 import { isVideoTimingEnabled } from "@/lib/videoTiming";
+import { getReadiness, syncNearProtection } from "@/lib/videoHandoff";
 
 /**
  * 現在再生中のスライドより先 N 枚分の動画バイトを裏で preload しておく hook。
@@ -39,14 +40,32 @@ import { isVideoTimingEnabled } from "@/lib/videoTiming";
  */
 const PREFETCH_START_OFFSET = 1;
 
+/**
+ * handoff pool の near-protection に出す「近距離未来枠」の最大 offset。
+ * current (0) + 1/2/3 までを cap-eviction から守る。
+ *
+ * 注意: ここで保護する slug は実際に prefetch slot を持っているとは限らない。
+ * Safari (aheadCount=1) や rapid swipe (+1 のみ allow) のように +2/+3 の slot を
+ * 作らないモードでも、もし +2/+3 の entry がまだプールに残っていれば保護したい
+ * (例: 直前まで +1 にいた slug が rapid swipe で active が動いて +2 へ後退した
+ * 直後など)。そのため offset window は policy 非依存にして広めに取る。
+ *
+ * canplay 未到達 entry の枠 (MAX_POOLED_NON_CANPLAY=4) を圧迫しすぎないため
+ * 上限は控えめ。
+ */
+const NEAR_PROTECT_MAX_OFFSET = 3;
+
 // current+1 は debounce なしで即時発火する。React のレンダー直後に走らせるため
 // microtask (queueMicrotask 相当の Promise.resolve().then) でキックする。
 // 中央 <video> がスワイプ確定するまでの数百 ms に競合しないよう、+1 だけは
 // 「次に確実に表示される」優先扱いで遅延を入れない。
 
 // current+1 以降のスロット (+2 など) は中央 <video> の安定再生を優先したいので
-// 従来通り少し待ってから resolve する。
-const UPCOMING_PREFETCH_DEBOUNCE_MS = 400;
+// 少し待ってから resolve する。ただし「rapid swipe が落ち着いた直後に +2 を温める
+// 速度」が sub-1s 再生達成率に直結するので、過度には待たない。150ms は中央 <video>
+// の resolve→loadstart より十分速く、かつ中央の Range request 開始と被って
+// 帯域を奪うリスクが低い妥協値。
+const UPCOMING_PREFETCH_DEBOUNCE_MS = 150;
 
 function vtPrefetchLog(message: string) {
   if (!isVideoTimingEnabled()) return;
@@ -137,20 +156,63 @@ export function usePrefetchVideoBytes(
 
   // active スライドが変わったタイミングで、そのスライドが裏 prefetch 済みだったかを
   // dev ログに出す (loadedmetadata +9s 等を取り逃したかの確認用)。
+  // 同時に current / +1 / +2 / +3 の readiness ウィンドウもログに残し、
+  // どの距離までが canplay まで温まっていたかをひと目で見られるようにする。
   useEffect(() => {
     if (!isVideoTimingEnabled()) return;
     const activeItem = items[currentIndex];
     if (!activeItem || !activeItem.slug) return;
     if (lastActiveSlugRef.current === activeItem.slug) return;
     lastActiveSlugRef.current = activeItem.slug;
-    const readiness = readinessRef.current.get(activeItem.slug);
-    // 旧 boolean からの移行: canplay > metadata > false。
-    // Chrome の +1 (auto) は canplay 到達まで「真の prefetched」と認めず、
-    // active 到達時には canplay / metadata / false の 3 段階で出す。
-    const readinessLabel: string = readiness ?? "false";
+    // active の readiness: 隠し prefetch buffer での観測値を最優先で見る。
+    // pool 側 (handoff registry) にしか entry が無いケース (= 通常は無い) でも
+    // フォールバックで getReadiness を見る。
+    const readinessLocal = readinessRef.current.get(activeItem.slug);
+    const readinessHandoff = getReadiness(activeItem.slug);
+    const readinessLabel: string =
+      readinessLocal ?? readinessHandoff ?? "false";
     vtPrefetchLog(
       `active index=${currentIndex} slug=${activeItem.slug} byte-prefetched=${readinessLabel}`,
     );
+    // 続けて readiness window を出す。current から +3 までを 1 行にまとめる。
+    // 各セルは canplay / metadata / false。slot がそもそも存在しない distance も
+    // false 扱いで出す。
+    const cells: string[] = [];
+    for (let d = 0; d <= NEAR_PROTECT_MAX_OFFSET; d += 1) {
+      const idx = currentIndex + d;
+      const it = idx >= 0 && idx < items.length ? items[idx] : null;
+      if (!it || !it.slug) {
+        cells.push(d === 0 ? "current=oob" : `+${d}=oob`);
+        continue;
+      }
+      const r =
+        readinessRef.current.get(it.slug) ?? getReadiness(it.slug) ?? "false";
+      cells.push(d === 0 ? `current=${r}` : `+${d}=${r}`);
+    }
+    vtPrefetchLog(`readiness window ${cells.join(" ")}`);
+    // active がまだ canplay まで温まっていなかった場合は短い alert ログも出す。
+    // (運用上「sub-1s 再生に届かなかった swipe がどれくらいあったか」を数えるため。)
+    if (readinessLabel !== "canplay") {
+      vtPrefetchLog(
+        `active not-ready slug=${activeItem.slug} readiness=${readinessLabel} index=${currentIndex}`,
+      );
+    }
+  }, [currentIndex, items]);
+
+  // current / +1 / +2 / +3 の slug を handoff registry の near-protected として
+  // マーキングする。これで cap 超過時の eviction が遠距離 entry を優先するので、
+  // 「rapid swipe で +1 entry が cap eviction → active 到達時 prefetched=false」
+  // という事故が起きにくくなる。policy / rapid swipe とは独立して常に同期。
+  useEffect(() => {
+    const slugs: string[] = [];
+    for (let d = 0; d <= NEAR_PROTECT_MAX_OFFSET; d += 1) {
+      const idx = currentIndex + d;
+      if (idx < 0 || idx >= items.length) continue;
+      const it = items[idx];
+      if (!it || !it.slug) continue;
+      slugs.push(it.slug);
+    }
+    syncNearProtection(slugs);
   }, [currentIndex, items]);
 
   useEffect(() => {

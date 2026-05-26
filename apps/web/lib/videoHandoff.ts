@@ -56,6 +56,19 @@ interface HandoffEntry {
    * 解除は promote / abandon / slug-change を起こした active 側が行う。
    */
   pinned: boolean;
+  /**
+   * 「active からの距離が近い (current/+1/+2/+3) 未来枠」として保護されている。
+   *
+   * pin (= pending claim) ほど強くないが、cap 超過時の eviction では near-protected
+   * を後回しにする。これにより、rapid swipe で隠し <video> の slot 構成が頻繁に
+   * 入れ替わっても、近い未来 (まだ canplay 未到達でも数百 ms 以内に active になり
+   * 得る) の entry が generic cap の最古順 eviction で巻き込まれるのを防ぐ。
+   *
+   * 設定は prefetch hook 側が `setNearProtected(slug, true)` で行い、slot が
+   * 抜けたタイミングで false にする。pin と異なり TTL は通常通り作用する
+   * (canplay = 長 / pending = 短)。
+   */
+  nearProtected: boolean;
 }
 
 type Listener = () => void;
@@ -73,6 +86,9 @@ const justClaimed = new Set<string>();
  * プール内 (detached=true) で保持してよい最大要素数 (合計)。
  * これを超えると readiness の低いものから古い順に破棄する。
  * <video> 要素はメモリを使うので 1 桁を維持する。
+ *
+ * 近い未来 (current/+1/+2/+3) の entry は nearProtected フラグで保護されるため、
+ * cap 超過時もそれら以外を優先的に捨てる (trimPoolIfNeeded を参照)。
  */
 const MAX_POOLED_ELEMENTS = 6;
 /**
@@ -147,9 +163,15 @@ function vtHandoffLog(message: string) {
 /**
  * プール容量超過時、未温まり entry / 古いものから削減する。
  *
+ * - pinned entry (= active が pending-handoff として claim 中) は絶対に evict しない。
  * - non-canplay (metadata/loading) は MAX_POOLED_NON_CANPLAY を超えたら古い順に破棄。
- * - 合計が MAX_POOLED_ELEMENTS を超えたら、readiness=metadata 優先 → 古い順に破棄
- *   (canplay 済みは最後まで残す)。
+ *   ただし nearProtected (current/+1/+2/+3 の未来枠) は後回し。
+ * - 合計が MAX_POOLED_ELEMENTS を超えたら、
+ *   優先度: 非 nearProtected の metadata → 非 nearProtected の canplay
+ *         → nearProtected の metadata → nearProtected の canplay (= 最後まで残す)
+ *   の順で古い順に破棄。これにより、rapid swipe で「近い未来 (current+1/+2/+3)
+ *   のまだ canplay 未到達 entry」が generic cap eviction で巻き込まれて、
+ *   active 到達時に prefetched=false になる事故を減らす。
  */
 function trimPoolIfNeeded() {
   // pinned entry は active 側が pending-handoff として claim 中なので絶対に
@@ -158,16 +180,23 @@ function trimPoolIfNeeded() {
   const detached = Array.from(registry.values()).filter(
     (e) => e.detached && !e.pinned,
   );
-  const nonCanplay = detached
-    .filter((e) => e.readiness !== "canplay")
-    .sort((a, b) => a.pooledAt - b.pooledAt);
+  // non-canplay 枠 cap: 非 nearProtected を先に削る。それでも超えていたら
+  // nearProtected も古い順に削る (最終 fallback)。
+  const nonCanplay = detached.filter((e) => e.readiness !== "canplay");
   if (nonCanplay.length > MAX_POOLED_NON_CANPLAY) {
-    const overflow = nonCanplay.slice(0, nonCanplay.length - MAX_POOLED_NON_CANPLAY);
+    const sorted = nonCanplay.slice().sort((a, b) => {
+      // 非 nearProtected を優先的に削る (=低 rank 先頭)
+      const rankA = a.nearProtected ? 1 : 0;
+      const rankB = b.nearProtected ? 1 : 0;
+      if (rankA !== rankB) return rankA - rankB;
+      return a.pooledAt - b.pooledAt;
+    });
+    const overflow = sorted.slice(0, sorted.length - MAX_POOLED_NON_CANPLAY);
     for (const entry of overflow) {
       destroyElement(entry.el);
       registry.delete(entry.slug);
       vtHandoffLog(
-        `pool evict slug=${entry.slug} reason=cap-pending readiness=${entry.readiness}`,
+        `pool evict slug=${entry.slug} reason=cap-pending readiness=${entry.readiness} near=${entry.nearProtected}`,
       );
     }
   }
@@ -184,18 +213,27 @@ function trimPoolIfNeeded() {
     }
     return;
   }
-  // 削除優先度: readiness=metadata を先に / その中で古いものから。
+  // 削除優先度 (低 → 高):
+  //   0: 非 nearProtected かつ metadata
+  //   1: 非 nearProtected かつ canplay
+  //   2: nearProtected かつ metadata
+  //   3: nearProtected かつ canplay (= 最後まで残す)
+  // 同 rank 内では古い順に削る。
   remaining.sort((a, b) => {
-    const rankA = a.readiness === "canplay" ? 1 : 0;
-    const rankB = b.readiness === "canplay" ? 1 : 0;
-    if (rankA !== rankB) return rankA - rankB; // metadata(0) を先頭へ
-    return a.pooledAt - b.pooledAt; // 古い順
+    const rankA =
+      (a.nearProtected ? 2 : 0) + (a.readiness === "canplay" ? 1 : 0);
+    const rankB =
+      (b.nearProtected ? 2 : 0) + (b.readiness === "canplay" ? 1 : 0);
+    if (rankA !== rankB) return rankA - rankB;
+    return a.pooledAt - b.pooledAt;
   });
   const toRemove = remaining.slice(0, remaining.length - MAX_POOLED_ELEMENTS);
   for (const entry of toRemove) {
     destroyElement(entry.el);
     registry.delete(entry.slug);
-    vtHandoffLog(`pool evict slug=${entry.slug} reason=cap readiness=${entry.readiness}`);
+    vtHandoffLog(
+      `pool evict slug=${entry.slug} reason=cap readiness=${entry.readiness} near=${entry.nearProtected}`,
+    );
   }
 }
 
@@ -261,6 +299,7 @@ export function registerPrefetchElement(args: {
     pooledAt: Date.now(),
     detached: false,
     pinned: false,
+    nearProtected: false,
   });
   vtHandoffLog(`register slug=${slug} preload=${preload}`);
   notify();
@@ -405,6 +444,34 @@ export function unpinSlug(slug: string) {
   if (!entry.pinned) return;
   entry.pinned = false;
   vtHandoffLog(`pool unpin slug=${slug} readiness=${entry.readiness}`);
+}
+
+/**
+ * 近距離未来枠 (current/+1/+2/+3) の slug をまとめて nearProtected に同期する。
+ *
+ * pin より弱い保護: cap 超過時の eviction で nearProtected を後回しにする。
+ * TTL eviction は通常通り (canplay=長 / pending=短) 効くので、長時間放置された
+ * 隠し要素は最終的に破棄される。
+ *
+ * 呼出側 (usePrefetchVideoBytes) は currentIndex 周辺の slug 集合を毎レンダー
+ * 通知し、本関数が registry の現状と diff を取って set/unset を行う。
+ *
+ * - 集合に含まれない slug の nearProtected は false に戻す。
+ * - 集合に含まれる slug の entry が registry にあれば true。entry が無いなら no-op
+ *   (この slug は登録前 or 既に claim 済み)。
+ */
+export function syncNearProtection(slugs: ReadonlyArray<string>): void {
+  const wanted = new Set(slugs);
+  for (const [slug, entry] of registry) {
+    const shouldProtect = wanted.has(slug);
+    if (entry.nearProtected === shouldProtect) continue;
+    entry.nearProtected = shouldProtect;
+    if (shouldProtect) {
+      vtHandoffLog(`pool near-protect slug=${slug} readiness=${entry.readiness}`);
+    } else {
+      vtHandoffLog(`pool near-release slug=${slug} readiness=${entry.readiness}`);
+    }
+  }
 }
 
 /**

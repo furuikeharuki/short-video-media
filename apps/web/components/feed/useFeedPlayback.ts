@@ -500,16 +500,30 @@ export function useFeedPlayback({ slug, title, isActive, videoSrc, boundElement 
           const e = err as { name?: string; message?: string } | null;
           const name = e?.name ?? "Error";
           const message = e?.message ?? String(err);
+          // play() の resolve/reject はマイクロタスクで遅延するため、ここに来た時点で
+          // 既にスライドが非 active へ移っているケースがある (スワイプ直後の pause() で
+          // AbortError が立つ等)。それを `rejected` として出すと「stale 状態の play
+          // 失敗」と「現 active 状態の真の失敗」が同じ vt ラベルになってしまい、
+          // 例えば直前 active 49ekdv... の AbortError が新 active 中の vt ログに
+          // 混じり原因分析が困難になる。stale 系は別ラベル (`abort reason=stale-active`)
+          // で短く出し、muted fallback も走らせない。
+          const stale = !isActiveRef.current || videoRef.current !== video;
           if (isVideoTimingEnabled()) {
-            // eslint-disable-next-line no-console
-            console.debug(
-              `vt ${slug}: active autoplay rejected reason=${reason} name=${name} message=${message} paused=${video.paused} rs=${video.readyState}`,
-            );
+            if (stale) {
+              // eslint-disable-next-line no-console
+              console.debug(
+                `vt ${slug}: active autoplay abort reason=stale-active trigger=${reason} name=${name}`,
+              );
+            } else {
+              // eslint-disable-next-line no-console
+              console.debug(
+                `vt ${slug}: active autoplay rejected reason=${reason} name=${name} message=${message} paused=${video.paused} rs=${video.readyState}`,
+              );
+            }
           }
           // muted fallback。playVideo の中で muted=true → play() を 1 度だけ呼ぶ。
           // ループしないよう既に再生中 / 非 active / user-paused なら skip。
-          if (videoRef.current !== video) return;
-          if (!isActiveRef.current) return;
+          if (stale) return;
           if (userPausedRef.current) return;
           if (!video.paused) return;
           void playVideo(video, false);

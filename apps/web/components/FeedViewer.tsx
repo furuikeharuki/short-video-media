@@ -127,17 +127,36 @@ export default function FeedViewer({
     .filter((s): s is Extract<FeedSlide, { kind: "video" }> => s.kind === "video")
     .map((s) => s.movie);
 
-  usePrefetchResolveMp4(movieItems, currentIndex, isRapidSwiping);
+  // currentIndex は slides 配列の index (広告スライドを含む)。一方 prefetch hook 群は
+  // 動画のみで構成された movieItems を受け取るので、両者の index を直接突き合わせると
+  // 広告挿入後にズレる (例: AD_FEED_INTERVAL=10 で 11 番目のスライドが広告のとき、
+  // それ以降 movieItems[currentIndex] は実際に再生中の動画と別作品を指す)。
+  // この乖離は vt ログで `byte-prefetch active index=N slug=A` と
+  // `active autoplay start slug=B` が同時に出るという形で観測されていた
+  // (current prewarm が違う作品を温め、active <video> はゼロからロードする状態)。
+  // 解決: 「アクティブスライドが動画ならその videoIndex」「広告なら次に来る動画の
+  // videoIndex (= 直前の videoCount)」を currentVideoIndex として渡す。これにより
+  // movieItems[currentVideoIndex] は常に「次に再生される動画」と一致する。
+  const activeSlide = slides[currentIndex];
+  const currentVideoIndex =
+    activeSlide?.kind === "video"
+      ? activeSlide.videoIndex
+      : slides
+          .slice(0, currentIndex + 1)
+          .filter((s): s is Extract<FeedSlide, { kind: "video" }> => s.kind === "video")
+          .length;
+
+  usePrefetchResolveMp4(movieItems, currentVideoIndex, isRapidSwiping);
   // 遠距離 (current+6..+15) を低優先度でバックグラウンド resolve。
   // 近距離 prefetch / active と同じ resolveCache を共有するので、ユーザーが
   // そこに到達するまでに URL が温まっている確率を上げる。
-  useWarmResolveMp4(movieItems, currentIndex, isRapidSwiping);
+  useWarmResolveMp4(movieItems, currentVideoIndex, isRapidSwiping);
   const {
     slots: prefetchSlots,
     handleSlotError,
     handleSlotMetadata,
     handleSlotCanPlay,
-  } = usePrefetchVideoBytes(movieItems, currentIndex, isRapidSwiping);
+  } = usePrefetchVideoBytes(movieItems, currentVideoIndex, isRapidSwiping);
 
   const [dragPx, setDragPx] = useState(0);
   const dragStartY         = useRef(0);

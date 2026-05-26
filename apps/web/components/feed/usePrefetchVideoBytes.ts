@@ -6,7 +6,12 @@ import type { MovieCard } from "@/lib/api/feed";
 import { resolveMp4Url } from "@/lib/api/resolve-mp4";
 import { ensurePreconnect, getPrefetchPolicy } from "@/lib/networkPrefs";
 import { isVideoTimingEnabled } from "@/lib/videoTiming";
-import { getReadiness, syncNearProtection } from "@/lib/videoHandoff";
+import {
+  consumeStaleClaim,
+  getReadiness,
+  peekStaleClaim,
+  syncNearProtection,
+} from "@/lib/videoHandoff";
 
 /**
  * 現在再生中のスライドより先 N 枚分の動画バイトを裏で preload しておく hook。
@@ -213,11 +218,17 @@ export function usePrefetchVideoBytes(
     const reconciled = reconcileReadiness(
       activeItem.slug,
       readinessRef.current.get(activeItem.slug) ?? null,
+      true,
     );
     if (reconciled.downgraded) {
+      const was = reconciled.was ?? "null";
+      const eff = reconciled.effective ?? "false";
       readinessRef.current.delete(activeItem.slug);
       vtPrefetchLog(
-        `readiness stale slug=${activeItem.slug} was=${reconciled.was} reason=${reconciled.reason}`,
+        `readiness stale slug=${activeItem.slug} was=${was} reason=${reconciled.reason}`,
+      );
+      vtPrefetchLog(
+        `readiness downgraded slug=${activeItem.slug} from=${was} to=${eff} reason=${reconciled.reason}`,
       );
     }
     const readinessLabel: string = reconciled.effective ?? "false";
@@ -240,6 +251,7 @@ export function usePrefetchVideoBytes(
       const cellReconciled = reconcileReadiness(
         it.slug,
         readinessRef.current.get(it.slug) ?? null,
+        false,
       );
       if (cellReconciled.downgraded) {
         readinessRef.current.delete(it.slug);
@@ -538,6 +550,7 @@ export function usePrefetchVideoBytes(
 function reconcileReadiness(
   slug: string,
   localReadiness: PrefetchReadiness | null,
+  isActiveCell: boolean,
 ): {
   effective: PrefetchReadiness | null;
   downgraded: boolean;
@@ -545,6 +558,22 @@ function reconcileReadiness(
   reason: string;
 } {
   const handoff = getReadiness(slug);
+  // FeedItem.tryClaim が直近で claim 失敗を検出していたら、その情報を最優先で
+  // 反映する。registry エントリが残っていても (例えば src 不一致 / not-canplay)、
+  // promote 不能 = active が JSX <video> をゼロから立ち上げ直す状態なので、
+  // 「byte-prefetched=canplay」を出すと観測と実体が乖離する。stale flag は
+  // 1 回 set → 1 回 consume の短命シグナルで、active セル (current) のみが
+  // consume する。window 内の他セルは peek (consume せず) して downgrade を
+  // 表示するだけにし、当該 slug が次に active になったときに consume させる。
+  const stale = isActiveCell ? consumeStaleClaim(slug) : peekStaleClaim(slug);
+  if (stale !== null) {
+    return {
+      effective: null,
+      downgraded: true,
+      was: localReadiness,
+      reason: `promote-${stale}`,
+    };
+  }
   if (localReadiness !== "canplay") {
     // 元々 canplay を主張していないので downgrade 判定対象外。registry 側の
     // 観測が上回っているならそちらを返す。

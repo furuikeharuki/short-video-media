@@ -25,7 +25,7 @@ import {
   subscribe as subscribeVideoHandoff,
   unpinSlug,
 } from "@/lib/videoHandoff";
-import { signalAdsReady } from "@/components/ads/adReadyGate";
+import { signalPlaying, signalUnstable } from "@/components/ads/adReadyGate";
 
 interface Props {
   item: MovieCard;
@@ -387,11 +387,11 @@ export default function FeedItem({ item, isActive, isAdjacent = false, isFirst, 
     setVideoReadyState(true);
     setSpinnerVisible(false);
     setShimmerVisible(false);
-    // 最初の active 動画が canplay に達したら ad-provider.js のロードを解禁する。
-    // signalAdsReady は idempotent なので 2 回目以降の呼び出しは何もしない。
-    // (active な FeedItem 以外でも canplay は発火し得るが、その場合も実害は無く、
-    //  むしろ早めに ready させた方が広告表示までの体感が良いので gating しない。)
-    signalAdsReady();
+    // 旧実装ではここで signalAdsReady() を呼んで広告 gate を解放していたが、
+    // canplay は「再生可能」であって「再生が安定している」とは限らない。
+    // 4G 等で canplay 直後に waiting / stalled に落ちるケースで広告 provider が
+    // 動画の critical path を奪う事故を防ぐため、playing/waiting/stalled の
+    // 観測ベースで gate を駆動する (下の playback-stability effect)。
   }, [setVideoReady, setSpinnerVisible, setShimmerVisible, clearHardTimeout, abandonPendingIfActiveReady]);
 
   const handleSeeked = useCallback(() => {
@@ -468,6 +468,48 @@ export default function FeedItem({ item, isActive, isAdjacent = false, isFirst, 
       video.removeEventListener("error", onError);
     };
   }, [isActive, videoSrc, item.slug, videoRef]);
+
+  // 広告 gate (adReadyGate) を駆動する playback-stability observer。
+  //
+  // active <video> が playing に入ったら signalPlaying()、waiting / stalled /
+  // error / 非 active 化したら signalUnstable() を呼ぶ。gate 側で
+  // PLAYBACK_STABLE_MS の安定タイマー + idle callback による flush が行われる。
+  //
+  // dev-only の timing logger とは独立に常時動かす (本番でも広告 gate は必要)。
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    if (!isActive) {
+      // 中央から外れた瞬間に走る。flush 予約済みなら gate 側で無視される。
+      signalUnstable("inactive");
+      return;
+    }
+    if (!videoSrc) return;
+    const video = videoRef.current;
+    if (!video) return;
+
+    const onPlaying = () => signalPlaying();
+    const onWaiting = () => signalUnstable("waiting");
+    const onStalled = () => signalUnstable("stalled");
+    const onError = () => signalUnstable("error");
+
+    video.addEventListener("playing", onPlaying);
+    video.addEventListener("waiting", onWaiting);
+    video.addEventListener("stalled", onStalled);
+    video.addEventListener("error", onError);
+
+    // active 化時点で既に playing 状態 (promoted で readyState>=3 かつ paused=false)
+    // なら、playing イベントは発火しない可能性があるため明示的にトリガする。
+    if (!video.paused && !video.ended && video.readyState >= 3) {
+      signalPlaying();
+    }
+
+    return () => {
+      video.removeEventListener("playing", onPlaying);
+      video.removeEventListener("waiting", onWaiting);
+      video.removeEventListener("stalled", onStalled);
+      video.removeEventListener("error", onError);
+    };
+  }, [isActive, videoSrc, videoRef, promotedElement]);
 
   const showVideo =
     (isActive || isAdjacent) && videoSrc !== null && !exhausted;

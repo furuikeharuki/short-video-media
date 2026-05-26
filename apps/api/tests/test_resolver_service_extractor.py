@@ -202,7 +202,13 @@ async def test_extract_args_with_nested_objects_and_arrays(
 async def test_extract_picks_low_high_from_bitrates_with_suffix_fallback(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """bitrates にビットレートキーが無いケースはサフィックスのランクで low/high を推定する。"""
+    """bitrates にビットレートキーが無いケースはサフィックスのランクで low/high を推定する。
+
+    サフィックスの並びは sm_w < dm_w < dmb_w < mhb_w (DMM の慣習)。
+    旧テーブルでは `_dmb_w` が誤って最低として扱われ、`_dmb_w.mp4` しか
+    返さない作品で `high_mp4_url` が中画質に固定される事故があった
+    (PR #200 で修正)。
+    """
     raw_html = (
         '<script>var args = {'
         '"src": "https://cc3001.dmm.co.jp/pv/aa/aa_mhb_w.mp4",'
@@ -219,10 +225,40 @@ async def test_extract_picks_low_high_from_bitrates_with_suffix_fallback(
     _install_transport(monkeypatch, handler)
 
     result = await extract_mp4_url("bitrate_no_key", "affi-001")
-    assert result.low_mp4_url == "https://cc3001.dmm.co.jp/pv/aa/aa_dmb_w.mp4"
+    # 修正後: low は最低 (_dm_w)、high は最高 (_mhb_w)。
+    assert result.low_mp4_url == "https://cc3001.dmm.co.jp/pv/aa/aa_dm_w.mp4"
     assert result.high_mp4_url == "https://cc3001.dmm.co.jp/pv/aa/aa_mhb_w.mp4"
     # primary は args.src を優先 (既存挙動互換)
     assert result.mp4_url == "https://cc3001.dmm.co.jp/pv/aa/aa_mhb_w.mp4"
+
+
+@pytest.mark.asyncio
+async def test_extract_suffix_rank_dmb_higher_than_dm(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`_dmb_w` は `_dm_w` より高画質 (DMM 命名規則)。
+
+    旧テーブルは `_dmb_w` を最低として扱っていたため、bitrate キーが無い
+    レスポンスで `_dm_w` と `_dmb_w` の 2 候補があっても high=`_dm_w` を
+    選んでしまい、ユーザーには中画質ではなく低画質が再生されていた。
+    """
+    raw_html = (
+        '<script>var args = {'
+        '"src": "https://cc3001.dmm.co.jp/pv/x/y_dm_w.mp4",'
+        '"bitrates": ['
+        '{"src": "//cc3001.dmm.co.jp/pv/x/y_dm_w.mp4"},'
+        '{"src": "//cc3001.dmm.co.jp/pv/x/y_dmb_w.mp4"}'
+        ']};</script>'
+    )
+    handler = _two_stage_handler(
+        litevideo_body=_litevideo_html(),
+        player_body=raw_html,
+    )
+    _install_transport(monkeypatch, handler)
+
+    result = await extract_mp4_url("dmb_vs_dm", "affi-001")
+    assert result.low_mp4_url == "https://cc3001.dmm.co.jp/pv/x/y_dm_w.mp4"
+    assert result.high_mp4_url == "https://cc3001.dmm.co.jp/pv/x/y_dmb_w.mp4"
 
 
 @pytest.mark.asyncio

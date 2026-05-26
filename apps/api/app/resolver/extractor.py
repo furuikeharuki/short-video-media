@@ -189,17 +189,24 @@ def _normalize_mp4_url(src: str) -> str:
 
 
 # DMM html5_player のファイル名サフィックスから「画質ランク」を推定する。
-# 値が大きいほど高画質扱い。低画質ファースト用に「低い候補」を選ぶ際に使う。
-# DMM のサンプル URL 観測例:
-#   - <cid>_dmb_w.mp4         (低ビットレート / モバイル向け)
-#   - <cid>_dm_w.mp4          (中ビットレート)
-#   - <cid>_sm_w.mp4          (中ビットレート / 旧)
-#   - <cid>_mhb_w.mp4         (高ビットレート / PC 向け)
+# 値が大きいほど高画質扱い。args.bitrates に bitrate キーが無いケースで
+# low/high の振り分けに使うフォールバック。
+#
+# DMM の命名規則 (低 → 高、コミュニティで合意された慣習):
+#   _sm_w.mp4   : small             (320x180 程度 / 最も軽量)
+#   _dm_w.mp4   : medium            (640x360 程度 / SD)
+#   _dmb_w.mp4  : medium-bitrate    (720x404 程度 / SD ハイビットレート)
+#   _mhb_w.mp4  : medium-high-bitrate (1280x720 程度 / HD 相当、最高画質)
+#
+# 旧テーブルは `_dmb_w` を最低 (10) と誤って書いていたため、bitrate キーが無い
+# レスポンスで `high = _dmb_w.mp4` (= 中) になり、`_mhb_w.mp4` を取り損ねる
+# ケースがあった。これがユーザー報告「再生動画が低解像度に見える」の主因の
+# 一つだったため、現在の合意順に修正する。
 # 未知のサフィックスは中位 (50) としてランク付けする。
 _QUALITY_RANK_BY_SUFFIX: dict[str, int] = {
-    "_dmb_w.mp4": 10,
+    "_sm_w.mp4": 10,
     "_dm_w.mp4": 30,
-    "_sm_w.mp4": 30,
+    "_dmb_w.mp4": 60,
     "_mhb_w.mp4": 90,
 }
 

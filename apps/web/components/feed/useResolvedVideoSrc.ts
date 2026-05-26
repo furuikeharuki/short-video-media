@@ -2,9 +2,14 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 
-import { resolveMp4Url } from "@/lib/api/resolve-mp4";
+import {
+  extractHost,
+  inferQualityTier,
+  pickPlaybackUrl,
+  resolveMp4Url,
+} from "@/lib/api/resolve-mp4";
 import { ensurePreconnect } from "@/lib/networkPrefs";
-import { createVideoTimer } from "@/lib/videoTiming";
+import { createVideoTimer, isVideoTimingEnabled } from "@/lib/videoTiming";
 
 /**
  * フィード上の 1 作品について「実際に再生可能な MP4 URL」を解決して保持する hook。
@@ -48,12 +53,35 @@ interface Result {
 const MAX_FORCE_RETRIES = 3;
 const FORCE_RETRY_BACKOFF_MS = [500, 1000, 2000];
 
-function pickPlaybackUrl(res: {
-  mp4_url: string;
-  high_mp4_url?: string | null;
-}): string {
-  // 単一 <video> 戦略では常に最高画質候補を採用する。
-  return res.high_mp4_url || res.mp4_url;
+/**
+ * 解決結果の URL シグネチャを vt ログに残す (active / force-retry 共通)。
+ *
+ * セキュリティ: 署名クエリは含めず、host と末尾の画質ティア (sm/dm/dmb/mhb) だけ
+ * を出す。これにより「ユーザーが見えている動画が高画質扱いになっているか」を
+ * 観測しつつ、トークン付き URL をログに残さない。
+ *
+ * drift: mp4_url (= API primary = args.src) と high_mp4_url が異なる場合は
+ * `drift=primary->high` を付ける。これが頻発するときは prefetch (= mp4_url を
+ * 使う旧実装) と active (= high_mp4_url) が別 URL になり handoff src-mismatch を
+ * 起こしていた。現在の実装は両者で pickPlaybackUrl(res) を共有するためログは
+ * 不要だが、移行期と再発検知のために残す。
+ */
+function logSelectedQuality(
+  slug: string,
+  res: { mp4_url: string; high_mp4_url?: string | null },
+  picked: string,
+  source: "active" | "force-retry",
+) {
+  if (!isVideoTimingEnabled()) return;
+  const tier = inferQualityTier(picked);
+  const host = extractHost(picked);
+  const drift = res.high_mp4_url && res.high_mp4_url !== res.mp4_url
+    ? "primary->high"
+    : "none";
+  // eslint-disable-next-line no-console
+  console.debug(
+    `vt resolve quality slug=${slug} source=${source} quality=${tier} host=${host} drift=${drift}`,
+  );
 }
 
 export function useResolvedVideoSrc({ slug, enabled }: Args): Result {
@@ -107,6 +135,7 @@ export function useResolvedVideoSrc({ slug, enabled }: Args): Result {
         if (res?.mp4_url) {
           timer.mark("resolve:ok");
           const url = pickPlaybackUrl(res);
+          logSelectedQuality(slug, res, url, "active");
           ensurePreconnect(url);
           setState({ phase: "ready", url });
         } else {
@@ -145,6 +174,7 @@ export function useResolvedVideoSrc({ slug, enabled }: Args): Result {
         if (controller.signal.aborted) return;
         if (res?.mp4_url) {
           const url = pickPlaybackUrl(res);
+          logSelectedQuality(slug, res, url, "force-retry");
           ensurePreconnect(url);
           setState({ phase: "ready", url });
           return;

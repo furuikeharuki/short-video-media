@@ -6,7 +6,7 @@ import type { MovieCard } from "@/lib/api/feed";
 import { resolveMp4Url } from "@/lib/api/resolve-mp4";
 import { ensurePreconnect, getPrefetchPolicy } from "@/lib/networkPrefs";
 import { isVideoTimingEnabled } from "@/lib/videoTiming";
-import { getReadiness, inspectEntry, syncNearProtection } from "@/lib/videoHandoff";
+import { getReadiness, syncNearProtection } from "@/lib/videoHandoff";
 
 /**
  * 現在再生中のスライドより先 N 枚分の動画バイトを裏で preload しておく hook。

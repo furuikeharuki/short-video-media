@@ -68,13 +68,16 @@ const justClaimed = new Set<string>();
  * これを超えると readiness の低いものから古い順に破棄する。
  * <video> 要素はメモリを使うので 1 桁を維持する。
  */
-const MAX_POOLED_ELEMENTS = 4;
+const MAX_POOLED_ELEMENTS = 6;
 /**
  * プール内に保持してよい non-canplay (metadata/loading) entry の最大数。
  * canplay 未到達の隠し要素は復活確率が低めかつ帯域消費が続くので、合計 cap より
  * 厳しめに絞る。これを超えると新しい non-canplay でも古い non-canplay を捨てる。
+ * rapid swipe 中は metadata/loading entry が短時間に複数積み上がるため、ある程度
+ * 余裕を持って 4 まで許容し、useful な in-progress 要素が早期 evict されないよう
+ * する。
  */
-const MAX_POOLED_NON_CANPLAY = 2;
+const MAX_POOLED_NON_CANPLAY = 4;
 /**
  * canplay 済み entry を保持する最大時間 (ms)。
  * rapid swipe 中に slot が頻繁に入れ替わっても、数秒以内に active へ到達すれば
@@ -87,7 +90,7 @@ const POOL_TTL_CANPLAY_MS = 30_000;
  * 前に slot から外れることがある。short TTL の間だけプールに残し、その slug が
  * すぐ active になればそのまま canplay 到達まで subscribe して promote できる。
  */
-const POOL_TTL_PENDING_MS = 10_000;
+const POOL_TTL_PENDING_MS = 15_000;
 /** cleanup インターバル (ms)。 */
 const POOL_CLEANUP_INTERVAL_MS = 2_500;
 

@@ -505,10 +505,39 @@ export function useFeedPlayback({ slug, title, isActive, videoSrc, boundElement 
       isMutedRef.current = globalIsMuted;
       setIsMuted(globalIsMuted);
       video.muted = globalIsMuted;
+      // pro-actress 先頭 5 秒スキップは「どの autoplay 経路でも play() より前に
+      // currentTime を下限 (=5) に飛ばしておく」が単一の不変条件。
+      // attemptActiveAutoplay は active-change / promote / canplay / metadata /
+      // observer / element-bound のすべての autoplay 起動口になっているため、
+      // ここで enforce しないと、特に handoff promote 直後 (rs=4 / currentTime=0)
+      // で metadata / loadedmetadata イベントが新しい host 側では再発火せず、
+      // enforceLowerBound() も走らないまま t=0 から再生開始してしまう。
+      // playVideo 経由なら同様の seek が入るが、attemptActiveAutoplay は
+      // resolve/reject を観測したい都合で video.play() を直接呼んでおり、
+      // その直前にここで明示 seek する必要がある。
+      if (isProActressRef.current && video.currentTime + 0.05 < PRO_ACTRESS_HEAD_SKIP_SEC) {
+        const dur = video.duration;
+        // 極端に短い動画 (< MIN_DURATION) はスキップ無効。それ以外、duration 未確定でも
+        // ベストエフォートで seek する (handleLoadedMeta -> enforceLowerBound で再クランプ)。
+        const tooShort = Number.isFinite(dur) && dur > 0 && dur < PRO_ACTRESS_MIN_DURATION_SEC;
+        if (!tooShort) {
+          if (isVideoTimingEnabled()) {
+            // eslint-disable-next-line no-console
+            console.debug(
+              `vt ${slug}: pro-actress enforce before autoplay currentTime=${video.currentTime.toFixed(2)} -> ${PRO_ACTRESS_HEAD_SKIP_SEC} reason=${reason} rs=${video.readyState}`,
+            );
+          }
+          try { video.currentTime = PRO_ACTRESS_HEAD_SKIP_SEC; } catch { /* ignore */ }
+          // seek が反映されない / play() 開始時点で 0 から再生 になるケースの保険として
+          // 既存の seeked / canplay リトライ経路を起動しておく。enforceLowerBound() と
+          // 同じ ref を立てるだけで、tryConsumePlayRetry が play retry を引き受ける。
+          proActressPlayRetryPendingRef.current = true;
+        }
+      }
       if (isVideoTimingEnabled()) {
         // eslint-disable-next-line no-console
         console.debug(
-          `vt ${slug}: active autoplay start reason=${reason} paused=${video.paused} rs=${video.readyState} muted=${video.muted}`,
+          `vt ${slug}: active autoplay start reason=${reason} paused=${video.paused} rs=${video.readyState} muted=${video.muted} currentTime=${video.currentTime.toFixed(2)}`,
         );
       }
       // playVideo (= 既存の muted フォールバック / proActress 先頭 5 秒 seek 込み) に

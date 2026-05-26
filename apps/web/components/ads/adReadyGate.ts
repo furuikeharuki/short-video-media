@@ -1,6 +1,6 @@
 /**
  * 広告 provider (ExoClick ad-provider.js) のロードを「最初の active 動画が
- * 再生可能 (canplay) に達するか、ページ全体が idle になる」まで遅延させるためのゲート。
+ * 実際に再生開始 (playing) するか、ページ全体が idle になる」まで遅延させるためのゲート。
  *
  * 動機:
  *   ad-provider.js は <script async> でロードされても評価コスト・XHR コスト・
@@ -14,29 +14,50 @@
  *   - 誰かが whenAdsReady() を最初に呼んだタイミングで、フォールバック timer
  *     (AUTO_READY_FALLBACK_MS) を仕掛ける。これにより active <video> が一切
  *     現れないページ (例: 静的ページ) でも一定時間で必ず ready になる。
- *   - signalAdsReady() が外部 (= active <video> の canplay 観測者) から呼ばれた
+ *   - signalAdsReady() が外部 (= active <video> の playing 観測者) から呼ばれた
  *     瞬間に ready=true に遷移し、キューされた callback を全て実行 + フォールバックを解除。
+ *   - 実 flush は POST_SIGNAL_GRACE_MS のマイクロ遅延後に行う。最初の playing
+ *     フレームのレンダリングが完了する前に ad-provider.js のパースが始まると、
+ *     最初の paint が削られてしまうため。
  *   - 一度 ready になったら以降の whenAdsReady() は同期実行。
  *
- * これによって ad-provider script の <script> 注入と AdProvider.push の駆動が
- * 「最初の動画が再生開始する → そのフレームのレンダリングが完了する」までは
- * 走らなくなる。プッシュした serve コマンド自体は AdProvider 配列にキューされる
- * (まだ script の load が走っていない間) ので、表示順は崩れない。
+ * フォールバックを 10s と長めに置く理由:
+ *   - 初回 canplay/playing がモバイル 4G で 4-7s かかるケースが観測されているため、
+ *     4s だと "ほぼ確実にフォールバック経由" になり gate の意味が薄れる。
+ *   - 10s 経っても再生できない極端なケースでも広告は出したいので無限には待たない。
  */
 
 type ReadyCallback = () => void;
 
-const AUTO_READY_FALLBACK_MS = 4000;
+const AUTO_READY_FALLBACK_MS = 10000;
+const POST_SIGNAL_GRACE_MS = 250;
 
 let ready = false;
 const queue: ReadyCallback[] = [];
 let fallbackTimer: ReturnType<typeof setTimeout> | null = null;
+let flushTimer: ReturnType<typeof setTimeout> | null = null;
+
+function vt(msg: string): void {
+  if (typeof window === "undefined") return;
+  try {
+    const enabled =
+      process.env.NODE_ENV !== "production" ||
+      window.location?.search?.includes("vt=1") ||
+      window.localStorage?.getItem("video_timing") === "1";
+    if (!enabled) return;
+    // eslint-disable-next-line no-console
+    console.debug(`vt ads-gate ${msg}`);
+  } catch {
+    /* ignore */
+  }
+}
 
 function flush(): void {
   if (!ready) return;
   // queue を切り出してから順次実行 (実行中に whenAdsReady 再帰呼び出しが起きても
   // 残り queue がきれいに処理されるように)。
   const pending = queue.splice(0);
+  vt(`flush n=${pending.length}`);
   for (const cb of pending) {
     try {
       cb();
@@ -52,14 +73,17 @@ function ensureFallback(): void {
   if (fallbackTimer != null) return;
   fallbackTimer = setTimeout(() => {
     fallbackTimer = null;
+    vt("fallback fired");
     signalAdsReady();
   }, AUTO_READY_FALLBACK_MS);
 }
 
 /**
  * 広告ロードを許可する。idempotent。
- * - active <video> の canplay 観測者 (FeedItem の handleCanPlay) から呼ぶ。
+ * - active <video> の playing / canplay 観測者から呼ぶ。
  * - フォールバック timer も同時に解除する。
+ * - 実 flush は POST_SIGNAL_GRACE_MS 後に行い、最初の playing frame の paint
+ *   と被らないようにする。
  */
 export function signalAdsReady(): void {
   if (ready) return;
@@ -68,7 +92,16 @@ export function signalAdsReady(): void {
     clearTimeout(fallbackTimer);
     fallbackTimer = null;
   }
-  flush();
+  vt("signal");
+  if (typeof window === "undefined") {
+    flush();
+    return;
+  }
+  if (flushTimer != null) return;
+  flushTimer = setTimeout(() => {
+    flushTimer = null;
+    flush();
+  }, POST_SIGNAL_GRACE_MS);
 }
 
 /** 現在の ready 状態を取得する (デバッグ・テスト用)。 */

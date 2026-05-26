@@ -20,6 +20,8 @@
  * ページで何度も呼ぶと、まだ serve 中の他の枠まで巻き添えで殺してしまう。
  */
 
+import { whenAdsReady } from "./adReadyGate";
+
 declare global {
   interface Window {
     AdProvider?: Array<Record<string, unknown>>;
@@ -60,7 +62,17 @@ function ensureGlobal(): void {
 
 /**
  * provider 用 ad-provider.js を 1 回だけ <head> に挿入する。
+ *
  * 公式タグ同様 async でロードし、完了を待たない。
+ *
+ * "ads-ready" ゲート (adReadyGate) を通すことで、最初の active 動画が canplay
+ * に達するか、idle タイマー (4s) が発火するまでスクリプトの実 fetch / 評価を
+ * 遅延させる。これにより初回再生開始までのメインスレッドを ad-provider.js の
+ * パース・実行・内部例外で奪われない。
+ *
+ * 注意: AdProvider 配列への push はこのゲートとは独立に即時で行う (serveAd 側)。
+ *      配列は ad-provider.js ロード後に「自身の push 実装に差し替え + 未処理要素を走査」
+ *      するため、push の順序は失われない。
  */
 function ensureProviderScript(provider: Provider): void {
   if (typeof window === "undefined") return;
@@ -72,13 +84,22 @@ function ensureProviderScript(provider: Provider): void {
     scriptInjected[provider] = true;
     return;
   }
-  const s = document.createElement("script");
-  s.async = true;
-  s.type = "application/javascript";
-  s.src = SRC[provider];
-  s.dataset.adProvider = provider;
-  document.head.appendChild(s);
+  // ロード予約を 1 回だけ。ready 前に複数 AdSlot が ensureProviderScript を呼んでも
+  // 1 つしか script は挿入されない。
   scriptInjected[provider] = true;
+  whenAdsReady(() => {
+    // ready 待ちの間に別経路で script タグが入った場合は何もしない。
+    const already = document.querySelector<HTMLScriptElement>(
+      `script[data-ad-provider="${provider}"]`,
+    );
+    if (already) return;
+    const s = document.createElement("script");
+    s.async = true;
+    s.type = "application/javascript";
+    s.src = SRC[provider];
+    s.dataset.adProvider = provider;
+    document.head.appendChild(s);
+  });
 }
 
 /**

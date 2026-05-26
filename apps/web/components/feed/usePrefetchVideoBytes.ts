@@ -80,7 +80,13 @@ interface PrefetchSlot {
   slug: string;
   /** <video src> に渡す URL */
   src: string;
-  /** 隠し <video> の preload 属性 (Safari は "metadata", Chrome は "auto") */
+  /**
+   * 隠し <video> の preload 属性。
+   * - "auto": bytes も含めて先頭バッファまで取得 (Chromium +1/+2)
+   * - "metadata": container/codec/長さだけ取得しバイトは取らない
+   *   (Safari +1, または Chromium +3 の "軽量ウォーミング")
+   * - "none": ロードを完全に止める
+   */
   preload: "auto" | "metadata" | "none";
   /**
    * dev ログ用: スロット作成時点の currentIndex からのオフセット (+1, +2 など)。
@@ -101,6 +107,11 @@ interface Target {
   offset: number;
   /** スロット作成時点で凍結する items index (currentIndex + offset)。 */
   targetIndex: number;
+  /**
+   * この target に使う preload mode。デフォルトは policy.preload。
+   * +3 の "軽量ウォーミング" target は強制的に "metadata" を使い、bytes 取得は行わない。
+   */
+  preload: "auto" | "metadata" | "none";
 }
 
 export type PrefetchReadiness = "metadata" | "canplay";
@@ -132,12 +143,13 @@ export function usePrefetchVideoBytes(
   const readinessRef = useRef<Map<string, PrefetchReadiness>>(new Map());
   const lastActiveSlugRef = useRef<string | null>(null);
 
-  // ポリシー (aheadCount / preload) を計算する。effect 内で毎回読むと
-  // navigator アクセスが増えるので useEffect の中で 1 度だけ参照する。
+  // ポリシー (aheadCount / preload / immediateUpcoming / warmPlusThree) を計算する。
+  // effect 内で毎回読むと navigator アクセスが増えるので useEffect の中で 1 度だけ参照する。
   // 回線状況は途中で変わり得るが、本サイトは短時間セッションなので静的取得で十分。
 
   // 対象スライドの一覧 (id+slug+offset) を currentIndex / items から決める。
   // policy.aheadCount = 1 → +1 だけ / 2 → +1 と +2。
+  // さらに policy.warmPlusThree=true なら +3 を preload="metadata" だけで足す。
   // ここで targets を実 effect が走る前に算出しておくと、deps として安定 key (id 連結) を使える。
   const policy = getPrefetchPolicyMemo();
   const targets: Target[] = [];
@@ -148,11 +160,38 @@ export function usePrefetchVideoBytes(
       if (idx >= items.length) break;
       const it = items[idx];
       if (!it || !it.slug) continue;
-      targets.push({ id: it.id, slug: it.slug, offset, targetIndex: idx });
+      targets.push({
+        id: it.id,
+        slug: it.slug,
+        offset,
+        targetIndex: idx,
+        preload: policy.preload,
+      });
     }
   }
-  // deps 用に安定キーを生成 (id の join)。
-  const targetsKey = targets.map((t) => `${t.id}:${t.slug}:${t.offset}`).join("|");
+  // +3 の軽量ウォーミング (bytes は取らない)。aheadCount で既に +3 を含む policy が
+  // 出てきたら二重に積まないようガード。
+  if (policy.warmPlusThree && policy.aheadCount < 3) {
+    const offset = 3;
+    const idx = currentIndex + offset;
+    if (idx < items.length) {
+      const it = items[idx];
+      if (it && it.slug) {
+        targets.push({
+          id: it.id,
+          slug: it.slug,
+          offset,
+          targetIndex: idx,
+          // bytes を取らずに resolver 解決と <video> container 初期化だけ前倒し。
+          preload: "metadata",
+        });
+      }
+    }
+  }
+  // deps 用に安定キーを生成 (id + preload の join)。preload が変わると slot を作り直す。
+  const targetsKey = targets
+    .map((t) => `${t.id}:${t.slug}:${t.offset}:${t.preload}`)
+    .join("|");
 
   // active スライドが変わったタイミングで、そのスライドが裏 prefetch 済みだったかを
   // dev ログに出す (loadedmetadata +9s 等を取り逃したかの確認用)。
@@ -267,15 +306,17 @@ export function usePrefetchVideoBytes(
       return;
     }
 
-    // current+1 は debounce なしで即時発火 (rapid swipe 中も含む)。
-    // +2 以降は中央 <video> 安定再生のため少し遅らせる (rapid 中は activeTargets に
-    // 含まれないので発火しない)。
+    // 発火タイミング:
+    //   - +1 は常に debounce 無しで即時発火 (rapid swipe 中も含む)。
+    //   - +2/+3 は policy.immediateUpcoming=true (Chromium+4G/wifi) なら即時、
+    //     それ以外は UPCOMING_PREFETCH_DEBOUNCE_MS だけ遅延。
+    //     rapid 中は activeTargets から +2/+3 が除外されているので発火しない。
     const nextTarget = activeTargets.find((t) => t.offset === PREFETCH_START_OFFSET);
     const upcomingTargets = activeTargets.filter((t) => t.offset > PREFETCH_START_OFFSET);
 
     const fire = (target: Target, immediate: boolean) => {
       if (inFlight.has(target.slug)) return;
-      // 既に同 id/slug の slot がある (= 既に preload 中の <video> 要素が
+      // 既に同 id/slug/preload の slot がある (= 既に preload 中の <video> 要素が
       // handoff registry に温まっている) ならば、resolve も log も再発火しない。
       // PrefetchVideoBuffer / registerPrefetchElement 側でも要素は使い回されるので、
       // ここで二重ログを止めて vt 出力をノイズなく保つ。
@@ -283,7 +324,7 @@ export function usePrefetchVideoBytes(
       if (
         existingSlot &&
         existingSlot.slug === target.slug &&
-        existingSlot.preload === policy.preload
+        existingSlot.preload === target.preload
       ) {
         vtPrefetchLog(
           `slot reuse index=${target.targetIndex} slug=${target.slug} offset=+${target.offset}`,
@@ -298,7 +339,7 @@ export function usePrefetchVideoBytes(
         );
       }
       vtPrefetchLog(
-        `slot index=${target.targetIndex} slug=${target.slug} offset=+${target.offset} mode=${policy.preload} immediate=${immediate}`,
+        `slot index=${target.targetIndex} slug=${target.slug} offset=+${target.offset} mode=${target.preload} immediate=${immediate}`,
       );
       void resolveMp4Url(target.slug, {
         signal: controller.signal,
@@ -320,7 +361,7 @@ export function usePrefetchVideoBytes(
                 id: target.id,
                 slug: target.slug,
                 src: res.mp4_url,
-                preload: policy.preload,
+                preload: target.preload,
                 offset: target.offset,
                 targetIndex: target.targetIndex,
               },
@@ -341,12 +382,19 @@ export function usePrefetchVideoBytes(
     if (nextTarget) {
       fire(nextTarget, true);
     }
-    const upcomingTimer =
-      upcomingTargets.length > 0
-        ? setTimeout(() => {
-            for (const target of upcomingTargets) fire(target, false);
-          }, UPCOMING_PREFETCH_DEBOUNCE_MS)
-        : null;
+    // policy.immediateUpcoming=true なら +2/+3 も同じ effect tick で即時発火。
+    // (Chromium+4G/wifi では中央 <video> の Range request 開始と被ってもボトルネックに
+    //  なりにくく、150ms 待つと rapid swipe 突入時に +2 が canplay まで温まらない。)
+    let upcomingTimer: ReturnType<typeof setTimeout> | null = null;
+    if (upcomingTargets.length > 0) {
+      if (policy.immediateUpcoming) {
+        for (const target of upcomingTargets) fire(target, true);
+      } else {
+        upcomingTimer = setTimeout(() => {
+          for (const target of upcomingTargets) fire(target, false);
+        }, UPCOMING_PREFETCH_DEBOUNCE_MS);
+      }
+    }
 
     return () => {
       if (upcomingTimer) clearTimeout(upcomingTimer);
@@ -395,15 +443,18 @@ export function usePrefetchVideoBytes(
           if (!id) return; // 既に対象範囲外
           setSlots((prev) => {
             const idx = prev.findIndex((s) => s.id === id);
-            // 既存スロットがあれば作成時の offset/targetIndex を保持 (ログ drift 防止)。
+            // 既存スロットがあれば作成時の offset/targetIndex/preload を保持 (ログ drift 防止)。
+            // +3 の metadata-only スロットを self-heal で auto に格上げしないため、
+            // 既存スロットの preload は維持する。
             const existing = idx >= 0 ? prev[idx] : null;
             const existingOffset = existing?.offset ?? PREFETCH_START_OFFSET;
             const existingTargetIndex = existing?.targetIndex ?? -1;
+            const existingPreload = existing?.preload ?? policy.preload;
             const next: PrefetchSlot = {
               id,
               slug,
               src: res.mp4_url,
-              preload: policy.preload,
+              preload: existingPreload,
               offset: existingOffset,
               targetIndex: existingTargetIndex,
             };
@@ -448,8 +499,11 @@ export function usePrefetchVideoBytes(
  * ポリシー取得を 1 セッションで 1 度だけにするためのモジュールローカルメモ化。
  * - SSR 時点では window が無いので保守的なデフォルトが返るが、
  *   クライアントマウント後にもう一度評価して上書きする。
+ * - クライアントで初めて評価されたタイミングで vt ログを 1 行出して、運用者が
+ *   「今のセッションは +2 即時 / +3 metadata warming が有効なのか」を確認できるようにする。
  */
 let memoPolicy: ReturnType<typeof getPrefetchPolicy> | null = null;
+let policyLogged = false;
 function getPrefetchPolicyMemo() {
   if (typeof window === "undefined") {
     // SSR は毎回保守的に返す (キャッシュしない)
@@ -457,6 +511,12 @@ function getPrefetchPolicyMemo() {
   }
   if (memoPolicy === null) {
     memoPolicy = getPrefetchPolicy();
+  }
+  if (!policyLogged) {
+    policyLogged = true;
+    vtPrefetchLog(
+      `policy ahead=${memoPolicy.aheadCount} preload=${memoPolicy.preload} immediateUpcoming=${memoPolicy.immediateUpcoming} warmPlusThree=${memoPolicy.warmPlusThree} reason=${memoPolicy.reason}`,
+    );
   }
   return memoPolicy;
 }

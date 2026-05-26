@@ -21,6 +21,8 @@ import {
   getReadiness,
   hasPendingElement,
   hasPromotableElement,
+  inspectEntry,
+  markStaleClaim,
   pinSlug,
   subscribe as subscribeVideoHandoff,
   unpinSlug,
@@ -167,6 +169,21 @@ export default function FeedItem({ item, isActive, isAdjacent = false, isFirst, 
       return false;
     }
     // 該当 entry が registry から消えていた / src 不一致 → 1 度だけ詳細 miss ログを出す。
+    // 加えて、prefetch hook 側 (usePrefetchVideoBytes) の active-transition ログが
+    // 直後に走る前に markStaleClaim を立て、`byte-prefetched=canplay` と
+    // 出ているのに promote 不能だった事実を readiness window が反映できるようにする。
+    // FeedItem の useLayoutEffect → usePrefetchVideoBytes の passive useEffect の
+    // 順序が保証されているため、ここで mark すれば同 commit で消費される。
+    const insp = inspectEntry(item.slug, videoSrc);
+    let staleReason: "no-entry" | "src-mismatch" | "not-canplay";
+    if (!insp.present) {
+      staleReason = "no-entry";
+    } else if (!insp.srcMatches) {
+      staleReason = "src-mismatch";
+    } else {
+      staleReason = "not-canplay";
+    }
+    markStaleClaim(item.slug, staleReason);
     if (pendingLoggedRef.current === item.slug) {
       pendingLoggedRef.current = null;
       unpinSlug(item.slug);
@@ -191,7 +208,7 @@ export default function FeedItem({ item, isActive, isAdjacent = false, isFirst, 
         claimForFeed(item.slug, videoSrc);
         // eslint-disable-next-line no-console
         console.debug(
-          `vt byte-prefetch promote skipped slug=${item.slug} reason=no-entry`,
+          `vt byte-prefetch promote skipped slug=${item.slug} reason=${staleReason}`,
         );
       }
     }

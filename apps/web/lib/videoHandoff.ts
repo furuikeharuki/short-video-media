@@ -540,3 +540,62 @@ export function consumeJustClaimed(slug: string): boolean {
   justClaimed.delete(slug);
   return true;
 }
+
+/**
+ * Active 側 (FeedItem) が「現在 active になった slug を claim しようとしたが
+ * registry エントリが promote 不能だった」ことを記録するための短命シグナル。
+ *
+ * 用途:
+ *   - usePrefetchVideoBytes の active-transition ログは、隠し <video> 側で観測した
+ *     readiness (loadedmetadata / canplay) を slug 単位の ref に永続的に保持して
+ *     いる。一方で registry 側 entry は TTL / cap eviction / claim / src 切替で
+ *     消えうるため、`readinessRef は canplay` だが「実際の claim は no-entry /
+ *     src-mismatch / not-canplay で失敗」というケースが発生する。
+ *   - FeedItem.tryClaim が claim 失敗を検出したタイミングで本関数を呼ぶと、
+ *     直後に走る `byte-prefetch active` / `readiness window` ログがその stale
+ *     状態を検知して `false` に downgrade できる。これにより
+ *     `byte-prefetched=canplay` と表示しながら裏では JSX <video> をゼロから
+ *     立ち上げ直す、観測と実体が乖離した状態を解消する。
+ *
+ * セマンティクス:
+ *   - 1 回 set → 1 回 consume の短命フラグ。consume すると消える。
+ *   - 同 slug に対する複数 reason は最後勝ち。
+ *   - active ログが走るより前の 1 tick で set される想定 (FeedItem の
+ *     useLayoutEffect が usePrefetchVideoBytes の passive useEffect より前に
+ *     走るので順序は保証される)。
+ */
+type StaleClaimReason = "no-entry" | "src-mismatch" | "not-canplay";
+const staleClaims = new Map<string, StaleClaimReason>();
+
+export function markStaleClaim(slug: string, reason: StaleClaimReason): void {
+  staleClaims.set(slug, reason);
+  // claim 不能と判明したのに registry に残骸 entry がいると、
+  //   - 直後の releasePrefetchElement (PrefetchVideoBuffer のアンマウント) で
+  //     pool retain され、TTL いっぱい canplay 表示を偽陽性で出し続ける。
+  //   - 後続の active-transition log も `byte-prefetched=canplay` のまま
+  //     getReadiness で見えてしまう。
+  // active 側は既に JSX <video> でゼロ再生に入る orientation なので、
+  // ここでまとめて破棄して以降のシグナルから外す。pinned (= 別 active が
+  // pending-handoff 中) のときだけは保護する (= 別 slug の claim 中の可能性は
+  // ほぼないが、安全側に倒す)。
+  const entry = registry.get(slug);
+  if (entry && !entry.pinned) {
+    destroyElement(entry.el);
+    registry.delete(slug);
+    vtHandoffLog(
+      `pool evict slug=${slug} reason=stale-claim claim-reason=${reason}`,
+    );
+    notify();
+  }
+}
+
+export function consumeStaleClaim(slug: string): StaleClaimReason | null {
+  const r = staleClaims.get(slug);
+  if (r === undefined) return null;
+  staleClaims.delete(slug);
+  return r;
+}
+
+export function peekStaleClaim(slug: string): StaleClaimReason | null {
+  return staleClaims.get(slug) ?? null;
+}

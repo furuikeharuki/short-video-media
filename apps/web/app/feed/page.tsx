@@ -1,6 +1,15 @@
 import type { Metadata } from "next";
 import FeedClient from "@/app/FeedClient";
 
+// /feed の HTML shell は client 専用ページだが、Next の prerender 対象になると
+// Vercel/ブラウザ側に古い HTML が残り、再デプロイ後も古い `_next/static/chunks/*.js`
+// を参照したままになる (チャンクは content-hash で immutable だが、それを参照する
+// HTML が古いと意味がない)。`?vt=1` などクエリ付きで踏むとキャッシュバイパスされて
+// 最新が降ってくるため「vt 付きだと速い/高画質」という症状になっていた。
+// 常に最新の HTML を返すよう dynamic に固定する。
+export const dynamic = "force-dynamic";
+export const revalidate = 0;
+
 export const metadata: Metadata = {
   title: "ショートフィード",
   description:

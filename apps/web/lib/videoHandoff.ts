@@ -1,6 +1,6 @@
 /**
  * 隠し prefetch <video> 要素を active 表示にそのまま流用する (要素 handoff) ための
- * 軽量レジストリ。
+ * 軽量レジストリ + 短命プール。
  *
  * 背景:
  *   - `PrefetchVideoBuffer` が画面外でメディアバイトを温めても、active 側で
@@ -14,10 +14,17 @@
  *   - <video> は React の reconciler 外で `document.createElement("video")` で
  *     作る。これにより親コンポーネントがアンマウントされても DOM ノードを
  *     物理的に他の親へ append できる。
- *   - 両側 (prefetch / feed) は host <div ref> に対して imperative に
- *     appendChild する。レジストリが element の所有権を仲介する。
- *   - readiness は "metadata" / "canplay" の 2 段階で公開し、feed 側は canplay
- *     にだけ promote する (旧 low/high dual-video swap は復活させない)。
+ *   - レジストリは slug をキーにする。+1 / +2 などの slot/offset には依存しない。
+ *     active 側は「現在表示すべき slug + src」で claim できる。
+ *   - PrefetchVideoBuffer の slot が +1/+2 から外れて unmount されても、要素が
+ *     canplay 済みで TTL/cap 内なら即破棄せずプール側に移管し、後から active
+ *     になる slug が claim できるよう保持する。これにより rapid swipe で
+ *     slot 構成が頻繁に入れ替わっても、canplay 済みのバイトが捨てられない。
+ *   - 解放優先度:
+ *       1) 同 slug の register/evict 要求があれば即破棄。
+ *       2) プール枠が cap を超えるとき、最も古い entry から破棄。
+ *          ただし readiness が低い (metadata 未満) ものを優先して捨てる。
+ *       3) TTL を超えた entry は背景クリーンアップで破棄。
  *   - claim 済みエントリは即座にレジストリから外し、prefetch buffer も slot から
  *     除去させる (usePrefetchVideoBytes が onClaim 経由で自身の slots を更新)。
  *
@@ -34,10 +41,18 @@ interface HandoffEntry {
   src: string;
   el: HTMLVideoElement;
   readiness: HandoffReadiness;
+  /** プールに入った時刻 (registerPrefetchElement または releasePrefetchElement→retain)。 */
+  pooledAt: number;
+  /**
+   * 現在 PrefetchVideoBuffer が所有していれば false。
+   * buffer が unmount したが destroy せずプールに retain しているときは true。
+   */
+  detached: boolean;
 }
 
 type Listener = () => void;
 
+/** 全 entry を slug→entry で持つ。active/pool 区別は entry.detached で表現。 */
 const registry = new Map<string, HandoffEntry>();
 const listeners = new Set<Listener>();
 /**
@@ -45,6 +60,44 @@ const listeners = new Set<Listener>();
  * 一時セット。1 度読み出したら忘れる。
  */
 const justClaimed = new Set<string>();
+
+/**
+ * プール内 (detached=true) で保持してよい最大要素数。
+ * これを超えると古い entry / readiness の低いものから破棄する。
+ * <video> 要素はメモリを使うので 1 桁を維持する。
+ */
+const MAX_POOLED_ELEMENTS = 4;
+/**
+ * プール内 entry を保持する最大時間 (ms)。これを超えると破棄する。
+ * rapid swipe 中に slot が頻繁に入れ替わっても、数秒以内に active へ到達すれば
+ * canplay 済みバイトが流用できるよう、ある程度長めに設定する。
+ */
+const POOL_TTL_MS = 30_000;
+/** cleanup インターバル (ms)。 */
+const POOL_CLEANUP_INTERVAL_MS = 5_000;
+
+let cleanupTimer: ReturnType<typeof setInterval> | null = null;
+
+function ensureCleanupTimer() {
+  if (typeof window === "undefined") return;
+  if (cleanupTimer != null) return;
+  cleanupTimer = setInterval(() => {
+    cleanupExpired();
+  }, POOL_CLEANUP_INTERVAL_MS);
+}
+
+function cleanupExpired() {
+  const now = Date.now();
+  for (const [slug, entry] of registry) {
+    if (!entry.detached) continue;
+    if (now - entry.pooledAt > POOL_TTL_MS) {
+      destroyElement(entry.el);
+      registry.delete(slug);
+      vtHandoffLog(`pool evict slug=${slug} reason=ttl age=${now - entry.pooledAt}ms`);
+    }
+  }
+  notify();
+}
 
 function notify() {
   for (const cb of listeners) {
@@ -63,28 +116,55 @@ function vtHandoffLog(message: string) {
 }
 
 /**
+ * プール容量超過時、古い / 未温まり entry から削減する。
+ */
+function trimPoolIfNeeded() {
+  const detached = Array.from(registry.values()).filter((e) => e.detached);
+  if (detached.length <= MAX_POOLED_ELEMENTS) return;
+  // 削除優先度: readiness=metadata を先に / その中で古いものから。
+  detached.sort((a, b) => {
+    const rankA = a.readiness === "canplay" ? 1 : 0;
+    const rankB = b.readiness === "canplay" ? 1 : 0;
+    if (rankA !== rankB) return rankA - rankB; // metadata(0) を先頭へ
+    return a.pooledAt - b.pooledAt; // 古い順
+  });
+  const toRemove = detached.slice(0, detached.length - MAX_POOLED_ELEMENTS);
+  for (const entry of toRemove) {
+    destroyElement(entry.el);
+    registry.delete(entry.slug);
+    vtHandoffLog(`pool evict slug=${entry.slug} reason=cap readiness=${entry.readiness}`);
+  }
+}
+
+/**
  * prefetch buffer 側から呼ぶ。新規 <video> 要素を作って host に append し、
- * registry へ登録する。同 slug の既存 entry がある場合は古い要素を destroy。
+ * registry へ登録する。同 slug の既存 entry がある場合は src が一致して連結中で
+ * あれば再利用、それ以外は古い要素を destroy。
  */
 export function registerPrefetchElement(args: {
   slug: string;
   src: string;
   preload: "auto" | "metadata" | "none";
 }): HTMLVideoElement {
+  ensureCleanupTimer();
   const { slug, src, preload } = args;
   const existing = registry.get(slug);
   if (existing) {
-    // 同 slug / 同 src / 同 preload で既存要素が DOM 上に生きていれば再利用。
-    // readiness / バッファをそのまま温存して loadedmetadata 再発火を避ける。
-    if (
-      existing.src === src &&
-      existing.el.preload === preload &&
-      existing.el.isConnected
-    ) {
-      vtHandoffLog(`reuse slug=${slug} preload=${preload}`);
+    // 同 src ならば、検出された preload / 接続状態に関係なく要素を再利用して
+    // readiness とバッファをそのまま温存する。プールから戻ってきたケースも含む。
+    if (existing.src === src) {
+      const fromPool = existing.detached;
+      if (existing.el.preload !== preload) {
+        existing.el.preload = preload;
+      }
+      existing.detached = false;
+      existing.pooledAt = Date.now();
+      vtHandoffLog(
+        `reuse slug=${slug} preload=${preload} readiness=${existing.readiness} from=${fromPool ? "pool" : "active"}`,
+      );
       return existing.el;
     }
-    // src / preload 変更 (force-resolve リトライなど) → 古いノードを破棄
+    // src が変わった (force-resolve リトライなど) → 古いノードを破棄
     destroyElement(existing.el);
     registry.delete(slug);
   }
@@ -110,7 +190,14 @@ export function registerPrefetchElement(args: {
   } catch {
     /* ignore */
   }
-  registry.set(slug, { slug, src, el, readiness: "metadata" });
+  registry.set(slug, {
+    slug,
+    src,
+    el,
+    readiness: "metadata",
+    pooledAt: Date.now(),
+    detached: false,
+  });
   vtHandoffLog(`register slug=${slug} preload=${preload}`);
   notify();
   return el;
@@ -146,34 +233,79 @@ export function hasPromotableElement(slug: string, src: string): boolean {
  * 戻り値の element は呼出側が host にて appendChild する。
  *
  * promotion 不能な場合 (slug 不一致 / canplay 未到達 / src 不一致) は null。
+ * miss 時の理由は vt ログに出る。
  */
 export function claimForFeed(slug: string, src: string): HTMLVideoElement | null {
   const entry = registry.get(slug);
-  if (!entry) return null;
-  if (entry.src !== src) return null;
-  if (entry.readiness !== "canplay") return null;
+  if (!entry) {
+    vtHandoffLog(`claim miss slug=${slug} reason=not-found`);
+    return null;
+  }
+  if (entry.src !== src) {
+    vtHandoffLog(
+      `claim miss slug=${slug} reason=src-mismatch expected=${truncate(src)} have=${truncate(entry.src)}`,
+    );
+    return null;
+  }
+  if (entry.readiness !== "canplay") {
+    vtHandoffLog(`claim miss slug=${slug} reason=not-canplay readiness=${entry.readiness}`);
+    return null;
+  }
   registry.delete(slug);
   justClaimed.add(slug);
-  vtHandoffLog(`claim slug=${slug} readiness=${entry.readiness}`);
+  vtHandoffLog(
+    `claim hit slug=${slug} readiness=${entry.readiness} from=${entry.detached ? "pool" : "active"}`,
+  );
   notify();
   return entry.el;
 }
 
+function truncate(s: string): string {
+  if (!s) return "";
+  return s.length > 40 ? `${s.slice(0, 24)}…${s.slice(-12)}` : s;
+}
+
 /**
- * prefetch buffer がアンマウントするときに呼ぶ。claim 済みでなければ要素を破棄。
- * claim 済みなら no-op (要素は feed が所有している)。
+ * prefetch buffer がアンマウントするときに呼ぶ。
+ *
+ * - claim 済み (registry から既に消えている) → no-op。
+ * - readiness=canplay の場合 → プールに retain (detach) し、TTL/cap で後段破棄。
+ * - readiness=metadata 未満 → 即破棄 (バイトを十分温められていない / 帯域捨てたほうが良い)。
+ *
+ * このフックにより、+1/+2 の slot 構成が rapid swipe で頻繁に変わっても、
+ * canplay 済みの隠し <video> はすぐ消されない。
  */
 export function releasePrefetchElement(slug: string, el: HTMLVideoElement | null) {
   if (!el) return;
   const entry = registry.get(slug);
-  if (entry && entry.el === el) {
-    destroyElement(el);
-    registry.delete(slug);
-    vtHandoffLog(`release slug=${slug}`);
+  if (!entry || entry.el !== el) {
+    // registry にいない = 既に feed に claim されている。何もしない。
+    return;
+  }
+  if (entry.readiness === "canplay") {
+    // プールに retain。元の host から外し、document.body にぶら下げる。
+    // (host <div> がアンマウント途中で消えるため、ブラウザに保持してもらうために
+    // 画面外 <body> 直下に置く。画面外座標と opacity=0 のまま帯域も殆ど食わない。)
+    if (entry.el.parentNode) {
+      entry.el.parentNode.removeChild(entry.el);
+    }
+    try {
+      document.body.appendChild(entry.el);
+    } catch {
+      /* ignore (body 未準備など) */
+    }
+    entry.detached = true;
+    entry.pooledAt = Date.now();
+    vtHandoffLog(`pool retain slug=${slug} readiness=${entry.readiness}`);
+    trimPoolIfNeeded();
     notify();
     return;
   }
-  // registry にいない = 既に feed に claim されている。何もしない。
+  // 未温まり (metadata 以下) は破棄
+  destroyElement(el);
+  registry.delete(slug);
+  vtHandoffLog(`release slug=${slug} readiness=${entry.readiness}`);
+  notify();
 }
 
 /**

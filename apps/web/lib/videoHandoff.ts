@@ -17,14 +17,16 @@
  *   - レジストリは slug をキーにする。+1 / +2 などの slot/offset には依存しない。
  *     active 側は「現在表示すべき slug + src」で claim できる。
  *   - PrefetchVideoBuffer の slot が +1/+2 から外れて unmount されても、要素が
- *     canplay 済みで TTL/cap 内なら即破棄せずプール側に移管し、後から active
- *     になる slug が claim できるよう保持する。これにより rapid swipe で
- *     slot 構成が頻繁に入れ替わっても、canplay 済みのバイトが捨てられない。
+ *     canplay 済みなら長め TTL、metadata/loading 段階でも短命 TTL でプールへ
+ *     移管する。これにより rapid swipe で slot 構成が頻繁に入れ替わっても、
+ *     in-progress な隠し要素が即座に捨てられず、その後 active になった slug が
+ *     canplay 到達を待って promote できる。
  *   - 解放優先度:
  *       1) 同 slug の register/evict 要求があれば即破棄。
- *       2) プール枠が cap を超えるとき、最も古い entry から破棄。
- *          ただし readiness が低い (metadata 未満) ものを優先して捨てる。
- *       3) TTL を超えた entry は背景クリーンアップで破棄。
+ *       2) プール枠が cap を超えるとき、readiness が低い (metadata 未満) ものを
+ *          最古順に破棄。canplay 済みは最後まで残す。
+ *       3) TTL を超えた entry は背景クリーンアップで破棄。canplay は長め TTL、
+ *          metadata 以下は短命 TTL。
  *   - claim 済みエントリは即座にレジストリから外し、prefetch buffer も slot から
  *     除去させる (usePrefetchVideoBytes が onClaim 経由で自身の slots を更新)。
  *
@@ -62,19 +64,32 @@ const listeners = new Set<Listener>();
 const justClaimed = new Set<string>();
 
 /**
- * プール内 (detached=true) で保持してよい最大要素数。
- * これを超えると古い entry / readiness の低いものから破棄する。
+ * プール内 (detached=true) で保持してよい最大要素数 (合計)。
+ * これを超えると readiness の低いものから古い順に破棄する。
  * <video> 要素はメモリを使うので 1 桁を維持する。
  */
 const MAX_POOLED_ELEMENTS = 4;
 /**
- * プール内 entry を保持する最大時間 (ms)。これを超えると破棄する。
+ * プール内に保持してよい non-canplay (metadata/loading) entry の最大数。
+ * canplay 未到達の隠し要素は復活確率が低めかつ帯域消費が続くので、合計 cap より
+ * 厳しめに絞る。これを超えると新しい non-canplay でも古い non-canplay を捨てる。
+ */
+const MAX_POOLED_NON_CANPLAY = 2;
+/**
+ * canplay 済み entry を保持する最大時間 (ms)。
  * rapid swipe 中に slot が頻繁に入れ替わっても、数秒以内に active へ到達すれば
  * canplay 済みバイトが流用できるよう、ある程度長めに設定する。
  */
-const POOL_TTL_MS = 30_000;
+const POOL_TTL_CANPLAY_MS = 30_000;
+/**
+ * canplay 未到達 (metadata/loading) entry を保持する最大時間 (ms)。
+ * 高速スワイプで slot 構成が頻繁に動くケースでは、隠し要素が canplay へ到達する
+ * 前に slot から外れることがある。short TTL の間だけプールに残し、その slug が
+ * すぐ active になればそのまま canplay 到達まで subscribe して promote できる。
+ */
+const POOL_TTL_PENDING_MS = 10_000;
 /** cleanup インターバル (ms)。 */
-const POOL_CLEANUP_INTERVAL_MS = 5_000;
+const POOL_CLEANUP_INTERVAL_MS = 2_500;
 
 let cleanupTimer: ReturnType<typeof setInterval> | null = null;
 
@@ -90,10 +105,14 @@ function cleanupExpired() {
   const now = Date.now();
   for (const [slug, entry] of registry) {
     if (!entry.detached) continue;
-    if (now - entry.pooledAt > POOL_TTL_MS) {
+    const ttl =
+      entry.readiness === "canplay" ? POOL_TTL_CANPLAY_MS : POOL_TTL_PENDING_MS;
+    if (now - entry.pooledAt > ttl) {
       destroyElement(entry.el);
       registry.delete(slug);
-      vtHandoffLog(`pool evict slug=${slug} reason=ttl age=${now - entry.pooledAt}ms`);
+      vtHandoffLog(
+        `pool evict slug=${slug} reason=ttl readiness=${entry.readiness} age=${now - entry.pooledAt}ms`,
+      );
     }
   }
   notify();
@@ -116,19 +135,37 @@ function vtHandoffLog(message: string) {
 }
 
 /**
- * プール容量超過時、古い / 未温まり entry から削減する。
+ * プール容量超過時、未温まり entry / 古いものから削減する。
+ *
+ * - non-canplay (metadata/loading) は MAX_POOLED_NON_CANPLAY を超えたら古い順に破棄。
+ * - 合計が MAX_POOLED_ELEMENTS を超えたら、readiness=metadata 優先 → 古い順に破棄
+ *   (canplay 済みは最後まで残す)。
  */
 function trimPoolIfNeeded() {
   const detached = Array.from(registry.values()).filter((e) => e.detached);
-  if (detached.length <= MAX_POOLED_ELEMENTS) return;
+  const nonCanplay = detached
+    .filter((e) => e.readiness !== "canplay")
+    .sort((a, b) => a.pooledAt - b.pooledAt);
+  if (nonCanplay.length > MAX_POOLED_NON_CANPLAY) {
+    const overflow = nonCanplay.slice(0, nonCanplay.length - MAX_POOLED_NON_CANPLAY);
+    for (const entry of overflow) {
+      destroyElement(entry.el);
+      registry.delete(entry.slug);
+      vtHandoffLog(
+        `pool evict slug=${entry.slug} reason=cap-pending readiness=${entry.readiness}`,
+      );
+    }
+  }
+  const remaining = Array.from(registry.values()).filter((e) => e.detached);
+  if (remaining.length <= MAX_POOLED_ELEMENTS) return;
   // 削除優先度: readiness=metadata を先に / その中で古いものから。
-  detached.sort((a, b) => {
+  remaining.sort((a, b) => {
     const rankA = a.readiness === "canplay" ? 1 : 0;
     const rankB = b.readiness === "canplay" ? 1 : 0;
     if (rankA !== rankB) return rankA - rankB; // metadata(0) を先頭へ
     return a.pooledAt - b.pooledAt; // 古い順
   });
-  const toRemove = detached.slice(0, detached.length - MAX_POOLED_ELEMENTS);
+  const toRemove = remaining.slice(0, remaining.length - MAX_POOLED_ELEMENTS);
   for (const entry of toRemove) {
     destroyElement(entry.el);
     registry.delete(entry.slug);
@@ -228,6 +265,18 @@ export function hasPromotableElement(slug: string, src: string): boolean {
 }
 
 /**
+ * 「同 slug の隠し要素が登録済みだが canplay 未到達」なペンディング状態か。
+ * active 側がこの状態を検出したら、即 promote せずに subscribe で canplay 到達を
+ * 待つ。slug 不一致 / src 不一致 / 未登録は false。
+ */
+export function hasPendingElement(slug: string, src: string): boolean {
+  const entry = registry.get(slug);
+  if (!entry) return false;
+  if (entry.src !== src) return false;
+  return entry.readiness !== "canplay";
+}
+
+/**
  * feed 側から呼ぶ。
  * 該当エントリを registry から取り外し、所有権を呼出側に移す。
  * 戻り値の element は呼出側が host にて appendChild する。
@@ -269,11 +318,13 @@ function truncate(s: string): string {
  * prefetch buffer がアンマウントするときに呼ぶ。
  *
  * - claim 済み (registry から既に消えている) → no-op。
- * - readiness=canplay の場合 → プールに retain (detach) し、TTL/cap で後段破棄。
- * - readiness=metadata 未満 → 即破棄 (バイトを十分温められていない / 帯域捨てたほうが良い)。
+ * - readiness=canplay の場合 → プールに retain (detach) し、長め TTL/cap で後段破棄。
+ * - readiness=metadata / loading → プールに retain。短命 TTL + 専用 cap でキープし、
+ *   後から active に到達した slug が canplay 到達を待って promote できるよう残す。
  *
  * このフックにより、+1/+2 の slot 構成が rapid swipe で頻繁に変わっても、
- * canplay 済みの隠し <video> はすぐ消されない。
+ * 隠し <video> はすぐ消されず、in-progress なバイト取得を活かして active へ
+ * pending-handoff できる。
  */
 export function releasePrefetchElement(slug: string, el: HTMLVideoElement | null) {
   if (!el) return;
@@ -282,29 +333,21 @@ export function releasePrefetchElement(slug: string, el: HTMLVideoElement | null
     // registry にいない = 既に feed に claim されている。何もしない。
     return;
   }
-  if (entry.readiness === "canplay") {
-    // プールに retain。元の host から外し、document.body にぶら下げる。
-    // (host <div> がアンマウント途中で消えるため、ブラウザに保持してもらうために
-    // 画面外 <body> 直下に置く。画面外座標と opacity=0 のまま帯域も殆ど食わない。)
-    if (entry.el.parentNode) {
-      entry.el.parentNode.removeChild(entry.el);
-    }
-    try {
-      document.body.appendChild(entry.el);
-    } catch {
-      /* ignore (body 未準備など) */
-    }
-    entry.detached = true;
-    entry.pooledAt = Date.now();
-    vtHandoffLog(`pool retain slug=${slug} readiness=${entry.readiness}`);
-    trimPoolIfNeeded();
-    notify();
-    return;
+  // プールに retain。元の host から外し、document.body にぶら下げる。
+  // (host <div> がアンマウント途中で消えるため、ブラウザに保持してもらうために
+  // 画面外 <body> 直下に置く。画面外座標と opacity=0 のまま帯域も殆ど食わない。)
+  if (entry.el.parentNode) {
+    entry.el.parentNode.removeChild(entry.el);
   }
-  // 未温まり (metadata 以下) は破棄
-  destroyElement(el);
-  registry.delete(slug);
-  vtHandoffLog(`release slug=${slug} readiness=${entry.readiness}`);
+  try {
+    document.body.appendChild(entry.el);
+  } catch {
+    /* ignore (body 未準備など) */
+  }
+  entry.detached = true;
+  entry.pooledAt = Date.now();
+  vtHandoffLog(`pool retain slug=${slug} readiness=${entry.readiness}`);
+  trimPoolIfNeeded();
   notify();
 }
 

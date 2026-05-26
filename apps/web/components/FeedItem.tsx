@@ -19,6 +19,7 @@ import MovieDetailModal from "./movie-detail/MovieDetailModal";
 import {
   claimForFeed,
   getReadiness,
+  hasPendingElement,
   hasPromotableElement,
   subscribe as subscribeVideoHandoff,
 } from "@/lib/videoHandoff";
@@ -69,44 +70,110 @@ export default function FeedItem({ item, isActive, isAdjacent = false, isFirst, 
   const [promotedElement, setPromotedElement] =
     useState<HTMLVideoElement | null>(null);
   const promotedSlugRef = useRef<string | null>(null);
+  // pending-handoff の状態追跡。
+  //  - pendingLoggedRef: `handoff claim pending` ログを slug ごとに 1 回だけ出すため。
+  //  - pendingAbandonedSlug (state): pending を諦めた slug。state にすることで
+  //    canPromote 再評価による host→JSX <video> フォールバック描画をトリガーする。
+  //  - activeReadyRef: 通常 active <video> が canplay/loadeddata 済みかどうか。
+  //     true になった後は swap せず pending を `active-playing` で諦める。
+  const pendingLoggedRef = useRef<string | null>(null);
+  const [pendingAbandonedSlug, setPendingAbandonedSlug] =
+    useState<string | null>(null);
+  const activeReadyRef = useRef(false);
   // active へ移行した時点で promotable な隠し要素があれば即時 claim する。
   // hasPromotableElement は registry を sync に読むので render フェーズで判定でき、
   // expectingPromotion=true を渡せば JSX <video> の一時マウントを完全に回避できる。
+  // canplay 未到達でも pending entry があれば JSX <video> を作らず host だけを
+  // 描画し、subscribe で canplay 到達を待つ (pending promote)。
   const canPromote =
-    isActive && !!videoSrc && hasPromotableElement(item.slug, videoSrc);
+    isActive &&
+    !!videoSrc &&
+    pendingAbandonedSlug !== item.slug &&
+    (hasPromotableElement(item.slug, videoSrc) ||
+      hasPendingElement(item.slug, videoSrc));
   const tryClaim = useCallback(() => {
     if (!isActive) return false;
     if (!videoSrc) return false;
     if (promotedSlugRef.current === item.slug) return true;
-    // 事前に canplay 済み (= promotable) であることを確かめてから claim する。
-    // canplay 未到達のうちから subscribe で何度も呼ばれても、ここで早期 return
-    // するため `claim miss reason=not-canplay` のログを連打しない。
-    // src 不一致 / slug 未登録などの "本当の miss" だけは claimForFeed 内で
-    // vt ログとして残るように、別経路で 1 回だけ詳細 miss を引き出す経路は持つ
-    // (現状は不要 — subscribe で待ち、canplay 確定後にだけ進む)。
-    if (!hasPromotableElement(item.slug, videoSrc)) return false;
-    const readiness = getReadiness(item.slug) ?? "canplay";
-    // claimForFeed は内部で `handoff claim hit/miss(reason)` を vt ログに出す。
-    const el = claimForFeed(item.slug, videoSrc);
-    if (!el) return false;
-    promotedSlugRef.current = item.slug;
-    setPromotedElement(el);
-    if (isVideoTimingEnabled()) {
-      // eslint-disable-next-line no-console
-      console.debug(
-        `vt byte-prefetch promote slug=${item.slug} readiness=${readiness}`,
-      );
+    if (pendingAbandonedSlug === item.slug) return false;
+    // canplay 済み → 即 claim。
+    if (hasPromotableElement(item.slug, videoSrc)) {
+      const readiness = getReadiness(item.slug) ?? "canplay";
+      const wasPending = pendingLoggedRef.current === item.slug;
+      const el = claimForFeed(item.slug, videoSrc);
+      if (!el) return false;
+      promotedSlugRef.current = item.slug;
+      pendingLoggedRef.current = null;
+      setPromotedElement(el);
+      if (isVideoTimingEnabled()) {
+        // eslint-disable-next-line no-console
+        console.debug(
+          `vt byte-prefetch promote slug=${item.slug} readiness=${readiness}${
+            wasPending ? " pending=true" : ""
+          }`,
+        );
+        if (wasPending) {
+          // eslint-disable-next-line no-console
+          console.debug(
+            `vt handoff pending promote slug=${item.slug} readiness=${readiness}`,
+          );
+        }
+      }
+      return true;
     }
-    return true;
-  }, [isActive, videoSrc, item.slug]);
+    // canplay 未到達でも pending entry があれば、subscribe で待つ。
+    if (hasPendingElement(item.slug, videoSrc)) {
+      // 通常 active <video> が既に再生開始可能なら swap しない方が安全。
+      // ここで abandon して subscribe をやめる。
+      if (activeReadyRef.current) {
+        if (isVideoTimingEnabled()) {
+          const readiness = getReadiness(item.slug) ?? "metadata";
+          // eslint-disable-next-line no-console
+          console.debug(
+            `vt handoff pending abandon slug=${item.slug} reason=active-playing readiness=${readiness}`,
+          );
+        }
+        pendingLoggedRef.current = null;
+        setPendingAbandonedSlug(item.slug);
+        return false;
+      }
+      if (
+        isVideoTimingEnabled() &&
+        pendingLoggedRef.current !== item.slug
+      ) {
+        const readiness = getReadiness(item.slug) ?? "metadata";
+        // eslint-disable-next-line no-console
+        console.debug(
+          `vt handoff claim pending slug=${item.slug} readiness=${readiness}`,
+        );
+      }
+      pendingLoggedRef.current = item.slug;
+      return false;
+    }
+    // 該当 entry が registry から消えていた / src 不一致 → 1 度だけ詳細 miss ログを出す。
+    if (pendingLoggedRef.current === item.slug) {
+      pendingLoggedRef.current = null;
+      // claimForFeed が `claim miss reason=not-found|src-mismatch` を出す。
+      claimForFeed(item.slug, videoSrc);
+      if (isVideoTimingEnabled()) {
+        // eslint-disable-next-line no-console
+        console.debug(
+          `vt handoff pending abandon slug=${item.slug} reason=not-found`,
+        );
+      }
+      setPendingAbandonedSlug(item.slug);
+    }
+    return false;
+  }, [isActive, videoSrc, item.slug, pendingAbandonedSlug]);
   // active 化 / videoSrc 解決のタイミングでまず claim を試す。
   // useLayoutEffect は passive useEffect より前に走るので、隣接 PrefetchVideoBuffer
   // の cleanup (releasePrefetchElement) より先に claim を取れる。
   useLayoutEffect(() => {
     tryClaim();
   }, [tryClaim]);
-  // canplay 到達が active 化より遅れる場合 (resolve 中など) に備え、registry の
-  // 状態変化を購読して claim を再試行する。promote 済み or 非 active なら no-op。
+  // canplay 到達が active 化より遅れる場合 (resolve 中 / pending 中) に備え、
+  // registry の状態変化を購読して claim を再試行する。
+  // promote 済み or 非 active なら no-op。
   useEffect(() => {
     if (!isActive) return;
     if (promotedSlugRef.current === item.slug) return;
@@ -116,12 +183,25 @@ export default function FeedItem({ item, isActive, isAdjacent = false, isFirst, 
     });
     return unsub;
   }, [isActive, videoSrc, item.slug, tryClaim]);
-  // slug 変更で promoted を捨てる (別作品にスワイプして戻ってきた等)。
+  // slug 変更で promoted / pending 状態を捨てる (別作品にスワイプして戻ってきた等)。
   useEffect(() => {
     if (promotedSlugRef.current && promotedSlugRef.current !== item.slug) {
       promotedSlugRef.current = null;
       setPromotedElement(null);
     }
+    if (
+      pendingLoggedRef.current &&
+      pendingLoggedRef.current !== item.slug &&
+      isVideoTimingEnabled()
+    ) {
+      // eslint-disable-next-line no-console
+      console.debug(
+        `vt handoff pending abandon slug=${pendingLoggedRef.current} reason=slug-changed`,
+      );
+    }
+    pendingLoggedRef.current = null;
+    setPendingAbandonedSlug((prev) => (prev === item.slug ? prev : null));
+    activeReadyRef.current = false;
   }, [item.slug]);
 
   const isProActress = isProActressMovie(item.genres);
@@ -214,6 +294,7 @@ export default function FeedItem({ item, isActive, isAdjacent = false, isFirst, 
   const handleLoadedData = useCallback(() => {
     videoSettledRef.current = true;
     clearHardTimeout();
+    activeReadyRef.current = true;
     setVideoReady(true);
     setVideoReadyState(true);
     setSpinnerVisible(false);
@@ -223,6 +304,7 @@ export default function FeedItem({ item, isActive, isAdjacent = false, isFirst, 
   const handleCanPlay = useCallback(() => {
     videoSettledRef.current = true;
     clearHardTimeout();
+    activeReadyRef.current = true;
     setVideoReady(true);
     setVideoReadyState(true);
     setSpinnerVisible(false);
@@ -264,6 +346,7 @@ export default function FeedItem({ item, isActive, isAdjacent = false, isFirst, 
 
   useEffect(() => {
     setVideoReadyState(false);
+    activeReadyRef.current = false;
   }, [item.slug, videoSrc]);
 
   // 開発用: video の lifecycle 時刻を計測してログ出力する。

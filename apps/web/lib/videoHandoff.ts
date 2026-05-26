@@ -323,6 +323,31 @@ export function getReadiness(slug: string): HandoffReadiness | null {
   return entry ? entry.readiness : null;
 }
 
+/**
+ * 隠し prefetch entry の現状を診断するヘルパ。
+ * active 側が「自分の videoSrc に対して promote 可能か」を 1 度のレジストリ
+ * 参照で判定し、UI 用の readiness 表示に「stale (entry あるが src 不一致)」
+ * のような状態も乗せられるようにする。
+ *
+ * - present=false:        registry に entry が無い (= 未登録 / 既に claim 済み / evicted)。
+ * - present=true, srcMatches=true: 正規ヒット。readiness は entry.readiness。
+ * - present=true, srcMatches=false: slug は一致するが src が違う (force re-resolve 後など)。
+ *                                    promote 不能。readiness は参考値。
+ */
+export function inspectEntry(slug: string, src: string | null): {
+  present: boolean;
+  srcMatches: boolean;
+  readiness: HandoffReadiness | null;
+} {
+  const entry = registry.get(slug);
+  if (!entry) return { present: false, srcMatches: false, readiness: null };
+  return {
+    present: true,
+    srcMatches: src != null && entry.src === src,
+    readiness: entry.readiness,
+  };
+}
+
 export function hasPromotableElement(slug: string, src: string): boolean {
   const entry = registry.get(slug);
   if (!entry) return false;

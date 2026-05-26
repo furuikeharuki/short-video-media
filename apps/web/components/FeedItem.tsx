@@ -83,6 +83,10 @@ export default function FeedItem({ item, isActive, isAdjacent = false, isFirst, 
   const [pendingAbandonedSlug, setPendingAbandonedSlug] =
     useState<string | null>(null);
   const activeReadyRef = useRef(false);
+  // `byte-prefetch promote skipped reason=...` を slug ごとに 1 度だけ出すための ref。
+  // 同 effect サイクルで複数回 tryClaim が走っても多重ログを避ける。slug が
+  // 変わったら下の slug-change effect でクリアする。
+  const claimMissLoggedRef = useRef<string | null>(null);
   // active へ移行した時点で promotable な隠し要素があれば即時 claim する。
   // hasPromotableElement は registry を sync に読むので render フェーズで判定でき、
   // expectingPromotion=true を渡せば JSX <video> の一時マウントを完全に回避できる。
@@ -175,6 +179,21 @@ export default function FeedItem({ item, isActive, isAdjacent = false, isFirst, 
         );
       }
       setPendingAbandonedSlug(item.slug);
+    } else if (claimMissLoggedRef.current !== item.slug) {
+      // pending を経由しなかったケース (例: active 化の瞬間に既に entry が evict
+      // 済み / src 不一致) も 1 度だけ詳細ログを残す。これが無いと「prefetch hook
+      // 側は canplay と覚えているのに claim path は無言で諦めて JSX <video> を
+      // ゼロから立ち上げる」状態を後追いできない。
+      claimMissLoggedRef.current = item.slug;
+      if (isVideoTimingEnabled()) {
+        // claimForFeed の内側で `claim miss reason=...` が出るので、その理由が
+        // not-found / src-mismatch / not-canplay のどれかに分かる。
+        claimForFeed(item.slug, videoSrc);
+        // eslint-disable-next-line no-console
+        console.debug(
+          `vt byte-prefetch promote skipped slug=${item.slug} reason=no-entry`,
+        );
+      }
     }
     return false;
   }, [isActive, videoSrc, item.slug, pendingAbandonedSlug]);
@@ -216,6 +235,9 @@ export default function FeedItem({ item, isActive, isAdjacent = false, isFirst, 
       }
     }
     pendingLoggedRef.current = null;
+    if (claimMissLoggedRef.current && claimMissLoggedRef.current !== item.slug) {
+      claimMissLoggedRef.current = null;
+    }
     setPendingAbandonedSlug((prev) => (prev === item.slug ? prev : null));
     activeReadyRef.current = false;
   }, [item.slug]);

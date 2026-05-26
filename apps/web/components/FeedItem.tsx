@@ -25,6 +25,7 @@ import {
   subscribe as subscribeVideoHandoff,
   unpinSlug,
 } from "@/lib/videoHandoff";
+import { signalAdsReady } from "@/components/ads/adReadyGate";
 
 interface Props {
   item: MovieCard;
@@ -364,6 +365,11 @@ export default function FeedItem({ item, isActive, isAdjacent = false, isFirst, 
     setVideoReadyState(true);
     setSpinnerVisible(false);
     setShimmerVisible(false);
+    // 最初の active 動画が canplay に達したら ad-provider.js のロードを解禁する。
+    // signalAdsReady は idempotent なので 2 回目以降の呼び出しは何もしない。
+    // (active な FeedItem 以外でも canplay は発火し得るが、その場合も実害は無く、
+    //  むしろ早めに ready させた方が広告表示までの体感が良いので gating しない。)
+    signalAdsReady();
   }, [setVideoReady, setSpinnerVisible, setShimmerVisible, clearHardTimeout, abandonPendingIfActiveReady]);
 
   const handleSeeked = useCallback(() => {

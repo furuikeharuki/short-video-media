@@ -16,7 +16,7 @@
 export type PrefetchPolicy = {
   /**
    * 中央スライドの後ろに何枚先まで bytes prefetch するか。
-   * 0 = 完全に止める / 1 = "次" のみ / 2 = "次" と "次の次"。
+   * 0 = 完全に止める / 1 = "次" のみ / 2 = "次" と "次の次" / 3 = +1/+2/+3。
    */
   aheadCount: number;
   /**
@@ -25,6 +25,20 @@ export type PrefetchPolicy = {
    * - Chrome は "auto" で先頭バッファまで取得
    */
   preload: "auto" | "metadata" | "none";
+  /**
+   * +1 だけでなく +2 まで「debounce 無しで即時 fire」するか。
+   * Chromium+4G/wifi など帯域に余裕がある環境では true。Safari / 3G では false。
+   *
+   * これが true の slot は usePrefetchVideoBytes が effect 内で同期的に
+   * resolveMp4Url をキックする (UPCOMING_PREFETCH_DEBOUNCE_MS を待たない)。
+   */
+  immediateUpcoming: boolean;
+  /**
+   * +3 を preload="metadata" だけで温めるか (バイト本体は取らない)。
+   * Chromium+4G/wifi で true。byte 帯域を奪わずに「次の次の次」の resolver 解決と
+   * loadedmetadata までを前倒しできるので、3 連続 rapid swipe の貫通力が上がる。
+   */
+  warmPlusThree: boolean;
   /** デバッグ用: 判定根拠の文字列。本番には出さない。 */
   reason: string;
 };
@@ -61,7 +75,13 @@ function isSafariLike(ua: string): boolean {
  */
 export function getPrefetchPolicy(): PrefetchPolicy {
   if (typeof window === "undefined" || typeof navigator === "undefined") {
-    return { aheadCount: 1, preload: "metadata", reason: "ssr" };
+    return {
+      aheadCount: 1,
+      preload: "metadata",
+      immediateUpcoming: false,
+      warmPlusThree: false,
+      reason: "ssr",
+    };
   }
 
   const nav = navigator as NavigatorWithConnection;
@@ -70,12 +90,24 @@ export function getPrefetchPolicy(): PrefetchPolicy {
 
   // Save-Data ヘッダが ON → 全てやめる
   if (connection?.saveData === true) {
-    return { aheadCount: 0, preload: "none", reason: "save-data" };
+    return {
+      aheadCount: 0,
+      preload: "none",
+      immediateUpcoming: false,
+      warmPlusThree: false,
+      reason: "save-data",
+    };
   }
 
   const et = connection?.effectiveType;
   if (et === "2g" || et === "slow-2g") {
-    return { aheadCount: 0, preload: "none", reason: `effective-type=${et}` };
+    return {
+      aheadCount: 0,
+      preload: "none",
+      immediateUpcoming: false,
+      warmPlusThree: false,
+      reason: `effective-type=${et}`,
+    };
   }
 
   const safari = isSafariLike(navigator.userAgent || "");
@@ -83,18 +115,45 @@ export function getPrefetchPolicy(): PrefetchPolicy {
   if (et === "3g") {
     // 3G では Chrome でも +1 のみ。Safari は metadata で更に絞る。
     return safari
-      ? { aheadCount: 1, preload: "metadata", reason: "3g+safari" }
-      : { aheadCount: 1, preload: "auto", reason: "3g" };
+      ? {
+          aheadCount: 1,
+          preload: "metadata",
+          immediateUpcoming: false,
+          warmPlusThree: false,
+          reason: "3g+safari",
+        }
+      : {
+          aheadCount: 1,
+          preload: "auto",
+          immediateUpcoming: false,
+          warmPlusThree: false,
+          reason: "3g",
+        };
   }
 
   if (safari) {
     // 4G / wifi / 未検出 でも Safari は +1 だけに留め、preload も metadata。
     // モバイル Safari の同時接続上限を中央 + 隣接 <video> に温存する。
-    return { aheadCount: 1, preload: "metadata", reason: "safari" };
+    return {
+      aheadCount: 1,
+      preload: "metadata",
+      immediateUpcoming: false,
+      warmPlusThree: false,
+      reason: "safari",
+    };
   }
 
-  // Chrome / Chromium / Edge (Chromium): +1 と +2 を bytes 先読み。
-  return { aheadCount: 2, preload: "auto", reason: "chromium" };
+  // Chrome / Chromium / Edge (Chromium):
+  //   - +1 / +2 を bytes 先読み (immediateUpcoming=true で +2 も debounce なし)
+  //   - +3 を preload="metadata" だけで温めて resolver + handshake + container を前倒し
+  //     (bytes は取らないので帯域は中央 <video> に残す)
+  return {
+    aheadCount: 2,
+    preload: "auto",
+    immediateUpcoming: true,
+    warmPlusThree: true,
+    reason: "chromium",
+  };
 }
 
 /**

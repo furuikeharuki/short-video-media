@@ -370,11 +370,13 @@ const navStyle = `
       一瞬で黒に置き換わって色味がフラッシュする (= 「ナビが点滅する」体感)。
       solid #000 + backdrop-filter:none に切り替えて、オーバーレイの出現/消失と
       ナビ背景がぴたっと同期するようにする。
-    - シークバーレール (top:-14px でナビの外に飛び出して描画される 20px ぶんの
-      ヒット領域 + 3px の白いレール) は、オーバーレイ (z:150) より上の階層に
-      乗ってしまうため、黒オーバーレイの上に白いラインが浮いて見えて
-      「ナビが急に高くなった/低くなった」ように錯覚させる。
-      pointer-events: none で当たり判定も殺し、display:none で完全に消す。
+    - シークバー (top:-14px でナビの外に飛び出して描画される 3px の白いレール) は、
+      /feed 表示中はずっと出ている要素。タップ直後にこれを display:none で消すと、
+      その瞬間ナビの「視覚的な高さ」が 14px だけ縮んで見え、ユーザーには
+      「ナビが一瞬チラついた」と知覚される (= 旧 #248 で混入した症状)。
+      遷移オーバーレイ中もシークバーは見た目を保ったまま残し、stopFeedPlaybackImmediately
+      で video を止めて video-progress が来なくなることで自動的に値が凍結される。
+      タップ吸い込みだけ pointer-events:none で殺して連打誤動作だけ防ぐ。
     高さや bottom 位置自体は変えないので、bfcache 復帰時のレイアウトも壊れない。
   */
   html[data-nav-loading="1"] .bottom-nav {
@@ -383,7 +385,7 @@ const navStyle = `
     -webkit-backdrop-filter: none;
   }
   html[data-nav-loading="1"] .seekbar-track {
-    display: none;
+    pointer-events: none;
   }
 
   .seekbar-track {

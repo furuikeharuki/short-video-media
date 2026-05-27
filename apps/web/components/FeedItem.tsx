@@ -58,9 +58,10 @@ export default function FeedItem({ item, isActive, isAdjacent = false, isFirst, 
 
   // 表示する動画 URL の解決。API は high_mp4_url / low_mp4_url を返し得るが、
   // 単一 <video> 戦略では `high_mp4_url || mp4_url` のみを使う。
-  const { videoSrc, exhausted, handleError } = useResolvedVideoSrc({
+  const { videoSrc, exhausted, handleError, forceResolveEpoch } = useResolvedVideoSrc({
     slug: item.slug,
     enabled: isActive || isAdjacent,
+    isActive,
   });
 
   // prefetch buffer から canplay 済み要素を引き取れたら、新規 <video> を作らずに
@@ -345,6 +346,7 @@ export default function FeedItem({ item, isActive, isAdjacent = false, isFirst, 
     handleMouseUp,
     handleMouseLeave,
     handlePcClick,
+    recoverActiveAfterForceResolve,
   } = useFeedPlayback({
     slug: item.slug,
     title: item.title,
@@ -513,6 +515,34 @@ export default function FeedItem({ item, isActive, isAdjacent = false, isFirst, 
     setVideoReadyState(false);
     activeReadyRef.current = false;
   }, [item.slug, videoSrc]);
+
+  // force-resolve が ready 完了して新しい URL (または同一 URL の再取得) を返したら、
+  // active 要素を強制的に load()+play() リトライさせる。
+  //
+  // 必要な理由:
+  //   - URL 文字列が同一だと FeedItemVideo の src-sync effect が早期 return し、
+  //     promoted 要素は古い rs=0 のまま固まり続ける。
+  //   - URL が変わっても useFeedPlayback 側の watchdog recovered/signaled latch が
+  //     立っているので、後続の autoplay 経路でも recovery が再 arm されない。
+  // recoverActiveAfterForceResolve は latch をクリアし、active 要素に対して直接
+  // load()+play() を撃つ。force-resolve 自体のリトライ回数は useResolvedVideoSrc
+  // 側で MAX_FORCE_RETRIES + 指数バックオフで上限が掛かっており、ここで cooldown
+  // を重ねる必要は無い (epoch 1 増加につき 1 回 recover)。
+  //
+  // 注: epoch=0 (初回 resolve / slug 変更直後) では発火しない。force-resolve が
+  // 1 度でも走ったあとの ready 遷移でのみトリガー。FeedItemVideo の src 同期は
+  // この effect より前に走る (この effect は passive、src-sync も passive useEffect
+  // だが同じ commit で発火順は React 内部の登録順依存) ため、念のため microtask に
+  // 遅延させて、src が確実に書き込まれた後に recover を走らせる。
+  useEffect(() => {
+    if (forceResolveEpoch <= 0) return;
+    if (!isActive) return;
+    if (!videoSrc) return;
+    const url = videoSrc;
+    queueMicrotask(() => {
+      recoverActiveAfterForceResolve(url);
+    });
+  }, [forceResolveEpoch, isActive, videoSrc, recoverActiveAfterForceResolve]);
 
   // 開発用: video の lifecycle 時刻を計測してログ出力する。
   useEffect(() => {

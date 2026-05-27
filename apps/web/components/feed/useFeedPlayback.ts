@@ -548,14 +548,50 @@ export function useFeedPlayback({ slug, title, isActive, videoSrc, boundElement 
         }
         return;
       }
-      if (!video.paused) {
+      // 「already-playing」は paused=false 単独では判定しない。
+      // HTML5 video.play() は呼んだ瞬間に paused=false を立てる (Promise pending でも)
+      // ため、recovery 経路では「前 attempt の play() 呼び出し後 → rs=0 のまま buffer
+      // 待ちで実は 1 フレームも進んでいない」状態でも `!paused` が成立し、ここで
+      // silent abort されて recovery 後の load()+play() が走らずに黒画面で固まる
+      // (#207 で watchdog 側は同類の false-positive を潰したが、本エントリガードは
+      // 残っており #209 後も recovery 経路で再現していた)。
+      //
+      // 「実質再生中」= playing イベント観測済み + rs>=HAVE_FUTURE_DATA(3) + paused=false。
+      // 加えて currentTime が arm 直前値より進んでいるかは reason=recovery 経路では
+      // 計測できない (recovery 直前に reload しているため) ので playing イベント観測を
+      // 主シグナルとして扱う。
+      const effectivelyPlaying =
+        !video.paused &&
+        video.readyState >= 3 &&
+        !video.ended &&
+        activePlayingObservedRef.current;
+      if (effectivelyPlaying) {
         if (isVideoTimingEnabled()) {
           // eslint-disable-next-line no-console
           console.debug(
-            `vt ${slug}: active autoplay abort reason=already-playing trigger=${reason} rs=${video.readyState}`,
+            `vt ${slug}: active autoplay abort reason=already-playing trigger=${reason} rs=${video.readyState} effectivePlaying=true`,
           );
         }
         return;
+      }
+      // recovery / promote 以外で paused=false なら従来通り abort する (canplay/metadata
+      // ハンドラから保険で呼ばれた場合に、すでに play() 進行中の playback を kill しない)。
+      // recovery / promote は「明示的に再起動したい」コンテキストなので、paused=false でも
+      // rs<3 なら override して進む (下記 force-load + play() に到達させる)。
+      if (!video.paused && reason !== "recovery" && reason !== "promote") {
+        if (isVideoTimingEnabled()) {
+          // eslint-disable-next-line no-console
+          console.debug(
+            `vt ${slug}: active autoplay abort reason=already-playing trigger=${reason} rs=${video.readyState} effectivePlaying=false`,
+          );
+        }
+        return;
+      }
+      if (!video.paused && (reason === "recovery" || reason === "promote") && isVideoTimingEnabled()) {
+        // eslint-disable-next-line no-console
+        console.debug(
+          `vt ${slug}: active autoplay override paused=false trigger=${reason} rs=${video.readyState} networkState=${video.networkState} reason=force-restart`,
+        );
       }
       // MediaError 状態を持ち越したまま中央にスワイプしてきた <video> は、play() が
       // reject されるだけで再生できないので src を同じ URL で再ロードさせて
@@ -603,15 +639,22 @@ export function useFeedPlayback({ slug, title, isActive, videoSrc, boundElement 
       // promote 以外の reason ではこの状況は起きないため (active-change は新規
       // <video> マウントで src 直設定なので React が load() を発火) promote だけ
       // 対象にする。
-      if (
+      // recovery 経路では networkState が NO_SOURCE(3) / IDLE(1) かつ rs<3 のときも
+      // ロードが進んでいないシグナルなので load() を撃ち直す。recoverActiveAfterForceResolve
+      // 直後で既に load() を呼んでいても、Range request のキック失敗で stuck している
+      // ケースに対する保険になる (idempotent: 既にロード中なら no-op に近い)。
+      const needForceLoad =
         (reason === "promote" || reason === "recovery") &&
-        video.readyState === 0 &&
-        !activeAutoplayRecoveredRef.current
-      ) {
+        !activeAutoplayRecoveredRef.current &&
+        (video.readyState === 0 ||
+          (reason === "recovery" &&
+            video.readyState < 3 &&
+            (video.networkState === 3 || video.networkState === 1)));
+      if (needForceLoad) {
         if (isVideoTimingEnabled()) {
           // eslint-disable-next-line no-console
           console.debug(
-            `vt ${slug}: active autoplay ${reason} rs=0 force-load reason=${reason}`,
+            `vt ${slug}: active autoplay ${reason} force-load rs=${video.readyState} networkState=${video.networkState}`,
           );
         }
         try { video.load(); } catch { /* ignore */ }

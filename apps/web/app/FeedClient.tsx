@@ -172,6 +172,17 @@ export default function FeedClient() {
   const isFetchingRef = useRef(false);
   const isFetchingMoreRef = useRef(false);
   const nextCursorRef = useRef<string | null>(null);
+  // 直近で「この filterSig に対する初期 fetch を発射 / 解決済み」かどうか。
+  // enforceStatus が pending → ready に切り替わったり、SavedFilterEnforcer の
+  // router.replace が間に合わず URL は同じまま re-render だけ走ったタイミングで、
+  // useEffect の dep ([currentSig, enforceStatus]) が変化して再走するが、
+  // そのとき items=[] のセッション (= 0 件結果) は loadSession の length>0 条件で
+  // 弾かれて else 分岐に落ち、setIsLoading(true)+setItems([])+setIsEmpty(false) で
+  // 一度せっかく出した「該当する作品が見つかりませんでした」を消してスピナーに
+  // 戻し、もう一度同じ条件で fetch → empty に戻す、というチラつきを起こしていた。
+  // 「同じ sig で既に fetch を発射/解決済み」なら、enforceStatus の遷移などで
+  // effect が再走しても何もしない (state を保ったまま表示を維持する) ようにする。
+  const lastFetchedSigRef = useRef<string | null>(null);
   // playlist 経由で起動したときは /api/v1/home/section で継足しするため、
   // その出所情報 (セクション key / ジャンル名) を保持する。
   const playlistSourceRef = useRef<PlaylistSource | null>(null);
@@ -271,6 +282,10 @@ export default function FeedClient() {
   ) => {
     if (isFetchingRef.current) return;
     isFetchingRef.current = true;
+    // この sig に対しては既に fetch を発射した、と即時マークする。
+    // await 中に enforceStatus が pending→ready に変わって effect が再走しても、
+    // 同じ sig なら何もしない (= 同じ条件の重複 fetch & UI リセットを避ける) ように。
+    lastFetchedSigRef.current = filterSig;
     // この fetch が「フィルター適用済み」かどうかを記録。URL を見るのではなく
     // 実際に getFeed に渡す引数で判定するため、SavedFilterEnforcer の URL 注入と
     // fetch のレースに左右されない。
@@ -349,6 +364,17 @@ export default function FeedClient() {
     // フィルター ref を最新に更新 (fetchMore から参照される)
     filtersRef.current = { genres: currentGenres, advanced: currentAdvanced };
 
+    // 同じ filterSig で既に初期 fetch を発射 / 解決済みのときは、enforceStatus が
+    // pending→ready に切り替わったタイミング (deps の片方が変化) で effect が
+    // 再走しても何もしない。これをやらないと、0 件結果のあとに enforce が
+    // ready になった瞬間 loadSession が items.length=0 のセッションを返して
+    // else 分岐に落ち、setIsLoading(true)+setItems([])+setIsEmpty(false) で
+    // 「該当する作品が見つかりませんでした」を一度消してスピナーに戻し、再 fetch
+    // して空に戻す、という empty → spinner → empty のチラつきを起こす。
+    if (lastFetchedSigRef.current === currentSig) {
+      return;
+    }
+
     // SavedFilterEnforcer がまだ saved pref を読んで URL を確定させていない間は
     // 基本 fetch しない。フィルター未適用のフィードを 1 回取りに行って "違反作品が
     // 一瞬見える" のを防ぐため。
@@ -398,6 +424,7 @@ export default function FeedClient() {
           nextCursorRef.current = null;
         }
         saveSession(seed, idx, pl.items, nextCursorRef.current, currentSig);
+        lastFetchedSigRef.current = currentSig;
         // 遷移後は一度だけ使えればよいのでクリア
         clearPlaylist(playlistKey);
         return;
@@ -454,6 +481,7 @@ export default function FeedClient() {
       setLastFetchHadFilter(hasAnyFilter);
       setIsLoading(false);
       nextCursorRef.current = session.nextCursor;
+      lastFetchedSigRef.current = currentSig;
     } else {
       // 既存セッションがあってもフィルターが違うので破棄して再 fetch する
       if (session) clearFeedSession();

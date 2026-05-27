@@ -503,3 +503,74 @@ def test_section_popular_products_goods_endpoint_paginated(
     data2 = res2.json()
     assert len(data2["items"]) == 20
     assert data2["next_cursor"] is None
+
+
+def test_section_popular_actresses_uses_dedicated_endpoint(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """/home/section?key=popular_actresses は 400 を返し、専用エンドポイントへ誘導する。
+    女優は MovieCard と型が違うのでこのエンドポイントの response_model で扱えない。"""
+    client = TestClient(app)
+    res = client.get(
+        "/api/v1/home/section",
+        params={"key": "popular_actresses", "offset": 0, "limit": 20},
+    )
+    assert res.status_code == 400
+
+
+def test_section_popular_actresses_endpoint_paginated(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """/home/section/popular_actresses (Actress 専用) が offset/limit を SQL レベルで
+    使ってページングできること。"""
+    from app.schemas.actress import ActressCard
+
+    def _actress(i: int) -> ActressCard:
+        return ActressCard(
+            id=i + 1,
+            name=f"女優 {i:03d}",
+            slug=f"actress-{i:03d}",
+            thumbnail_url=None,
+            image_url_small=None,
+            image_url_large=None,
+        )
+
+    def _paged_actresses(total: int, offset: int, limit: int):
+        start = max(0, offset)
+        end = min(total, offset + limit)
+        if start >= end:
+            return []
+        return [_actress(i) for i in range(start, end)]
+
+    async def big_actresses(db, limit, offset=0):  # type: ignore[no-untyped-def]
+        return _paged_actresses(80, offset, limit)
+
+    monkeypatch.setattr(
+        home_endpoint, "get_popular_actresses_all_time", big_actresses
+    )
+
+    client = TestClient(app)
+    res = client.get(
+        "/api/v1/home/section/popular_actresses",
+        params={"offset": 0, "limit": 20},
+    )
+    assert res.status_code == 200
+    data = res.json()
+    assert len(data["items"]) == 20
+    assert data["next_cursor"] == "20"
+    item = data["items"][0]
+    # ActressCard が返っていること
+    assert "name" in item and "id" in item
+    # MovieCard 固有のフィールドは ActressCard に無い
+    assert "actresses" not in item
+    assert "genres" not in item
+    assert "affiliate_url" not in item
+
+    # 末尾ページで next_cursor=None
+    res2 = client.get(
+        "/api/v1/home/section/popular_actresses",
+        params={"offset": 60, "limit": 20},
+    )
+    data2 = res2.json()
+    assert len(data2["items"]) == 20
+    assert data2["next_cursor"] is None

@@ -430,14 +430,21 @@ export default function FeedClient() {
           nextCursorRef.current = null;
           return;
         }
-        // popular_products (Goods) は動画ではないので /feed 継足し対象外。
-        // 万一ここに来た場合は打ち止め扱いにする (フィードで再生可能なのは MovieCard のみ)。
-        if (source.key === "popular_products") {
+        // popular_products (Goods) / popular_actresses (Actress) は動画ではないので
+        // /feed 継足し対象外。万一ここに来た場合は打ち止め扱いにする
+        // (フィードで再生可能なのは MovieCard のみ)。
+        if (
+          source.key === "popular_products" ||
+          source.key === "popular_actresses"
+        ) {
           nextCursorRef.current = null;
           return;
         }
         const res = await getHomeSection(
-          source.key as Exclude<HomeSectionKey, "popular_products">,
+          source.key as Exclude<
+            HomeSectionKey,
+            "popular_products" | "popular_actresses"
+          >,
           offset,
           20,
           source.genre,

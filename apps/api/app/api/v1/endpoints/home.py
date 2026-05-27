@@ -12,7 +12,7 @@ from app.repositories.movie_repository import (
     get_recent_release_movies,
     get_top_genres_by_movie_count,
 )
-from app.schemas.actress import GoodsCard
+from app.schemas.actress import ActressCard, GoodsCard
 from app.schemas.feed import FeedResponse
 from app.schemas.home import (
     HomeActressSection,
@@ -35,6 +35,14 @@ class GoodsFeedResponse(BaseModel):
     動画 (FeedResponse) と並列の goods 版。next_cursor は同じ規約。
     """
     items: list[GoodsCard]
+    next_cursor: str | None = None
+
+
+class ActressFeedResponse(BaseModel):
+    """/home/section/popular_actresses のレスポンス。
+    動画 (FeedResponse) と並列の女優版。next_cursor は同じ規約。
+    """
+    items: list[ActressCard]
     next_cursor: str | None = None
 
 
@@ -241,6 +249,14 @@ async def get_home_section(
             detail="use /api/v1/home/section/popular_products for goods items",
         )
 
+    if key == "popular_actresses":
+        # 女優 (ActressCard) は MovieCard と型が異なるので、このエンドポイントでは扱わず
+        # 専用エンドポイント /home/section/popular_actresses に誘導する。
+        raise HTTPException(
+            status_code=400,
+            detail="use /api/v1/home/section/popular_actresses for actress items",
+        )
+
     if key == "ranking_daily":
         items = await get_ranking(db, period="daily", limit=fetch_limit, offset=offset)
         return _to_response(items, offset, limit)
@@ -302,3 +318,27 @@ async def get_home_section_popular_products(
     page = items[:limit]
     next_cursor = str(offset + limit) if has_next else None
     return GoodsFeedResponse(items=page, next_cursor=next_cursor)
+
+
+@router.get(
+    "/home/section/popular_actresses",
+    response_model=ActressFeedResponse,
+)
+async def get_home_section_popular_actresses(
+    offset: int = Query(default=0, ge=0),
+    limit: int = Query(default=20, ge=1, le=100),
+    db: AsyncSession = Depends(get_db),
+) -> ActressFeedResponse:
+    """人気女優セクション (Actress) のページネーション用エンドポイント。
+
+    動画 (Movie) ではなく女優 (Actress) を返すため、レスポンス型が FeedResponse とは
+    異なる (items が ActressCard)。それ以外のページネーション規約は /home/section と同じ。
+    """
+    fetch_limit = limit + 1
+    items = await get_popular_actresses_all_time(
+        db, limit=fetch_limit, offset=offset
+    )
+    has_next = len(items) > limit
+    page = items[:limit]
+    next_cursor = str(offset + limit) if has_next else None
+    return ActressFeedResponse(items=page, next_cursor=next_cursor)

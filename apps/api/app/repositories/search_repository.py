@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from datetime import date
 from typing import Literal
 
@@ -18,39 +19,77 @@ SortKey = Literal["new", "popular", "rating", "views", "bookmarks"]
 SuggestField = Literal["actress", "series", "director", "maker", "label", "genre"]
 
 
-def _build_keyword_where(query: str):
-    """`search_movies` で使う WHERE 条件と必要な subquery を返す。
+# 半角スペース / 全角スペース (U+3000) / タブ / 改行など、Unicode 的な空白すべてで分割する。
+# 連続空白は \s+ で 1 つにまとまる。
+_KEYWORD_SPLIT_RE = re.compile(r"[\s　]+")
 
-    total カウント用と items 取得用で重複するロジックをここに集約する。
+
+def _split_keyword_tokens(query: str) -> list[str]:
+    """フリーワード `q` を AND 検索用のトークン列に分割する。
+
+    - 半角 / 全角スペース / タブ / 改行を区切りとして扱う
+    - 連続空白は 1 区切りに正規化
+    - 前後の空白は除去
+    - 空文字は除外
+    - 入力にスペースが全く無ければ要素 1 個のリストになる (= 既存と同じ単一キーワード検索)
     """
-    q = f"%{query}%"
+    if not query:
+        return []
+    parts = _KEYWORD_SPLIT_RE.split(query.strip())
+    return [p for p in parts if p]
+
+
+def _build_token_where(token: str):
+    """単一トークンに対する OR 条件 (title / description / director / maker / label /
+    女優名 / ジャンル名 / シリーズ名 の部分一致いずれか) を返す。"""
+    pat = f"%{token}%"
 
     actress_sub = (
         select(Movie.id)
         .join(Movie.actresses)
-        .where(Actress.name.ilike(q))
+        .where(Actress.name.ilike(pat))
     )
     genre_sub = (
         select(Movie.id)
         .join(Movie.genres)
-        .where(Genre.name.ilike(q))
+        .where(Genre.name.ilike(pat))
     )
     series_sub = (
         select(Movie.id)
         .join(Movie.series)
-        .where(Series.name.ilike(q))
+        .where(Series.name.ilike(pat))
     )
 
     return or_(
-        Movie.title.ilike(q),
-        Movie.description.ilike(q),
-        Movie.director_name.ilike(q),
-        Movie.maker_name.ilike(q),
-        Movie.label_name.ilike(q),
+        Movie.title.ilike(pat),
+        Movie.description.ilike(pat),
+        Movie.director_name.ilike(pat),
+        Movie.maker_name.ilike(pat),
+        Movie.label_name.ilike(pat),
         Movie.id.in_(actress_sub),
         Movie.id.in_(genre_sub),
         Movie.id.in_(series_sub),
     )
+
+
+def _build_keyword_where(query: str):
+    """`search_movies` で使う WHERE 条件を返す。
+
+    フリーワードに空白 (半角 / 全角) が含まれる場合は AND 検索とする。
+    例: `q="alpha beta"` は (alpha のどこかにマッチ) AND (beta のどこかにマッチ) になる。
+    各トークンは内部で「タイトル / 説明 / 女優名 / ジャンル名 / 監督 / メーカー /
+    レーベル / シリーズ名」の OR で評価され、トークン同士は AND で結合される。
+
+    total カウント用と items 取得用で重複するロジックをここに集約する。
+    """
+    tokens = _split_keyword_tokens(query)
+    if not tokens:
+        # 空白だけ / 空文字 → 既存挙動 (1 ワードとしての ilike) と同じく ""%%"" で全件マッチ。
+        # 呼び出し側は通常空文字を渡さないが、安全側で動作を維持する。
+        return _build_token_where(query)
+    if len(tokens) == 1:
+        return _build_token_where(tokens[0])
+    return and_(*(_build_token_where(t) for t in tokens))
 
 
 async def search_movies(

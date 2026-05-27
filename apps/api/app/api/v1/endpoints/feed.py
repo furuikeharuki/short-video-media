@@ -1,9 +1,13 @@
 from datetime import date
 from typing import Literal
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Query, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.rate_limit import (
+    SlidingWindowRateLimiter,
+    get_feed_rate_limiter,
+)
 from app.db.session import get_db
 from app.schemas.feed import FeedResponse
 from app.services.feed_service import get_feed_paginated
@@ -16,6 +20,7 @@ SortKey = Literal["new", "popular", "rating", "views", "bookmarks"]
 
 @router.get("/feed", response_model=FeedResponse)
 async def feed(
+    request: Request,
     offset: int = Query(default=0, ge=0),
     limit: int = Query(default=20, ge=1, le=100),
     seed: int | None = Query(default=None),
@@ -35,7 +40,11 @@ async def feed(
     # None (未指定) のときは従来通り shuffle 順のフィードを返す。
     sort: SortKey | None = Query(default=None),
     db: AsyncSession = Depends(get_db),
+    limiter: SlidingWindowRateLimiter = Depends(get_feed_rate_limiter),
 ) -> FeedResponse:
+    # 匿名でも叩ける重いエンドポイントなので、極端な連打を抑える。
+    # 通常スクロール (offset 移動) 用に上限はかなり緩めに取ってある。
+    limiter.check(request)
     return await get_feed_paginated(
         db,
         offset=offset,

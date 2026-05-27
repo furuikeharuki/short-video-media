@@ -29,12 +29,17 @@ from datetime import datetime, timezone
 from typing import Annotated
 
 import jwt
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel, Field
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
+from app.core.rate_limit import (
+    SlidingWindowRateLimiter,
+    get_signin_rate_limiter,
+)
 from app.core.security import (
     ALLOWED_PROVIDERS,
     JWT_ALGORITHM,
@@ -95,18 +100,16 @@ def _utcnow_naive() -> datetime:
     return datetime.now(timezone.utc).replace(tzinfo=None)
 
 
-@router.post("/sign-in", response_model=SignInResponse)
-async def sign_in(
-    body: SignInRequest,
-    db: Annotated[AsyncSession, Depends(get_db)],
-) -> SignInResponse:
-    """provider+sub から User を get_or_create して User JWT を返す。"""
-    payload = _decode_exchange_token(body.exchange_token)
-    provider: str = payload["provider"]
-    sub: str = payload["sub"]
-    sub_hash = compute_sub_hash(provider, sub)
+async def _get_or_create_identity(
+    db: AsyncSession, provider: str, sub_hash: str
+) -> str:
+    """Identity (provider, sub_hash) から User を get_or_create し、user_id を返す。
 
-    # Identity を引いて User を取得
+    UNIQUE(provider, sub_hash) 制約があるため、同一ユーザーが同時に複数の
+    sign-in を投げると INSERT が衝突する。IntegrityError を catch して
+    再 SELECT することで安全に冪等化する。
+    """
+    # Step1: 既存 Identity を引く
     result = await db.execute(
         select(Identity).where(
             Identity.provider == provider, Identity.sub_hash == sub_hash
@@ -114,8 +117,18 @@ async def sign_in(
     )
     identity = result.scalar_one_or_none()
 
-    if identity is None:
-        # 新規ユーザー作成
+    if identity is not None:
+        # last_seen_at を更新
+        result2 = await db.execute(
+            select(User).where(User.id == identity.user_id)
+        )
+        user = result2.scalar_one()
+        user.last_seen_at = _utcnow_naive()
+        await db.commit()
+        return user.id
+
+    # Step2: 新規作成。UNIQUE 衝突に備えて savepoint で囲み、失敗時は再 SELECT。
+    try:
         user = User()
         db.add(user)
         await db.flush()  # user.id を確定させる
@@ -124,14 +137,52 @@ async def sign_in(
         )
         db.add(identity)
         await db.commit()
-        user_id = user.id
-    else:
-        # last_seen_at を更新
-        result2 = await db.execute(select(User).where(User.id == identity.user_id))
-        user = result2.scalar_one()
+        return user.id
+    except IntegrityError:
+        # 並行 sign-in で他リクエストが先に Identity を作ったケース。
+        # ロールバックしてから再度 SELECT する。再 SELECT で見つからなければ
+        # 一過的な別エラーなので、そのまま 500 系として上位に投げる。
+        await db.rollback()
+        result3 = await db.execute(
+            select(Identity).where(
+                Identity.provider == provider, Identity.sub_hash == sub_hash
+            )
+        )
+        identity = result3.scalar_one_or_none()
+        if identity is None:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="sign-in conflict, please retry",
+            )
+        result4 = await db.execute(
+            select(User).where(User.id == identity.user_id)
+        )
+        user = result4.scalar_one()
         user.last_seen_at = _utcnow_naive()
         await db.commit()
-        user_id = user.id
+        return user.id
+
+
+@router.post("/sign-in", response_model=SignInResponse)
+async def sign_in(
+    body: SignInRequest,
+    request: Request,
+    db: Annotated[AsyncSession, Depends(get_db)],
+    limiter: Annotated[
+        SlidingWindowRateLimiter, Depends(get_signin_rate_limiter)
+    ],
+) -> SignInResponse:
+    """provider+sub から User を get_or_create して User JWT を返す。"""
+    # IP ごとのレート制限。盗まれた exchange JWT の総当たりや、大量ユーザー
+    # 作成攻撃を抑制する。
+    limiter.check(request)
+
+    payload = _decode_exchange_token(body.exchange_token)
+    provider: str = payload["provider"]
+    sub: str = payload["sub"]
+    sub_hash = compute_sub_hash(provider, sub)
+
+    user_id = await _get_or_create_identity(db, provider, sub_hash)
 
     token = create_user_token(user_id)
     return SignInResponse(token=token, user_id=user_id)

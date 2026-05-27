@@ -13,7 +13,14 @@ import { AD_FEED_INTERVAL, isAdZoneEnabled } from "@/lib/ads/config";
 
 const WINDOW_SIZE = 1;
 const RAPID_THRESHOLD_MS = 350;
-const RAPID_SETTLE_MS = 350;
+// 高速スワイプ判定が静まるまでの時間 (ms)。この間、隣接スライドの preload は
+// "metadata" に弱められ、active <video> の Range request が帯域を独占できる。
+// 旧値 350ms は active が rs=1 (loadedmetadata) に達する前に "auto" に戻り、
+// 隣接 <video preload="auto"> が active の Range を奪うケースが観測されたため、
+// active 安定までを概ねカバーする 900ms まで延長する。これより長くしすぎると
+// ゆっくりスワイプでも next slide が温まらず最初の再生開始で待たされるため、
+// 短期 prefetch との両立点として 900ms を採用。
+const RAPID_SETTLE_MS = 900;
 
 // BottomNav の高さ。タッチ終端がここより下なら BottomNav 操作として扱う。
 const BOTTOM_NAV_H = 56;

@@ -103,13 +103,28 @@ function hasAdvancedInUrl(sp: URLSearchParams): boolean {
   );
 }
 
+/** URL に文脈タグ (genre / director / maker / label / series) が乗っているか。
+ *  ジャンルチップ等のタップで遷移したときは、ユーザーの "今の意図" がそのタグなので、
+ *  保存済みフリーワード (q) を上書き注入してサブヘッダーや結果を汚染しないようにする。 */
+function hasTagContextInUrl(sp: URLSearchParams): boolean {
+  return (
+    (sp.get("genre") ?? "").trim() !== "" ||
+    (sp.get("director") ?? "").trim() !== "" ||
+    (sp.get("maker") ?? "").trim() !== "" ||
+    (sp.get("label") ?? "").trim() !== "" ||
+    (sp.get("series") ?? "").trim() !== ""
+  );
+}
+
 /** stored pref + 既存 URL params を合成して新しい URLSearchParams を作る。 */
 function mergeIntoParams(base: URLSearchParams, pref: StoredPref): URLSearchParams {
   const params = new URLSearchParams(base.toString());
 
   const q = (pref.q ?? "").trim();
-  // 既存に q があれば優先 (普通は無い: hasAdvancedInUrl 前提)
-  if (q && !(params.get("q") ?? "").trim()) {
+  // 既存に q があれば優先 (普通は無い: hasAdvancedInUrl 前提)。
+  // また、URL に文脈タグ (genre 等) が乗っているときは、ユーザーがタグタップで
+  // 飛んできたケースなので保存済み q は注入しない (検索ヘッダーラベル汚染防止)。
+  if (q && !(params.get("q") ?? "").trim() && !hasTagContextInUrl(params)) {
     params.set("q", q);
   }
 

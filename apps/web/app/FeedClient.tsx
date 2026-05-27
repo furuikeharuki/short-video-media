@@ -2,15 +2,12 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "next/navigation";
-import { useSession } from "next-auth/react";
-import FeedViewer from "@/components/FeedViewer";
-import { markSeen, getOrCreateSeed } from "@/lib/feedOrder";
+import FeedSurface from "@/components/feed/FeedSurface";
+import { getOrCreateSeed } from "@/lib/feedOrder";
 import { getFeed, type FeedAdvancedParams } from "@/lib/api/feed";
 import { getHomeSection, type HomeSectionKey } from "@/lib/api/homeSection";
 import { getMovieBySlug } from "@/lib/api/movies";
 import { loadPlaylist, clearPlaylist, type PlaylistSource } from "@/lib/feedPlaylist";
-import { logEvent } from "@/lib/api/events";
-import { recordView } from "@/lib/api/me";
 import { useSavedFilterStatus } from "@/components/SavedFilterContext";
 import type { MovieCard } from "@/lib/api/feed";
 import type { MovieDetail } from "@/lib/api/movies";
@@ -166,7 +163,6 @@ function filterSignature(genres: string[], advanced: FeedAdvancedParams): string
 
 export default function FeedClient() {
   const searchParams  = useSearchParams();
-  const { status: authStatus } = useSession();
   // SavedFilterEnforcer が URL に保存済みフィルターを注入し終わるまで "pending"。
   // pending の間は 古い / フィルター未適用の feed を一瞬でも描画させず、
   // 読み込みスピナーを持続表示する。
@@ -493,34 +489,6 @@ export default function FeedClient() {
     void fetchMore();
   }, [fetchMore]);
 
-  const handleIndexChange = useCallback((index: number) => {
-    const cur = items[index];
-    if (cur) {
-      markSeen(cur.id);
-      // ランキング集計のために view イベントを記録 (サーバ側で集計、認証不要)
-      logEvent({ event_type: "view", slug: cur.slug, title: cur.title });
-      // ログイン中のみ視聴履歴に記録 (未ログインだと 401 になるのでスキップ)
-      if (authStatus === "authenticated") {
-        void recordView(cur.id);
-      }
-    }
-    try { sessionStorage.setItem(FEED_INDEX_KEY, String(index)); } catch { /* ignore */ }
-  }, [items, authStatus]);
-
-  const firstViewLoggedRef = useRef(false);
-  useEffect(() => {
-    if (isLoading) return;
-    if (firstViewLoggedRef.current) return;
-    const cur = items[initialIndex];
-    if (!cur) return;
-    firstViewLoggedRef.current = true;
-    markSeen(cur.id);
-    logEvent({ event_type: "view", slug: cur.slug, title: cur.title });
-    if (authStatus === "authenticated") {
-      void recordView(cur.id);
-    }
-  }, [isLoading, items, initialIndex, authStatus]);
-
   if (isEmpty) {
     return (
       <div className="feed-empty">
@@ -540,10 +508,11 @@ export default function FeedClient() {
 
   return (
     <>
-      <FeedViewer
+      <FeedSurface
         items={items}
         initialIndex={initialIndex}
-        onIndexChange={handleIndexChange}
+        ready={!isLoading}
+        sessionIndexKey={FEED_INDEX_KEY}
         onNearEnd={handleNearEnd}
       />
       <style>{uiStyle}</style>

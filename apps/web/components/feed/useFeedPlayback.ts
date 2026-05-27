@@ -285,18 +285,56 @@ export function useFeedPlayback({ slug, title, isActive, videoSrc, boundElement 
     if (proActressSeekDeadlineRef.current != null) {
       clearTimeout(proActressSeekDeadlineRef.current);
     }
-    proActressSeekDeadlineRef.current = setTimeout(() => {
-      proActressSeekDeadlineRef.current = null;
-      // この grace を過ぎても seeked が来なければ真の stuck の可能性。
-      // フラグを落として watchdog の通常経路に委ねる。
-      proActressSeekInFlightRef.current = false;
-      if (isVideoTimingEnabled()) {
-        // eslint-disable-next-line no-console
-        console.debug(
-          `vt ${slug}: pro-actress seek in-flight cleared reason=deadline`,
-        );
-      }
-    }, PRO_ACTRESS_SEEK_DEADLINE_MS);
+    const armDeadline = () => {
+      proActressSeekDeadlineRef.current = setTimeout(() => {
+        proActressSeekDeadlineRef.current = null;
+        // Deadline 到達時点で「seek 先 (minStart) には居る / 居る付近で
+        // networkState=NETWORK_LOADING(2) で再バッファ継続中 / hasError=false」
+        // のときは、これは仕様どおりの一時的な再バッファであり真の stuck では
+        // ない。in-flight フラグを落とすと Phase 2 watchdog が rs=1
+        // networkState=2 currentTime=minStart を stuck とみなして
+        // `video-active-stuck` を dispatch し、URL force-resolve + recovery
+        // 経路で再 load が走って delayed seeked が stale-element 化する事故が
+        // 起きる。ここでは flag を維持して deadline を延長する。
+        // 真の死 element (rs=0 / networkState=EMPTY|NO_SOURCE / error) や、
+        // 「seek 先にまだ到達していない & networkState も止まっている」場合
+        // は従来通り flag を落として watchdog の通常経路に委ねる。
+        const video = videoRef.current;
+        const lower = skipLowerBoundRef.current;
+        const reachedMinStart =
+          !!video &&
+          lower > 0 &&
+          video.currentTime + 0.05 >= lower;
+        const stillLoading =
+          !!video &&
+          video.networkState === 2 &&
+          video.error === null &&
+          video.readyState >= 1;
+        if (
+          isActiveRef.current &&
+          !userPausedRef.current &&
+          reachedMinStart &&
+          stillLoading
+        ) {
+          if (isVideoTimingEnabled()) {
+            // eslint-disable-next-line no-console
+            console.debug(
+              `vt ${slug}: pro-actress seek deadline extend reason=loading-at-minStart rs=${video.readyState} networkState=${video.networkState} currentTime=${video.currentTime.toFixed(2)}`,
+            );
+          }
+          armDeadline();
+          return;
+        }
+        proActressSeekInFlightRef.current = false;
+        if (isVideoTimingEnabled()) {
+          // eslint-disable-next-line no-console
+          console.debug(
+            `vt ${slug}: pro-actress seek in-flight cleared reason=deadline`,
+          );
+        }
+      }, PRO_ACTRESS_SEEK_DEADLINE_MS);
+    };
+    armDeadline();
   }, [slug]);
 
   // active 要素を強制的に再ロードさせる hard-reset。
@@ -1008,6 +1046,20 @@ export function useFeedPlayback({ slug, title, isActive, videoSrc, boundElement 
           liveVideo.readyState >= 1 &&
           liveVideo.currentTime + 0.05 < skipLowerBoundRef.current
         ) bail = "pro-actress-deferred-seek";
+        // pro-actress minStart に到達した直後の「再バッファ継続中」状態は、
+        // seek-in-flight deadline 後で flag が既に false でも stuck ではない。
+        // rs in [1,2] (HAVE_METADATA / HAVE_CURRENT_DATA) かつ
+        // networkState=LOADING(2) かつ currentTime>=minStart かつ no error の
+        // ときは Phase 1 で load() を撃たず、進行中の Range request に委ねる。
+        else if (
+          skipEffectiveRef.current &&
+          skipLowerBoundRef.current > 0 &&
+          liveVideo.currentTime + 0.05 >= skipLowerBoundRef.current &&
+          liveVideo.networkState === 2 &&
+          liveVideo.readyState >= 1 &&
+          liveVideo.readyState <= 2 &&
+          liveVideo.error === null
+        ) bail = "pro-actress-seek-loading";
         if (bail) {
           if (isVideoTimingEnabled()) {
             // eslint-disable-next-line no-console
@@ -1143,6 +1195,19 @@ export function useFeedPlayback({ slug, title, isActive, videoSrc, boundElement 
           liveVideo.readyState >= 1 &&
           liveVideo.currentTime + 0.05 < skipLowerBoundRef.current
         ) bail = "pro-actress-deferred-seek";
+        // Phase 1 と同じく「minStart 到達後の再バッファ継続中」は stuck では
+        // ない。Phase 2 は dispatch (URL force-resolve + recovery) が走ると
+        // 後続の delayed seeked / canplay が stale-element 化するので、ここで
+        // 確実に bail して進行中の Range request に委ねる。
+        else if (
+          skipEffectiveRef.current &&
+          skipLowerBoundRef.current > 0 &&
+          liveVideo.currentTime + 0.05 >= skipLowerBoundRef.current &&
+          liveVideo.networkState === 2 &&
+          liveVideo.readyState >= 1 &&
+          liveVideo.readyState <= 2 &&
+          liveVideo.error === null
+        ) bail = "pro-actress-seek-loading";
         if (bail) {
           if (isVideoTimingEnabled()) {
             // eslint-disable-next-line no-console

@@ -993,6 +993,21 @@ export function useFeedPlayback({ slug, title, isActive, videoSrc, boundElement 
         // stuck 判定しない。seeked 受領で flag が落ちた後 / deadline 後の
         // 後続 watchdog (再 arm されないので実質次の active session) に委ねる。
         else if (proActressSeekInFlightRef.current) bail = "pro-actress-seek";
+        // pro-actress enforce が `deferred reason=promote rs=0` で立てた
+        // proActressPlayRetryPendingRef がまだ残ったまま metadata 到達 (rs>=1) した
+        // ケース。loadedmetadata -> enforceLowerBound -> seeked ->
+        // tryConsumePlayRetry が直後に走り再生再開するので、Phase 1 で load() を
+        // 撃って pending な play() promise を AbortError reject させたり、
+        // currentTime を 0 にリセットしたりしないようここで bail する。
+        // rs=0 のときは metadata がまだ来ていないので、従来通り Phase 0/1 の load()
+        // 救済を許す (本 bail には入らない)。
+        else if (
+          proActressPlayRetryPendingRef.current &&
+          skipEffectiveRef.current &&
+          skipLowerBoundRef.current > 0 &&
+          liveVideo.readyState >= 1 &&
+          liveVideo.currentTime + 0.05 < skipLowerBoundRef.current
+        ) bail = "pro-actress-deferred-seek";
         if (bail) {
           if (isVideoTimingEnabled()) {
             // eslint-disable-next-line no-console
@@ -1113,6 +1128,21 @@ export function useFeedPlayback({ slug, title, isActive, videoSrc, boundElement 
         // 真の死 element なら deadline 後に in-flight=false となり、次の active
         // session の watchdog で救済される。
         else if (proActressSeekInFlightRef.current) bail = "pro-actress-seek";
+        // pro-actress enforce が `deferred reason=promote rs=0` で待機していて、
+        // loadedmetadata は到達 (rs>=1) したが currentTime はまだ 0 (= seek が
+        // 反映前 / seeked 観測前) のケース。handleLoadedMeta -> enforceLowerBound ->
+        // seeked -> tryConsumePlayRetry が直後に走る (= seek-in-flight 経由で
+        // 救済される) ので、ここで stuck dispatch (URL force re-resolve) して全体を
+        // hard-reset する必要は無い。bail して次の active session に委ねる。
+        // 条件: rs>=HAVE_METADATA(1) (= metadata は到達済み) で、
+        //       proActressPlayRetryPendingRef が立っており、currentTime が lower 未満。
+        else if (
+          proActressPlayRetryPendingRef.current &&
+          skipEffectiveRef.current &&
+          skipLowerBoundRef.current > 0 &&
+          liveVideo.readyState >= 1 &&
+          liveVideo.currentTime + 0.05 < skipLowerBoundRef.current
+        ) bail = "pro-actress-deferred-seek";
         if (bail) {
           if (isVideoTimingEnabled()) {
             // eslint-disable-next-line no-console
@@ -1739,6 +1769,13 @@ export function useFeedPlayback({ slug, title, isActive, videoSrc, boundElement 
             `vt ${slug}: pro-actress enforce currentTime=${video.currentTime.toFixed(2)} -> ${lower} paused=${video.paused} rs=${video.readyState} active=${isActiveRef.current}`,
           );
         }
+        // active 経路で seek を撃つ場合は、Phase 0/1/2 watchdog が「rs=1 currentTime=0」を
+        // stuck と誤判定しないよう seek-in-flight flag を立てる。seeked で
+        // clearProActressSeekInFlight() され、deadline (PRO_ACTRESS_SEEK_DEADLINE_MS) で
+        // 確実に降りる。inactive 経路 (preview seek) では立てない。
+        if (isActiveRef.current) {
+          markProActressSeekInFlight();
+        }
         try { video.currentTime = lower; } catch { /* ignore */ }
         // active かつ autoplay 対象 (= ユーザーが明示的に止めていない) で、enforce 直後に
         // 動画が paused のままなら、seeked / canplay 後に一度だけ play() を再試行する。
@@ -1772,6 +1809,26 @@ export function useFeedPlayback({ slug, title, isActive, videoSrc, boundElement 
       // メタデータ確定直後、初回再生はまだ 0 から始まっている可能性が高いので飛ばす。
       // これにより、isActive=false の隣接スライドでもプロ女優作品は 5 秒地点に
       // シークされ、そのフレームがプレビューとして表示される。
+      //
+      // 加えて、attemptActiveAutoplay が rs=0 で `pro-actress enforce deferred` した
+      // ケース (= proActressPlayRetryPendingRef は立っているが currentTime はまだ 0)
+      // を metadata 到達と同時に巻き取る。観測ログ:
+      //   "pro-actress deferred metadata seek currentTime=0.00 -> 5"
+      // これが無いと、Phase 2 watchdog (3500ms) まで currentTime=0 のまま放置され
+      // recovery 経路で再 hard-reset+loadedmetadata 待ち (+4 秒) が走る。
+      const shouldConsumeDeferred =
+        isActiveRef.current &&
+        !userPausedRef.current &&
+        proActressPlayRetryPendingRef.current &&
+        skipEffectiveRef.current &&
+        skipLowerBoundRef.current > 0 &&
+        video.currentTime + 0.05 < skipLowerBoundRef.current;
+      if (shouldConsumeDeferred && isVideoTimingEnabled()) {
+        // eslint-disable-next-line no-console
+        console.debug(
+          `vt ${slug}: pro-actress deferred metadata seek currentTime=${video.currentTime.toFixed(2)} -> ${skipLowerBoundRef.current} rs=${video.readyState} paused=${video.paused}`,
+        );
+      }
       enforceLowerBound();
     };
     const handleTimeUpdate = () => {
@@ -2003,7 +2060,7 @@ export function useFeedPlayback({ slug, title, isActive, videoSrc, boundElement 
         proActressPlayFallbackTimerRef.current = null;
       }
     };
-  }, [slug, videoSrc, isProActress, playVideo, startProgressLoop, clearProActressSeekInFlight]);
+  }, [slug, videoSrc, isProActress, playVideo, startProgressLoop, clearProActressSeekInFlight, markProActressSeekInFlight]);
 
   // 自動再生のセーフティネット: active な要素が canplay / loadeddata / loadedmetadata
   // に到達した時点でまだ paused かつ user-paused でないなら、attemptActiveAutoplay を

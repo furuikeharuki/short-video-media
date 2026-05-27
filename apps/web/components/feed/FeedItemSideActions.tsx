@@ -2,6 +2,7 @@
 
 import { useRef } from "react";
 
+import { trackEvent } from "@/lib/analytics/analytics";
 import type { MovieCard } from "@/lib/api/feed";
 
 interface Props {
@@ -212,7 +213,17 @@ export default function FeedItemSideActions({
         onClick={(e) => {
           e.stopPropagation();
           // affiliate_url が空のレコード (データ欠落) は不本意な同一ページ遷移を防ぐ
-          if (!item.affiliate_url) e.preventDefault();
+          if (!item.affiliate_url) {
+            e.preventDefault();
+            return;
+          }
+          // 人気女優ランキングは Event.slug を Movie に JOIN して集計するので、
+          // 必ず slug を渡すこと (未指定だと集計対象から漏れる)。
+          void trackEvent("affiliate_click", {
+            slug: item.slug,
+            title: item.title,
+            affiliate_url: item.affiliate_url,
+          });
         }}
         onTouchStart={buyOnTouchStart}
         onTouchEnd={buyOnTouchEnd}

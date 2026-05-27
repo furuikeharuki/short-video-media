@@ -158,7 +158,13 @@ export default async function Page() {
               ))}
             </HorizontalCardRow>
             {showInlineAfterPopular && popularActresses && (
-              <HorizontalCardRow title={popularActresses.title}>
+              <HorizontalCardRow
+                title={popularActresses.title}
+                action={{
+                  label: "もっと見る",
+                  href: "/list/popular_actresses",
+                }}
+              >
                 {popularActresses.items.map((a, i) => (
                   <ActressCardThumb
                     key={a.id}

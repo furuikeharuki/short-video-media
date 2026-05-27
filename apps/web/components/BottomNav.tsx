@@ -4,6 +4,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useEffect, useRef, useCallback, useState } from "react";
 import { markFeedStartUnmuted } from "@/lib/feedNav";
+import { buildFeedHrefFromSavedPref } from "@/lib/savedSearchPrefs";
 
 /**
  * /feed から /, /mypage 等にフルページ遷移するとき、ページ全体の取得が終わるまで
@@ -50,82 +51,10 @@ function resetFeedSession() {
   markFeedStartUnmuted();
 }
 
-// 詳細検索パネルで保存された prefs (sessionStorage) を読み出し、/feed の URL に
-// 直接展開する。これにより、ショートボタン → /feed のフルページ遷移直後から
-// URL に詳細検索条件が乗った状態で React がマウントされる。
-//
-// SavedFilterEnforcer に頼って後から router.replace() で URL を書き換える経路だと、
-// FeedClient のレンダタイミングとフィルター注入のタイミングがレースになり、
-// 「フィルター適用 fetch が 0 件で返ったのに URL がまだ空 → hasAnyFilter=false →
-// 空メッセージが出ない」現象を完全には防げない (PR #237 で fetch-level の
-// lastFetchHadFilter で補強したが、初回 fetch 自体が enforce 前後でブレる)。
-// 遷移元の sessionStorage を src of truth として URL に展開すれば、初回マウントから
-// hasAnyFilter=true が確定し、空メッセージの表示も確実になる。
-//
-// 注: サーバ側 prefs (ログイン中で sessionStorage に未復元な場合) はここでは
-// カバーできないが、useEnforceSavedFilter が後段で router.replace 注入する経路は
-// 引き続き有効なので、ログイン時もフィルター強制適用そのものは効く。
-// 復元の同期化は GlobalFilterButton / useEnforceSavedFilter が担当しており、
-// 通常ユーザー操作 (1 度でも詳細検索を開く / 適用する) で sessionStorage が満たされる。
-const SEARCH_PREFS_KEY = "search_prefs_v1";
-const VALID_SORTS = new Set(["new", "popular", "rating", "views", "bookmarks"]);
-
-type StoredPref = {
-  q?: string;
-  genres?: string[];
-  actresses?: string[];
-  series_list?: string[];
-  directors?: string[];
-  makers?: string[];
-  labels?: string[];
-  ng_words?: string[];
-  date_from?: string;
-  date_to?: string;
-  sort?: string;
-};
-
-function buildFeedHrefWithSavedPrefs(): string {
-  if (typeof window === "undefined") return "/feed";
-  let pref: StoredPref | null = null;
-  try {
-    const raw = sessionStorage.getItem(SEARCH_PREFS_KEY);
-    if (raw) pref = JSON.parse(raw) as StoredPref;
-  } catch {
-    pref = null;
-  }
-  if (!pref) return "/feed";
-
-  const params = new URLSearchParams();
-  const appendMulti = (key: string, arr: unknown) => {
-    if (!Array.isArray(arr)) return;
-    for (const v of arr) {
-      if (typeof v !== "string") continue;
-      const t = v.trim();
-      if (t) params.append(key, t);
-    }
-  };
-  const setIf = (key: string, v: unknown) => {
-    if (typeof v !== "string") return;
-    const t = v.trim();
-    if (t) params.set(key, t);
-  };
-  setIf("q", pref.q);
-  appendMulti("genres", pref.genres);
-  appendMulti("actresses", pref.actresses);
-  appendMulti("series_list", pref.series_list);
-  appendMulti("directors", pref.directors);
-  appendMulti("makers", pref.makers);
-  appendMulti("labels", pref.labels);
-  appendMulti("ng_words", pref.ng_words);
-  setIf("date_from", pref.date_from);
-  setIf("date_to", pref.date_to);
-  if (typeof pref.sort === "string" && VALID_SORTS.has(pref.sort)) {
-    params.set("sort", pref.sort);
-  }
-  const qs = params.toString();
-  return qs ? `/feed?${qs}` : "/feed";
-}
-
+// 保存済み詳細検索条件を /feed?... に展開する処理は @/lib/savedSearchPrefs に移動。
+// FeedClient 側にも同じヘルパーを共有させて、URL 展開が間に合わない経路でも
+// FeedClient が sessionStorage を直接読んで filter として fetch にフォールバックする
+// 二重防衛にしてある。
 const NAV_ITEMS = [
   {
     label: "ホーム",
@@ -385,7 +314,7 @@ export default function BottomNav() {
             // 確定 → 0 件で「該当する作品が見つかりませんでした」表示が確実に出る。
             // 保存済みが何もないときは "/feed" のままで従来挙動。
             const targetHref = goingToFeed
-              ? buildFeedHrefWithSavedPrefs()
+              ? buildFeedHrefFromSavedPref()
               : item.href;
             window.location.assign(targetHref);
           }

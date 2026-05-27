@@ -9,6 +9,7 @@ import { getHomeSection, type HomeSectionKey } from "@/lib/api/homeSection";
 import { getMovieBySlug } from "@/lib/api/movies";
 import { loadPlaylist, clearPlaylist, type PlaylistSource } from "@/lib/feedPlaylist";
 import { useSavedFilterStatus } from "@/components/SavedFilterContext";
+import { readSavedSearchPref } from "@/lib/savedSearchPrefs";
 import type { MovieCard } from "@/lib/api/feed";
 import type { MovieDetail } from "@/lib/api/movies";
 
@@ -199,14 +200,64 @@ export default function FeedClient() {
   const [lastFetchHadFilter, setLastFetchHadFilter] = useState(false);
 
   // searchParams から現在のフィルターと署名を計算しておく。
-  const { currentGenres, currentAdvanced, currentSig, hasAnyFilter } = useMemo(() => {
-    const sp = new URLSearchParams(searchParams?.toString() ?? "");
-    const { genres, advanced, hasAny } = readFilters(sp);
+  //
+  // URL クエリが完全に空 (= ショートボタン経由で /feed に直接来た直後など) で、
+  // かつ sessionStorage に保存済みの詳細検索条件があれば、それを fetch の入力として
+  // ここで採用する。これにより BottomNav 側の URL 展開や SavedFilterEnforcer の
+  // router.replace が間に合わない・走らない経路でも、FeedClient 単体で「保存済み
+  // 条件で fetch → 0 件なら『該当する作品が見つかりませんでした』」が成立する。
+  //
+  // URL に何か乗っているとき (ユーザーが明示的に詳細条件付き /feed?... を開いた、
+  // /feed?playlist=... / /feed?v=... など) は URL を優先するので fallback はしない。
+  // playlist 経路は下流で別処理されるが、playlist キーが乗っている時点で URL は
+  // 空ではないので readFilters の hasAny=false でもこの fallback は走らない。
+  const { currentGenres, currentAdvanced, currentSig, hasAnyFilter, fellBackToSavedPref } = useMemo(() => {
+    const spStr = searchParams?.toString() ?? "";
+    const sp = new URLSearchParams(spStr);
+    const fromUrl = readFilters(sp);
+    let genres = fromUrl.genres;
+    let advanced = fromUrl.advanced;
+    let hasAny = fromUrl.hasAny;
+    let fellBack = false;
+
+    if (!hasAny && spStr === "") {
+      const saved = typeof window !== "undefined" ? readSavedSearchPref() : null;
+      if (saved) {
+        genres = saved.genres ?? [];
+        advanced = {
+          q: saved.q,
+          actresses: saved.actresses ?? [],
+          series_list: saved.series_list ?? [],
+          directors: saved.directors ?? [],
+          makers: saved.makers ?? [],
+          labels: saved.labels ?? [],
+          ng_words: saved.ng_words ?? [],
+          date_from: saved.date_from,
+          date_to: saved.date_to,
+          sort: saved.sort,
+        };
+        hasAny =
+          genres.length > 0 ||
+          !!advanced.q ||
+          (advanced.actresses?.length ?? 0) > 0 ||
+          (advanced.series_list?.length ?? 0) > 0 ||
+          (advanced.directors?.length ?? 0) > 0 ||
+          (advanced.makers?.length ?? 0) > 0 ||
+          (advanced.labels?.length ?? 0) > 0 ||
+          (advanced.ng_words?.length ?? 0) > 0 ||
+          !!advanced.date_from ||
+          !!advanced.date_to ||
+          !!advanced.sort;
+        fellBack = hasAny;
+      }
+    }
+
     return {
       currentGenres: genres,
       currentAdvanced: advanced,
       currentSig: filterSignature(genres, advanced),
       hasAnyFilter: hasAny,
+      fellBackToSavedPref: fellBack,
     };
   }, [searchParams]);
 
@@ -258,6 +309,15 @@ export default function FeedClient() {
       saveSession(seed, idx, feedItems, res.next_cursor, filterSig);
     } catch (e) {
       console.error("fetchInitial failed", e);
+      // fetch が失敗したときに loading 表示のまま固まると、ユーザーから見ると
+      // 「黒画面のままスピナーすら無い (UI 構造的にはスピナーは出ているが)」
+      // 状態になり、何が起きているか分からない。フィルターありの fetch 失敗は
+      // 「結果が無い」と同じ意味で扱い、専用メッセージに落とす方が事故が少ない。
+      // (実運用ではここに来るのは API 落ち・ネットワーク断のみ。)
+      setItems([]);
+      setIsEmpty(true);
+      setLastFetchHadFilter(hadFilter);
+      nextCursorRef.current = null;
     } finally {
       isFetchingRef.current = false;
       setIsLoading(false);
@@ -290,12 +350,17 @@ export default function FeedClient() {
     filtersRef.current = { genres: currentGenres, advanced: currentAdvanced };
 
     // SavedFilterEnforcer がまだ saved pref を読んで URL を確定させていない間は
-    // fetch しない。ここで走らせてしまうと、例えばフィルター設定済みで
-    // 「他ページ -> /feed (URL にフィルター無し)」と戻ったときに、
-    // フィルター未適用のフィードを 1 回取りにいってしまい "違反作品が一瞬見える" ことになる。
-    // ready になった時点では currentSig が最新の URL を反映するので、
-    // そのタイミングで初期 fetch を走らせる。
-    if (enforceStatus === "pending") {
+    // 基本 fetch しない。フィルター未適用のフィードを 1 回取りに行って "違反作品が
+    // 一瞬見える" のを防ぐため。
+    //
+    // ただし、URL が空 + 保存済み pref がある (fellBackToSavedPref=true) ときは、
+    // 既にこの render で saved pref を currentGenres/currentAdvanced に積んでおり、
+    // enforce の結果を待つ必要は無い (待っても同じ条件で fetch するか、enforce が
+    // router.replace して URL が更新されたら currentSig が変わって再 effect で
+    // 改めて fetch が走るだけ)。むしろ enforce の async が認証ロード中等で長引いて
+    // pending のまま固まるとここで loading から永久に抜けられず黒画面が残るため、
+    // saved pref がある場合は enforce を待たずに即 fetch する方が安全。
+    if (enforceStatus === "pending" && !fellBackToSavedPref) {
       setIsLoading(true);
       return;
     }

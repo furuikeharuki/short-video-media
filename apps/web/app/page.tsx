@@ -6,8 +6,12 @@ import PullToRefresh from "@/components/home/PullToRefresh";
 import AdSlot from "@/components/ads/AdSlot";
 import { isAdZoneEnabled } from "@/lib/ads/config";
 
-export const dynamic = "force-dynamic";
-export const revalidate = 0;
+// 30 秒間の ISR。ホーム "/" は BottomNav の "ホーム" タブから連発で踏まれる導線で、
+// `force-dynamic` + `revalidate=0` だと毎回 API ラウンドトリップが入り
+// フィード → ホーム遷移の TTFB がそのまま体感ラグになっていた。
+// 30 秒なら新着 / ランキングの鮮度は十分担保しつつ、連続アクセス時には
+// プリレンダ済み HTML を即時返せる。
+export const revalidate = 30;
 
 // ホーム "/" の <title> は "AV Shorts" を明示する。
 // root layout には title.default = "AV Shorts" / template = "%s" が設定済みで

@@ -205,6 +205,37 @@ export function useFeedPlayback({ slug, title, isActive, videoSrc, boundElement 
   // なりうるので、cooldown 中は dispatch を抑制する。
   const lastStuckSignalRef = useRef<{ slug: string; at: number }>({ slug: "", at: 0 });
 
+  // pro-actress 用の seek deadline。grace 内に seeked が来なければ flag を落とす。
+  // 値は arm 時の slug をキャプチャするので閉路で OK。
+  const PRO_ACTRESS_SEEK_DEADLINE_MS = 2500;
+
+  // pro-actress minStart 用の seek (currentTime -> 5) が「飛行中」かどうか。
+  //
+  // 背景: handoff promote で claim した <video> 要素は registry 上 readiness=canplay
+  // (rs>=3) で渡ってくることが多いが、active 化時点で currentTime=0 のため
+  // attemptActiveAutoplay が pro-actress enforce で currentTime=0 -> 5 の seek を
+  // 撃つ。seek 先 (5 秒地点) のフレームがまだバッファに無いと、Chrome は seeking
+  // 直後 readyState を rs=1 (HAVE_METADATA) まで落とし、5 秒地点周辺のデータが
+  // 揃うまで rs を戻さない。これは仕様どおりの一時的な再バッファであり「stuck」
+  // ではないが、現状の Phase 1 watchdog (1500ms 経過 & playing 未観測 & paused)
+  // からは区別できず、誤って load() を撃って canplay 済みバイトを破棄する事故を
+  // 起こしていた。
+  //
+  // フラグの動き:
+  //   - 立てる: attemptActiveAutoplay で「pro-actress enforce before autoplay」
+  //     としての seek を撃った直後。recovery 経路の `target.currentTime = 5` でも
+  //     立てる。
+  //   - 落とす: 当該 <video> 上で `seeked` を 1 度観測 (= seek 完了)、または
+  //     playing を観測、または非 active 化 / userPause / slug 変更。
+  //   - watchdog 内ガード: in-flight の間は Phase 1 / Phase 2 を「stuck」とみなさず、
+  //     bail=pro-actress-seek として再 arm せずに次の seeked 待ちに委ねる。
+  //
+  // 「永遠に in-flight のまま seeked が来ない死 element」の保険として、
+  // PRO_ACTRESS_SEEK_DEADLINE_MS 経過したら自動的に flag を落とす。これにより
+  // 真の stuck (seek 先のバイトが永久に来ない) ケースは従来通り Phase 2 で救済可能。
+  const proActressSeekInFlightRef = useRef(false);
+  const proActressSeekDeadlineRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
   // active autoplay intent の保留状態。
   //
   // 「active 化したが videoRef.current がまだ null (= 要素が bind されていない)」
@@ -230,6 +261,35 @@ export function useFeedPlayback({ slug, title, isActive, videoSrc, boundElement 
     | { slug: string; videoSrc: string }
     | null
   >(null);
+
+  // pro-actress 用 minStart seek を「飛行中」マークする。watchdog はこのフラグを
+  // 見て、まだ seek 中の rs=1 を stuck 扱いしない。seeked / 非 active / userPause /
+  // unmount / deadline で確実に解除する。
+  const clearProActressSeekInFlight = useCallback(() => {
+    if (proActressSeekDeadlineRef.current != null) {
+      clearTimeout(proActressSeekDeadlineRef.current);
+      proActressSeekDeadlineRef.current = null;
+    }
+    proActressSeekInFlightRef.current = false;
+  }, []);
+  const markProActressSeekInFlight = useCallback(() => {
+    proActressSeekInFlightRef.current = true;
+    if (proActressSeekDeadlineRef.current != null) {
+      clearTimeout(proActressSeekDeadlineRef.current);
+    }
+    proActressSeekDeadlineRef.current = setTimeout(() => {
+      proActressSeekDeadlineRef.current = null;
+      // この grace を過ぎても seeked が来なければ真の stuck の可能性。
+      // フラグを落として watchdog の通常経路に委ねる。
+      proActressSeekInFlightRef.current = false;
+      if (isVideoTimingEnabled()) {
+        // eslint-disable-next-line no-console
+        console.debug(
+          `vt ${slug}: pro-actress seek in-flight cleared reason=deadline`,
+        );
+      }
+    }, PRO_ACTRESS_SEEK_DEADLINE_MS);
+  }, [slug]);
 
   // slug が変わったら lastPlaybackRef をリセット。同じ <video> 上で src が差し替わる force リトライのときだけ
   // 以前の位置を保持したいため、videoSrc 変化ではリセットしないことに注意。
@@ -645,6 +705,9 @@ export function useFeedPlayback({ slug, title, isActive, videoSrc, boundElement 
               `vt ${slug}: pro-actress enforce before autoplay currentTime=${video.currentTime.toFixed(2)} -> ${PRO_ACTRESS_HEAD_SKIP_SEC} reason=${reason} rs=${video.readyState}`,
             );
           }
+          // seek を撃つ前に in-flight flag を立てる。watchdog はこの flag を
+          // 見て「stuck」誤判定を抑える。seeked / inactive / unmount で解除される。
+          markProActressSeekInFlight();
           try { video.currentTime = PRO_ACTRESS_HEAD_SKIP_SEC; } catch { /* ignore */ }
           // seek が反映されない / play() 開始時点で 0 から再生 になるケースの保険として
           // 既存の seeked / canplay リトライ経路を起動しておく。enforceLowerBound() と
@@ -675,17 +738,27 @@ export function useFeedPlayback({ slug, title, isActive, videoSrc, boundElement 
       // promote 以外の reason ではこの状況は起きないため (active-change は新規
       // <video> マウントで src 直設定なので React が load() を発火) promote だけ
       // 対象にする。
-      // recovery 経路では networkState が NO_SOURCE(3) / IDLE(1) かつ rs<3 のときも
-      // ロードが進んでいないシグナルなので load() を撃ち直す。recoverActiveAfterForceResolve
-      // 直後で既に load() を呼んでいても、Range request のキック失敗で stuck している
-      // ケースに対する保険になる (idempotent: 既にロード中なら no-op に近い)。
+      // recovery 経路では networkState が NO_SOURCE(3) かつ rs=0 のときだけ load() を
+      // 撃ち直す。それ以外の「rs>=HAVE_METADATA で networkState=IDLE/LOADING」状態は、
+      // recoverActiveAfterForceResolve が直前に load() を呼んで loadedmetadata まで
+      // 進んだ「成功直後」のシグナルである。そこで再 load() を呼ぶと:
+      //   - rs を 0 にリセット
+      //   - もう一度 loadstart -> metadata まで戻る
+      //   - 直前の play() promise を AbortError で reject
+      // という net negative になり、観測ログでも実際に backward 戻りで「recovery
+      // force-load -> rs=0 -> もう一度 metadata+canplay 待ち -> +4s 再生開始」が
+      // 起きていた。
+      //
+      // promote 経路は従来通り「rs=0 (= prefetch buffer 経由でも metadata 未到達)」
+      // のときのみ load() を撃つ。canplay 済み (rs>=3) で promote されたケースは
+      // 何もしない (Range request は元の prefetch <video> がもう完了済み)。
       const needForceLoad =
         (reason === "promote" || reason === "recovery") &&
         !activeAutoplayRecoveredRef.current &&
-        (video.readyState === 0 ||
-          (reason === "recovery" &&
-            video.readyState < 3 &&
-            (video.networkState === 3 || video.networkState === 1)));
+        video.readyState === 0 &&
+        (reason === "promote" ||
+          video.networkState === 0 ||
+          video.networkState === 3);
       if (needForceLoad) {
         if (isVideoTimingEnabled()) {
           // eslint-disable-next-line no-console
@@ -787,6 +860,10 @@ export function useFeedPlayback({ slug, title, isActive, videoSrc, boundElement 
           bail = "playing-effective";
         }
         else if (activeAutoplayRecoveredRef.current) bail = "already-recovered";
+        // pro-actress 用 0->5 seek 中は rs が一時的に 1 に落ちて当然なので
+        // stuck 判定しない。seeked 受領で flag が落ちた後 / deadline 後の
+        // 後続 watchdog (再 arm されないので実質次の active session) に委ねる。
+        else if (proActressSeekInFlightRef.current) bail = "pro-actress-seek";
         if (bail) {
           if (isVideoTimingEnabled()) {
             // eslint-disable-next-line no-console
@@ -828,6 +905,7 @@ export function useFeedPlayback({ slug, title, isActive, videoSrc, boundElement 
           const dur = target.duration;
           const tooShort = Number.isFinite(dur) && dur > 0 && dur < PRO_ACTRESS_MIN_DURATION_SEC;
           if (!tooShort) {
+            markProActressSeekInFlight();
             try { target.currentTime = PRO_ACTRESS_HEAD_SKIP_SEC; } catch { /* ignore */ }
           }
         }
@@ -890,6 +968,10 @@ export function useFeedPlayback({ slug, title, isActive, videoSrc, boundElement 
         }
         else if (activeAutoplayStuckSignaledRef.current) bail = "already-signaled";
         else if (liveVideo.readyState >= 3 && !liveVideo.paused) bail = `rs-ok=${liveVideo.readyState}`;
+        // Phase 1 と同様、seek 飛行中は stuck 扱いせず Phase 2 dispatch を抑止。
+        // 真の死 element なら deadline 後に in-flight=false となり、次の active
+        // session の watchdog で救済される。
+        else if (proActressSeekInFlightRef.current) bail = "pro-actress-seek";
         if (bail) {
           if (isVideoTimingEnabled()) {
             // eslint-disable-next-line no-console
@@ -1017,7 +1099,7 @@ export function useFeedPlayback({ slug, title, isActive, videoSrc, boundElement 
         },
       );
     },
-    [playVideo, slug, startProgressLoop],
+    [playVideo, slug, startProgressLoop, markProActressSeekInFlight],
   );
 
   // force re-resolve 完了後の active 要素救済。
@@ -1354,6 +1436,11 @@ export function useFeedPlayback({ slug, title, isActive, videoSrc, boundElement 
       }
       // 保留 autoplay intent もアンマウントで破棄。
       pendingActiveAutoplayRef.current = null;
+      if (proActressSeekDeadlineRef.current != null) {
+        clearTimeout(proActressSeekDeadlineRef.current);
+        proActressSeekDeadlineRef.current = null;
+      }
+      proActressSeekInFlightRef.current = false;
     };
   }, []);
 
@@ -1407,6 +1494,8 @@ export function useFeedPlayback({ slug, title, isActive, videoSrc, boundElement 
     // attemptId を進めて、既にクリアした timer が万一 setTimeout キューに残って
     // いた場合でも fire 時に stale-attempt として bail させる。
     activeAutoplayAttemptIdRef.current += 1;
+    // 非 active になったので pro-actress seek 飛行も終了扱い。
+    clearProActressSeekInFlight();
     // active 化時の保留 autoplay intent も非アクティブで破棄する。
     pendingActiveAutoplayRef.current = null;
     userPausedRef.current = false;
@@ -1425,7 +1514,7 @@ export function useFeedPlayback({ slug, title, isActive, videoSrc, boundElement 
     setSpinnerVisible(false);
     setFastBadge(false);
     window.dispatchEvent(new CustomEvent("video-progress", { detail: { progress: 0 } }));
-  }, [isActive, setShimmerVisible, setSpinnerVisible, setFastBadge, stopProgressLoop]);
+  }, [isActive, setShimmerVisible, setSpinnerVisible, setFastBadge, stopProgressLoop, clearProActressSeekInFlight]);
 
   // props.isProActress を ref に同期。playVideo (useCallback) から最新値を参照できるようにする。
   // この同期は他の effect より先に走らせたいので、useLayoutEffect を使い、React 18 の
@@ -1707,6 +1796,9 @@ export function useFeedPlayback({ slug, title, isActive, videoSrc, boundElement 
       }, PLAY_RETRY_FALLBACK_MS);
     };
     const handleSeeked = () => {
+      // pro-actress 0->5 seek が完了したので in-flight flag を落とす。
+      // これで Phase 1 / Phase 2 watchdog は通常経路に戻る。
+      clearProActressSeekInFlight();
       enforceLowerBound();
       tryConsumePlayRetry("seeked");
     };
@@ -1751,7 +1843,7 @@ export function useFeedPlayback({ slug, title, isActive, videoSrc, boundElement 
         proActressPlayFallbackTimerRef.current = null;
       }
     };
-  }, [slug, videoSrc, isProActress, playVideo, startProgressLoop]);
+  }, [slug, videoSrc, isProActress, playVideo, startProgressLoop, clearProActressSeekInFlight]);
 
   // 自動再生のセーフティネット: active な要素が canplay / loadeddata / loadedmetadata
   // に到達した時点でまだ paused かつ user-paused でないなら、attemptActiveAutoplay を
@@ -1991,12 +2083,13 @@ export function useFeedPlayback({ slug, title, isActive, videoSrc, boundElement 
         clearTimeout(activeAutoplayStuckTimerRef.current);
         activeAutoplayStuckTimerRef.current = null;
       }
+      clearProActressSeekInFlight();
       video.pause();
       isPlayingRef.current = false;
       stopProgressLoop();
       showOverlay("pause");
     }
-  }, [playVideo, showOverlay, stopProgressLoop]);
+  }, [playVideo, showOverlay, stopProgressLoop, clearProActressSeekInFlight]);
 
   const handleToggleMute = useCallback((e: React.MouseEvent | React.TouchEvent) => {
     e.stopPropagation();
@@ -2052,12 +2145,13 @@ export function useFeedPlayback({ slug, title, isActive, videoSrc, boundElement 
         clearTimeout(activeAutoplayStuckTimerRef.current);
         activeAutoplayStuckTimerRef.current = null;
       }
+      clearProActressSeekInFlight();
       video.pause();
       isPlayingRef.current = false;
       stopProgressLoop();
     }
     onOpenModal(slug);
-  }, [slug, onOpenModal, stopProgressLoop]);
+  }, [slug, onOpenModal, stopProgressLoop, clearProActressSeekInFlight]);
 
   const startLongPress = useCallback(() => {
     isLongPressRef.current = false;

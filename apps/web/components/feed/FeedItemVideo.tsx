@@ -20,6 +20,13 @@ interface Props {
   onLoadedData: () => void;
   onCanPlay: () => void;
   onSeeked: () => void;
+  /**
+   * `playing` event handler。再生が実際に進み始めた瞬間 (`paused=false` + フレーム前進)
+   * に発火する。canplay や loadeddata が握りつぶされたまま autoplay が resolved する
+   * 経路 (promote 後の seek で rs が一旦 1 に落ちて、その後 play() promise だけが
+   * resolve するケース) でも、ここで spinner / thumbnail-cover を確実に外すために使う。
+   */
+  onPlaying?: () => void;
   onError?: (e: Event) => void;
   onTouchStart: (e: React.TouchEvent) => void;
   onTouchEnd: (e: React.TouchEvent) => void;
@@ -59,6 +66,7 @@ export default function FeedItemVideo({
   onLoadedData,
   onCanPlay,
   onSeeked,
+  onPlaying,
   onError,
   onTouchStart,
   onTouchEnd,
@@ -124,6 +132,7 @@ export default function FeedItemVideo({
     const ld = () => onLoadedData();
     const cp = () => onCanPlay();
     const sk = () => onSeeked();
+    const pl = () => onPlaying?.();
     const er = (e: Event) => onError?.(e);
     const cm = (e: Event) => e.preventDefault();
 
@@ -132,6 +141,7 @@ export default function FeedItemVideo({
     promotedElement.addEventListener("loadeddata", ld);
     promotedElement.addEventListener("canplay", cp);
     promotedElement.addEventListener("seeked", sk);
+    promotedElement.addEventListener("playing", pl);
     promotedElement.addEventListener("error", er);
     promotedElement.addEventListener("contextmenu", cm);
 
@@ -152,6 +162,17 @@ export default function FeedItemVideo({
     } else if (promotedElement.readyState >= 1) {
       onLoadedMetadata();
     }
+    // adopt 時点で既に再生中 (promote 元の prefetch buffer が play() させていた
+    // ケース、または rapid swipe 後の rebind ケース) なら、playing イベントは
+    // この listener では二度と発火しないので onPlaying を同期で叩いて UI ready を
+    // 立てる。canplay の synthetic 発火は readyState ベースで既に走っているが、
+    // FeedItem 側の videoReady reset useEffect (deps: [item.slug, videoSrc]) が
+    // useLayoutEffect の後に走って `setVideoReadyState(false)` で上書きする経路が
+    // 存在し、その後 canplay event が再発火しないと thumbnail-cover が残る。
+    // onPlaying を経由すれば次の playing event でも復帰できる。
+    if (!promotedElement.paused && !promotedElement.ended) {
+      onPlaying?.();
+    }
 
     return () => {
       promotedElement.removeEventListener("loadstart", ls);
@@ -159,6 +180,7 @@ export default function FeedItemVideo({
       promotedElement.removeEventListener("loadeddata", ld);
       promotedElement.removeEventListener("canplay", cp);
       promotedElement.removeEventListener("seeked", sk);
+      promotedElement.removeEventListener("playing", pl);
       promotedElement.removeEventListener("error", er);
       promotedElement.removeEventListener("contextmenu", cm);
       // host からのデタッチと完全破棄。
@@ -191,6 +213,7 @@ export default function FeedItemVideo({
     onLoadedData,
     onCanPlay,
     onSeeked,
+    onPlaying,
     onError,
     videoRef,
   ]);
@@ -279,6 +302,7 @@ export default function FeedItemVideo({
           onLoadedData={onLoadedData}
           onCanPlay={onCanPlay}
           onSeeked={onSeeked}
+          onPlaying={onPlaying}
           onError={(e) => onError?.(e.nativeEvent)}
           onContextMenu={(e) => e.preventDefault()}
           controlsList="nodownload noremoteplayback nofullscreen noplaybackrate"

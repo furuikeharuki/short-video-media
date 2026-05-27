@@ -315,11 +315,33 @@ export function useFeedPlayback({ slug, title, isActive, videoSrc, boundElement 
           !!video &&
           lower > 0 &&
           video.currentTime + 0.05 >= lower;
+        // 既に再生に乗っている (rs>=HAVE_FUTURE_DATA かつ paused=false、または
+        // playing イベント観測済みで paused=false) ケースでは、networkState=2 は
+        // ただの先読みであって rebuffer ではない。ここで extend を続けると
+        // in-flight flag が再生中もずっと立ったままになり、後段の watchdog や
+        // recovery 経路から見て紛らわしいので、明示的に flag を落とす。
+        const effectivelyPlaying =
+          !!video &&
+          !video.paused &&
+          (video.readyState >= 3 || activePlayingObservedRef.current);
+        if (effectivelyPlaying) {
+          proActressSeekInFlightRef.current = false;
+          if (isVideoTimingEnabled()) {
+            // eslint-disable-next-line no-console
+            console.debug(
+              `vt ${slug}: pro-actress seek in-flight cleared reason=playing-effective rs=${video!.readyState} networkState=${video!.networkState} currentTime=${video!.currentTime.toFixed(2)}`,
+            );
+          }
+          return;
+        }
+        // 真の rebuffer (rs<HAVE_FUTURE_DATA で minStart 到達済み・error なし)
+        // に限り deadline を延長する。rs>=3 は除外して再生中の churn を防ぐ。
         const stillLoading =
           !!video &&
           video.networkState === 2 &&
           video.error === null &&
-          video.readyState >= 1;
+          video.readyState >= 1 &&
+          video.readyState < 3;
         if (
           isActiveRef.current &&
           !userPausedRef.current &&
@@ -2312,6 +2334,18 @@ export function useFeedPlayback({ slug, title, isActive, videoSrc, boundElement 
       hasPlayedRef.current = true;
       // playing 観測フラグ。watchdog はこれを真の "再生開始した" として扱う。
       activePlayingObservedRef.current = true;
+      // 再生に乗ったタイミングで pro-actress seek in-flight flag を念のため落とす。
+      // 通常は seeked で落ちるが、recovery 経路 (target.currentTime=5) などで
+      // seeked が観測されないケースもあるため、playing でも保険的に解除する。
+      if (proActressSeekInFlightRef.current) {
+        if (isVideoTimingEnabled()) {
+          // eslint-disable-next-line no-console
+          console.debug(
+            `vt ${slugTag}: pro-actress seek in-flight cleared reason=playing`,
+          );
+        }
+        clearProActressSeekInFlight();
+      }
       if (isVideoTimingEnabled()) {
         // eslint-disable-next-line no-console
         console.debug(`vt ${slugTag}: spinner clear (playing on active el)`);
@@ -2385,7 +2419,7 @@ export function useFeedPlayback({ slug, title, isActive, videoSrc, boundElement 
       video.removeEventListener("canplaythrough", handleCanPlayThrough);
       video.removeEventListener("stalled", handleStalled);
     };
-  }, [isActive, setSpinnerVisible, slug]);
+  }, [isActive, setSpinnerVisible, slug, clearProActressSeekInFlight]);
 
   // フォールバック: 念のため IntersectionObserver でも監視する。
   // (端末向きを変えたときや SSR ハイドレート直後など、isActive prop の同期前に発火するケースに備える)

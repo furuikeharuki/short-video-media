@@ -320,7 +320,7 @@ export function usePrefetchVideoBytes(
       vtPrefetchLog(
         `active not-ready slug=${activeItem.slug} readiness=${activeLabel} index=${currentIndex}`,
       );
-      // 緊急ウォームアップ。
+      // 緊急ウォームアップ (resolve cache only)。
       //
       // 不変条件: 「active が ready で無い瞬間」は、必ず active の resolve が
       // 走っているか、もしくは即時に kick する。useResolvedVideoSrc は FeedItem の
@@ -332,11 +332,19 @@ export function usePrefetchVideoBytes(
       //
       // priority="high" 指定で、warm の "low" / 通常 prefetch の "normal" を
       // 飛び越えて global slot を確保する (resolve-mp4 側の bypass あり)。
+      //
+      // 注: ここで warm されるのは「resolveMp4Url の API レスポンス」だけで、
+      // 動画バイトの先頭バッファは含まれない。active <video> 要素の Range request
+      // が立ち上がるのは FeedItem の <video> マウント + load() に依存する。
+      // 「active 要素は src 設定済みなのに rs=0 / networkState=0 のまま」固まる
+      // ケースは useFeedPlayback の Phase 0 watchdog (load-kick) が hard-reset
+      // で救済する。ここで重複して load() を撃つことはしない (videoRef を
+      // 持たないし、ダブル kick は AbortError race を生む)。
       const nextItem =
         currentIndex + 1 < items.length ? items[currentIndex + 1] : null;
       const nextLabel = nextItem?.slug ? registryLabel(nextItem.slug) : "oob";
       vtPrefetchLog(
-        `active emergency-prefetch slug=${activeItem.slug} current=${activeLabel} next=${nextLabel}`,
+        `active emergency-current-resolve-warm slug=${activeItem.slug} current=${activeLabel} next=${nextLabel}`,
       );
       // active 自身は fire-and-forget で resolveCache を温めるだけ。
       // onReuse 経路は不要 (active 側の useResolvedVideoSrc が共有する)。

@@ -1535,8 +1535,21 @@ export function useFeedPlayback({ slug, title, isActive, videoSrc, boundElement 
         if (isVideoTimingEnabled()) {
           // eslint-disable-next-line no-console
           console.debug(
-            `vt ${slug}: active recovery abort reason=no-element`,
+            `vt ${slug}: active recovery abort reason=no-element -> force-fallback`,
           );
+        }
+        // host-only (canPromote=true で pool entry が canplay 未到達) のまま
+        // force-resolve が走った場合、ここで諦めると videoRef は永久に null のまま
+        // となり stuck が解消されない。FeedItem に force-fallback を要求して
+        // JSX <video> を強制マウントさせる経路に逃がす。
+        try {
+          window.dispatchEvent(
+            new CustomEvent("video-force-fallback", {
+              detail: { slug, reason: "recovery-no-element" },
+            }),
+          );
+        } catch {
+          /* ignore */
         }
         return;
       }

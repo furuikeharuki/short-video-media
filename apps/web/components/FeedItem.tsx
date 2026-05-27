@@ -82,34 +82,76 @@ export default function FeedItem({ item, isActive, isAdjacent = false, isFirst, 
   //    canPromote 再評価による host→JSX <video> フォールバック描画をトリガーする。
   //  - activeReadyRef: 通常 active <video> が canplay/loadeddata 済みかどうか。
   //     true になった後は swap せず pending を `active-playing` で諦める。
+  //  - activePlayingRef: 通常 active <video> が playing イベントを発火したかどうか。
+  //     true (= 実際にフレームが進んでいる) のときに限り、late rebind を抑止する。
+  //     canplay/loadeddata 単独 (activeReadyRef) では「再生可能」止まりで実際の
+  //     playback が waiting/stalled で止まっている可能性があるため、pool に
+  //     canplay が現れたなら rebind した方が体感の再生開始が速い。
   const pendingLoggedRef = useRef<string | null>(null);
   const [pendingAbandonedSlug, setPendingAbandonedSlug] =
     useState<string | null>(null);
   const activeReadyRef = useRef(false);
+  const activePlayingRef = useRef(false);
   // `byte-prefetch promote skipped reason=...` を slug ごとに 1 度だけ出すための ref。
   // 同 effect サイクルで複数回 tryClaim が走っても多重ログを避ける。slug が
   // 変わったら下の slug-change effect でクリアする。
   const claimMissLoggedRef = useRef<string | null>(null);
+  // handoff registry の状態変化を render フェーズに伝えるためのリビジョン。
+  // subscribe コールバックでこの値をインクリメントすると React が再レンダーし、
+  // canPromote が再評価される。これにより:
+  //   - active 化したあと遅れて pool entry が canplay に到達したケースでも、
+  //     render 時点で hasPromotableElement が true となり expectingPromotion 経路で
+  //     host へ rebind できる (JSX <video> が rs=0 で固まっているのを救う)。
+  //   - 元々 active 化のタイミングで一度 stale-claim していた slug でも、後から
+  //     canplay 到達した pool entry を late claim できる (下記 tryClaim の canplay
+  //     経路は pendingAbandonedSlug ガードを通さない)。
+  const [handoffRevision, setHandoffRevision] = useState(0);
   // active へ移行した時点で promotable な隠し要素があれば即時 claim する。
   // hasPromotableElement は registry を sync に読むので render フェーズで判定でき、
   // expectingPromotion=true を渡せば JSX <video> の一時マウントを完全に回避できる。
   // canplay 未到達でも pending entry があれば JSX <video> を作らず host だけを
   // 描画し、subscribe で canplay 到達を待つ (pending promote)。
+  //
+  // canplay 到達済みの pool entry は pendingAbandonedSlug 状態に関係なく claim 対象。
+  // 「最初の active commit で一瞬 claim に失敗した slug」でも、後から pool に
+  // canplay が現れたなら rebind したい。pendingAbandonedSlug は pending 経路
+  // (canplay 未到達の hidden element を待つ subscribe ループ) を畳むためだけに使う。
   const canPromote =
     isActive &&
     !!videoSrc &&
-    pendingAbandonedSlug !== item.slug &&
     (hasPromotableElement(item.slug, videoSrc) ||
-      hasPendingElement(item.slug, videoSrc));
+      (pendingAbandonedSlug !== item.slug &&
+        hasPendingElement(item.slug, videoSrc)));
+  // handoffRevision に依存させて未使用警告を避けつつ、render を registry 変化に
+  // 追従させる。React は state 変化があれば自動的に再レンダーするので handoffRevision
+  // を直接読む必要は無いが、明示的に参照して将来の dead-code elimination からも守る。
+  void handoffRevision;
   const tryClaim = useCallback(() => {
     if (!isActive) return false;
     if (!videoSrc) return false;
     if (promotedSlugRef.current === item.slug) return true;
-    if (pendingAbandonedSlug === item.slug) return false;
-    // canplay 済み → 即 claim。
+    // canplay 済み → 即 claim (late rebind 含む)。
+    //
+    // pendingAbandonedSlug ガードはここでは適用しない。理由:
+    //   - 「初回 active commit の瞬間に registry エントリが流動的で claim に失敗 →
+    //     setPendingAbandonedSlug(slug) → 以降 canplay pool entry が現れても
+    //     tryClaim が早期 return して JSX <video> が rs=0 のまま」というデッドロックを
+    //     防ぐため。後追いでも canplay pool entry が見えたなら rebind する。
+    //   - ただし「現要素が実際に再生中 (playing イベント観測済み)」なら disrupt しない。
+    //     activePlayingRef は playing イベントで true、isActive=false / slug 変更で false。
     if (hasPromotableElement(item.slug, videoSrc)) {
+      if (activePlayingRef.current) {
+        if (isVideoTimingEnabled()) {
+          // eslint-disable-next-line no-console
+          console.debug(
+            `vt byte-prefetch promote skipped slug=${item.slug} reason=already-playing`,
+          );
+        }
+        return false;
+      }
       const readiness = getReadiness(item.slug) ?? "canplay";
       const wasPending = pendingLoggedRef.current === item.slug;
+      const isLateRebind = pendingAbandonedSlug === item.slug;
       const el = claimForFeed(item.slug, videoSrc);
       if (!el) {
         // render フェーズで sync 読みした hasPromotableElement と、layout effect 内
@@ -123,6 +165,11 @@ export default function FeedItem({ item, isActive, isAdjacent = false, isFirst, 
         return false;
       }
       promotedSlugRef.current = item.slug;
+      // late rebind に成功したのでガードを解除して、後段 (effect 再走など) で
+      // canPromote / 再 claim 評価が正しく動くようにする。
+      if (isLateRebind) {
+        setPendingAbandonedSlug((prev) => (prev === item.slug ? null : prev));
+      }
       // promote 完了 → pending pin を解除。entry は claimForFeed で registry
       // から消えているので unpinSlug は実質 no-op だが、念のため呼ぶ。
       if (wasPending) unpinSlug(item.slug);
@@ -133,7 +180,7 @@ export default function FeedItem({ item, isActive, isAdjacent = false, isFirst, 
         console.debug(
           `vt byte-prefetch promote slug=${item.slug} readiness=${readiness}${
             wasPending ? " pending=true" : ""
-          }`,
+          }${isLateRebind ? " late=true" : ""}`,
         );
         if (wasPending) {
           // eslint-disable-next-line no-console
@@ -141,9 +188,22 @@ export default function FeedItem({ item, isActive, isAdjacent = false, isFirst, 
             `vt handoff pending promote slug=${item.slug} readiness=${readiness}`,
           );
         }
+        if (isLateRebind) {
+          // 後追いで pool canplay entry を掴んで rebind したケースを明示。
+          // 「active が rs=0 で固まっている間に隠し <video> が canplay 到達」という
+          // 観測しづらいレースの追跡用。
+          // eslint-disable-next-line no-console
+          console.debug(
+            `vt handoff late-rebind slug=${item.slug} readiness=${readiness}`,
+          );
+        }
       }
       return true;
     }
+    // 以降の pending / stale 経路は pendingAbandonedSlug のループを止めるため依然
+    // ガードする (active で一度 abandon した slug を毎回 pending pin し直す必要は
+    // 無い)。
+    if (pendingAbandonedSlug === item.slug) return false;
     // canplay 未到達でも pending entry があれば、subscribe で待つ。
     if (hasPendingElement(item.slug, videoSrc)) {
       // 通常 active <video> が既に再生開始可能なら swap しない方が安全。
@@ -231,15 +291,25 @@ export default function FeedItem({ item, isActive, isAdjacent = false, isFirst, 
   useLayoutEffect(() => {
     tryClaim();
   }, [tryClaim]);
-  // canplay 到達が active 化より遅れる場合 (resolve 中 / pending 中) に備え、
-  // registry の状態変化を購読して claim を再試行する。
+  // canplay 到達が active 化より遅れる場合 (resolve 中 / pending 中 / 初回 commit で
+  // src 不一致だった等) に備え、registry の状態変化を購読して claim を再試行する。
+  //
+  // 加えて handoffRevision を bump して再 render させる。これにより render-phase の
+  // canPromote 評価が registry の最新状態を反映し、JSX <video> が rs=0 で固まっている
+  // 間に隠し element が canplay 到達したケースで expectingPromotion=true 経路に切り
+  // 替えられる (= JSX <video> をアンマウントして host の promoted 要素に rebind)。
+  //
   // promote 済み or 非 active なら no-op。
   useEffect(() => {
     if (!isActive) return;
     if (promotedSlugRef.current === item.slug) return;
     if (!videoSrc) return;
     const unsub = subscribeVideoHandoff(() => {
+      // tryClaim を即時呼んで canplay/pending を取り込み、合わせて render を
+      // 再評価させる。late rebind の対象になった slug は activePlayingRef が立つまで
+      // claim 可能なので、毎回 revision を bump する。
       tryClaim();
+      setHandoffRevision((n) => (n + 1) | 0);
     });
     return unsub;
   }, [isActive, videoSrc, item.slug, tryClaim]);
@@ -268,12 +338,20 @@ export default function FeedItem({ item, isActive, isAdjacent = false, isFirst, 
     }
     setPendingAbandonedSlug((prev) => (prev === item.slug ? prev : null));
     activeReadyRef.current = false;
+    activePlayingRef.current = false;
   }, [item.slug]);
   // アンマウント / 非 active 化で残った pending pin を解除する。
   // pinned entry を解放しないと、別ユーザー操作で同 slug が active になるまで
   // pool に居座り続けて cap を圧迫する。
+  // 加えて、playing 観測フラグも非 active で巻き戻す (戻りスワイプで再び active
+  // 化した瞬間は「まだ実体は再生してない」状態として late rebind 候補に含める)。
   useEffect(() => {
     if (isActive) return;
+    activePlayingRef.current = false;
+    activeReadyRef.current = false;
+    // 非 active になったら abandoned flag も解除する。次に再び active になった
+    // ときは新しい session として canPromote / tryClaim の評価をゼロから走らせる。
+    setPendingAbandonedSlug((prev) => (prev === item.slug ? null : prev));
     if (pendingLoggedRef.current === item.slug) {
       unpinSlug(item.slug);
       if (isVideoTimingEnabled()) {
@@ -599,7 +677,12 @@ export default function FeedItem({ item, isActive, isAdjacent = false, isFirst, 
     const video = videoRef.current;
     if (!video) return;
 
-    const onPlaying = () => signalPlaying();
+    const onPlaying = () => {
+      // active <video> が「実際にフレームを進めている」ことの確定シグナル。
+      // late rebind (tryClaim の canplay 経路) はこのフラグを見て disrupt を抑止する。
+      activePlayingRef.current = true;
+      signalPlaying();
+    };
     const onWaiting = () => signalUnstable("waiting");
     const onStalled = () => signalUnstable("stalled");
     const onError = () => signalUnstable("error");
@@ -612,6 +695,7 @@ export default function FeedItem({ item, isActive, isAdjacent = false, isFirst, 
     // active 化時点で既に playing 状態 (promoted で readyState>=3 かつ paused=false)
     // なら、playing イベントは発火しない可能性があるため明示的にトリガする。
     if (!video.paused && !video.ended && video.readyState >= 3) {
+      activePlayingRef.current = true;
       signalPlaying();
     }
 

@@ -502,10 +502,13 @@ export default function FeedClient() {
     void fetchMore();
   }, [fetchMore]);
 
-  if (isEmpty) {
+  // 詳細検索 (q / actresses / genres / makers / ...) が効いている状態で
+  // 初期ロードの結果が 0 件だったときだけ、専用の「条件に合う動画がみつかりません」を出す。
+  // フィルター無しで空のときは従来通りスピナーのままにして、専用文言は出さない。
+  if (isEmpty && hasAnyFilter) {
     return (
       <div className="feed-empty">
-        <p className="feed-empty-text">条件に合う動画が見つかりません</p>
+        <p className="feed-empty-text">条件に合う動画がみつかりません</p>
       </div>
     );
   }

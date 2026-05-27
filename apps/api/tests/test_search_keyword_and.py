@@ -8,7 +8,10 @@ from __future__ import annotations
 import pytest
 from sqlalchemy.dialects import postgresql
 
+from sqlalchemy import and_
+
 from app.repositories.search_repository import (
+    _build_advanced_conditions,
     _build_keyword_where,
     _split_keyword_tokens,
 )
@@ -102,4 +105,61 @@ def test_three_tokens_produce_three_and_groups() -> None:
     assert "%beta%" in sql
     assert "%gamma%" in sql
     # AND が 2 個以上 (3 グループを連結するための AND が最低 2 つ)
+    assert sql.count(" AND ") >= 2
+
+
+# ---------------- q × その他フィルター ----------------
+
+
+def test_advanced_conditions_q_and_genres_and_actresses_are_anded() -> None:
+    """詳細検索: q (1 語) + genres + actresses が AND で結合されることを確認する。
+
+    保存済み詳細条件 (フリーワード含む) がタグ遷移や検索アイコン経路でも AND で
+    効くことの保証。条件は `where(*conditions)` で AND されるので、
+    `_build_advanced_conditions` の返す list を `and_(*conds)` で連結して SQL を見る。
+    """
+    conds = _build_advanced_conditions(
+        q="alpha",
+        genres=["G1"],
+        actresses=["A1"],
+        series_list=[],
+        directors=[],
+        makers=[],
+        labels=[],
+        date_from=None,
+        date_to=None,
+        ng_words=[],
+    )
+    sql = _compile(and_(*conds))
+    # q トークン
+    assert "%alpha%" in sql
+    # ジャンル / 女優のサブクエリ (名前で IN される)
+    assert "G1" in sql
+    assert "A1" in sql
+    # 少なくとも 3 ブロックを連結する 2 つ以上の AND がある
+    assert sql.count(" AND ") >= 2
+
+
+def test_advanced_conditions_multi_token_q_with_genres_all_anded() -> None:
+    """`q="alpha beta"` (AND 2 トークン) + genres が全部 AND される。
+
+    q 内部の AND と q ↔ 詳細フィルター間の AND が両立すること。
+    """
+    conds = _build_advanced_conditions(
+        q="alpha beta",
+        genres=["G1"],
+        actresses=[],
+        series_list=[],
+        directors=[],
+        makers=[],
+        labels=[],
+        date_from=None,
+        date_to=None,
+        ng_words=[],
+    )
+    sql = _compile(and_(*conds))
+    assert "%alpha%" in sql
+    assert "%beta%" in sql
+    assert "G1" in sql
+    # q 内 AND (alpha と beta) + q ↔ genres 間 AND で AND が複数登場する
     assert sql.count(" AND ") >= 2

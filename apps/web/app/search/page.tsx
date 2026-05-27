@@ -177,12 +177,12 @@ export default async function SearchPage({ searchParams }: Props) {
       date_to: dateTo || undefined,
       sort,
     };
-    // サブヘッダーラベル: 文脈クエリ (q/genre/exact) があればそれを優先表示、
-    // 無ければ代表チップを 1 つラベル化する。
+    // サブヘッダーラベル: タグ文脈 (genre/director/maker/label/series) を q より優先表示。
+    // 保存済み詳細検索の q が AND 注入されていてもラベルは "今押したタグ" を見せるため。
+    // タグ文脈が無いケースでのみ q をラベルにする (検索アイコンからの明示検索)。
+    // 何も無ければ代表チップを 1 つラベル化する。
     let headerLabel: string;
-    if (query) {
-      headerLabel = `「${query}」`;
-    } else if (genreTag) {
+    if (genreTag) {
       headerLabel = `#${genreTag}`;
     } else if (directorName) {
       headerLabel = `監督「${directorName}」`;
@@ -192,6 +192,8 @@ export default async function SearchPage({ searchParams }: Props) {
       headerLabel = `レーベル「${labelName}」`;
     } else if (seriesName) {
       headerLabel = `シリーズ「${seriesName}」`;
+    } else if (query) {
+      headerLabel = `「${query}」`;
     } else {
       let tip = "詳細検索";
       if (mergedGenres.length) tip = `#${mergedGenres[0]}`;

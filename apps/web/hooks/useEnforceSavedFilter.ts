@@ -85,11 +85,13 @@ function isPrefEmpty(p: StoredPref | null): boolean {
   );
 }
 
-/** URL に「advanced 系の値」が乗っているか。 */
+/** URL に「詳細検索系の絞り込み値」(配列系 / date / sort) が乗っているか。
+ *  q は意図的に含めない: 検索アイコンからの `/search?q=foo` でも保存済み詳細条件を
+ *  AND 注入したいので、q が乗っているだけでは「URL は完成済み」とは見なさない。
+ */
 function hasAdvancedInUrl(sp: URLSearchParams): boolean {
   const has = (k: string) => sp.getAll(k).some((v) => v.trim() !== "");
   return (
-    (sp.get("q") ?? "").trim() !== "" ||
     has("genres") ||
     has("actresses") ||
     has("series_list") ||
@@ -103,50 +105,55 @@ function hasAdvancedInUrl(sp: URLSearchParams): boolean {
   );
 }
 
-/** URL に文脈タグ (genre / director / maker / label / series) が乗っているか。
- *  ジャンルチップ等のタップで遷移したときは、ユーザーの "今の意図" がそのタグなので、
- *  保存済みフリーワード (q) を上書き注入してサブヘッダーや結果を汚染しないようにする。 */
-function hasTagContextInUrl(sp: URLSearchParams): boolean {
-  return (
-    (sp.get("genre") ?? "").trim() !== "" ||
-    (sp.get("director") ?? "").trim() !== "" ||
-    (sp.get("maker") ?? "").trim() !== "" ||
-    (sp.get("label") ?? "").trim() !== "" ||
-    (sp.get("series") ?? "").trim() !== ""
-  );
-}
-
-/** stored pref + 既存 URL params を合成して新しい URLSearchParams を作る。 */
+/** stored pref + 既存 URL params を合成して新しい URLSearchParams を作る。
+ *
+ *  - q: URL に q が既にあれば (検索アイコンからの検索) URL を尊重しつつ
+ *       保存済み q とは AND になるが、URL に乗せる q は 1 つだけなので
+ *       URL の q を維持する (保存済み q は他の保存済み条件と一緒に
+ *       上乗せされた配列条件で AND 効果が出る前提)。
+ *       URL に q が無ければ保存済み q を注入する。
+ *       タグ文脈がある場合でも q は注入する: 表示ラベルは page.tsx 側で
+ *       タグ文脈を優先するので、注入された q は検索条件にのみ効く。
+ *  - 配列系 (genres / actresses / ...): URL に既にそのキーがあれば
+ *       URL を尊重して上書きしない (非破壊)。URL がそのキーを持たない
+ *       場合のみ保存済みを注入する。これによりタグ遷移や検索アイコン経由でも
+ *       URL に未設定の保存済み条件が AND で効くようになる。
+ */
 function mergeIntoParams(base: URLSearchParams, pref: StoredPref): URLSearchParams {
   const params = new URLSearchParams(base.toString());
 
   const q = (pref.q ?? "").trim();
-  // 既存に q があれば優先 (普通は無い: hasAdvancedInUrl 前提)。
-  // また、URL に文脈タグ (genre 等) が乗っているときは、ユーザーがタグタップで
-  // 飛んできたケースなので保存済み q は注入しない (検索ヘッダーラベル汚染防止)。
-  if (q && !(params.get("q") ?? "").trim() && !hasTagContextInUrl(params)) {
+  if (q && !(params.get("q") ?? "").trim()) {
     params.set("q", q);
   }
 
-  const setMulti = (key: string, values: string[]) => {
-    // 既に同じキーが入ってないか念のため除去
-    params.delete(key);
+  const setMultiIfEmpty = (key: string, values: string[]) => {
+    const existing = params.getAll(key).some((v) => v.trim() !== "");
+    if (existing) return; // URL の値を尊重 (上書きしない)
     const dedup = Array.from(new Set(values.map((s) => s.trim()).filter(Boolean)));
+    if (!dedup.length) return;
+    params.delete(key);
     for (const v of dedup) params.append(key, v);
   };
-  if (asStringArray(pref.genres).length) setMulti("genres", asStringArray(pref.genres));
-  if (asStringArray(pref.actresses).length) setMulti("actresses", asStringArray(pref.actresses));
-  if (asStringArray(pref.series_list).length) setMulti("series_list", asStringArray(pref.series_list));
-  if (asStringArray(pref.directors).length) setMulti("directors", asStringArray(pref.directors));
-  if (asStringArray(pref.makers).length) setMulti("makers", asStringArray(pref.makers));
-  if (asStringArray(pref.labels).length) setMulti("labels", asStringArray(pref.labels));
-  if (asStringArray(pref.ng_words).length) setMulti("ng_words", asStringArray(pref.ng_words));
+  if (asStringArray(pref.genres).length) setMultiIfEmpty("genres", asStringArray(pref.genres));
+  if (asStringArray(pref.actresses).length) setMultiIfEmpty("actresses", asStringArray(pref.actresses));
+  if (asStringArray(pref.series_list).length) setMultiIfEmpty("series_list", asStringArray(pref.series_list));
+  if (asStringArray(pref.directors).length) setMultiIfEmpty("directors", asStringArray(pref.directors));
+  if (asStringArray(pref.makers).length) setMultiIfEmpty("makers", asStringArray(pref.makers));
+  if (asStringArray(pref.labels).length) setMultiIfEmpty("labels", asStringArray(pref.labels));
+  if (asStringArray(pref.ng_words).length) setMultiIfEmpty("ng_words", asStringArray(pref.ng_words));
 
-  if (pref.date_from && pref.date_from.trim()) params.set("date_from", pref.date_from.trim());
-  if (pref.date_to && pref.date_to.trim()) params.set("date_to", pref.date_to.trim());
+  if (pref.date_from && pref.date_from.trim() && !(params.get("date_from") ?? "").trim()) {
+    params.set("date_from", pref.date_from.trim());
+  }
+  if (pref.date_to && pref.date_to.trim() && !(params.get("date_to") ?? "").trim()) {
+    params.set("date_to", pref.date_to.trim());
+  }
 
   const sort = normalizeSort(pref.sort);
-  if (sort) params.set("sort", sort);
+  if (sort && !normalizeSort(params.get("sort"))) {
+    params.set("sort", sort);
+  }
 
   return params;
 }

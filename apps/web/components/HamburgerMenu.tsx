@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { signIn, signOut, useSession } from "next-auth/react";
 import { markFeedStartUnmuted } from "@/lib/feedNav";
+import { buildFeedHrefFromSavedPref } from "@/lib/savedSearchPrefs";
 
 const MENU_ITEMS = [
   { label: "ホーム", href: "/" },
@@ -130,20 +131,40 @@ export default function HamburgerMenu() {
           {MENU_ITEMS.map((item) => {
             // requireAuth のメニュー項目は未ログイン時に非表示
             if (item.requireAuth && status !== "authenticated") return null;
+            const goingToFeed = item.href === "/feed";
             return (
               <Link
                 key={item.href}
                 href={item.href}
-                onClick={() => {
-                  // ショート (/feed) に遷移するときは前回のフィードセッションを破棄してランダム再生にし、
-                  // クリックをユーザージェスチャーとして採用して音声 ON で起動する
-                  if (item.href === "/feed" && typeof window !== "undefined") {
+                onClick={(e) => {
+                  if (goingToFeed && typeof window !== "undefined") {
+                    // 前回のフィードセッションを完全に破棄 (filter_sig / next_cursor 含む)。
+                    // BottomNav の resetFeedSession と同じ挙動にして、ハンバーガー経由でも
+                    // 状態の混線で「フィルター違反作品の通常フィードが残る」事故を防ぐ。
                     try {
                       sessionStorage.removeItem("feed_seed");
                       sessionStorage.removeItem("feed_index");
                       sessionStorage.removeItem("feed_items");
+                      sessionStorage.removeItem("feed_filter_sig");
+                      sessionStorage.removeItem("feed_next_cursor");
                     } catch {}
                     markFeedStartUnmuted();
+                    // 保存済み詳細検索条件 (フリーワード / チップ / NG / ソート) を
+                    // URL クエリに展開してフルページ遷移する。BottomNav と同じ動線にして、
+                    // 初回マウントから FeedClient が hasAnyFilter=true で fetch 開始 →
+                    // 0 件のとき「該当する作品が見つかりませんでした」を確実に出す。
+                    if (
+                      !e.defaultPrevented &&
+                      e.button === 0 &&
+                      !e.metaKey &&
+                      !e.ctrlKey &&
+                      !e.shiftKey &&
+                      !e.altKey
+                    ) {
+                      e.preventDefault();
+                      const targetHref = buildFeedHrefFromSavedPref();
+                      window.location.assign(targetHref);
+                    }
                   }
                   setOpen(false);
                 }}

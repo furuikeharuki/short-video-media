@@ -315,6 +315,19 @@ function GlobalFilterButtonInner() {
       const isFeed = pathname === "/feed" || pathname.startsWith("/feed/");
       if (isFeed) {
         if (typeof window !== "undefined") {
+          // 適用直後のフルリロード前に、前回のフィードセッションを完全に破棄する。
+          // これにより新しい /feed?... の URL でマウントした FeedClient は
+          // 前回 sig 一致の検出に絶対に引っかからず、必ず新条件で fetch → 0 件のとき
+          // 「該当する作品が見つかりませんでした」を確実に出す。
+          try {
+            sessionStorage.removeItem("feed_seed");
+            sessionStorage.removeItem("feed_index");
+            sessionStorage.removeItem("feed_items");
+            sessionStorage.removeItem("feed_filter_sig");
+            sessionStorage.removeItem("feed_next_cursor");
+          } catch {
+            /* ignore */
+          }
           window.location.assign(nextUrl);
         } else {
           router.replace(nextUrl);

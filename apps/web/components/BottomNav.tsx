@@ -391,6 +391,30 @@ export default function BottomNav() {
 }
 
 const navStyle = `
+  /*
+    Chrome では .bottom-nav に backdrop-filter を直接かけると、フルページ遷移
+    (home → /feed) で新ページが最初の数フレームを描画する間に「ナビの compositing
+    レイヤが作り直される」ことがあり、その時間差で:
+      - 1～2 フレーム間だけナビの背景が「下のフィード <video> をブラーした色」に
+        振れて見える
+      - bottom:-3px の sub-pixel 配置が GPU レイヤ再生成のタイミングで微妙に
+        ズレ、ナビが上下方向にチラついて見える
+    という Chrome 限定のチラつきが残っていた。
+
+    対策:
+      1. ナビ root の背景は完全不透明 (#000) にして、compositing がまだ整って
+         いない初回フレームでも「ナビ表示中の見た目」と完全一致させる。
+         (フィード <video> は基本暗色 + ナビ越しに 8% 透過していた程度なので
+          見た目の差はほぼ無い)
+      2. 元々の rgba(0,0,0,0.92) + backdrop-filter:blur の表現は ::before に
+         移し、ナビ root とは別レイヤで持つ。これで blur の合成タイミングが
+         ずれてもナビの輪郭・geometry は揺れない。
+      3. transform:translateZ(0) + backface-visibility:hidden + will-change で
+         ナビ自身を恒久的な GPU レイヤに昇格させ、ルート切替で Chrome がレイヤ
+         破棄/再生成をしない (= bottom:-3px の sub-pixel が安定する)。
+      4. contain:layout style を入れて子要素 (seekbar-track の top:-14px) は
+         はみ出させたまま、レイアウト/スタイル計算の波及を局所化する。
+  */
   .bottom-nav {
     position: fixed;
     bottom: -3px;
@@ -400,19 +424,46 @@ const navStyle = `
     height: var(--bottom-nav-h, 56px);
     display: flex;
     align-items: stretch;
+    background: #000;
+    border-top: 1px solid rgba(255, 255, 255, 0.08);
+    padding-bottom: 5px;
+    transform: translateZ(0);
+    -webkit-transform: translateZ(0);
+    backface-visibility: hidden;
+    -webkit-backface-visibility: hidden;
+    will-change: transform;
+    contain: layout style;
+  }
+
+  /*
+    半透明 + backdrop-filter:blur の見た目は ::before で再現する。
+    - ナビ root とは別レイヤなので、Chrome がこの blur レイヤの合成準備に
+      手間取っても、ナビの輪郭/位置/不透明背景はそのまま見え続ける。
+    - 下の <video> が見えるための半透明感はフィード視聴中の質感として残す。
+    - 遷移オーバーレイ表示中 (html[data-nav-loading="1"]) はこの ::before を
+      非表示にして、ナビが「完全に solid #000」になり、オーバーレイの黒と
+      色味がぴったり同期する。
+  */
+  .bottom-nav::before {
+    content: '';
+    position: absolute;
+    inset: 0;
     background: rgba(0, 0, 0, 0.92);
     backdrop-filter: blur(12px);
     -webkit-backdrop-filter: blur(12px);
-    border-top: 1px solid rgba(255, 255, 255, 0.08);
-    padding-bottom: 5px;
+    pointer-events: none;
+    z-index: 0;
+  }
+  .bottom-nav > .bottom-nav-item {
+    position: relative;
+    z-index: 1;
   }
 
   /*
     遷移オーバーレイ表示中はナビを「視覚的に凍結」する。
-    - 半透明背景 + backdrop-filter のままだと、ナビ越しに見えていた <video> が
-      一瞬で黒に置き換わって色味がフラッシュする (= 「ナビが点滅する」体感)。
-      solid #000 + backdrop-filter:none に切り替えて、オーバーレイの出現/消失と
-      ナビ背景がぴたっと同期するようにする。
+    - ::before の半透明 + blur レイヤを消すことで、ナビ越しに見えていた
+      <video> がオーバーレイで黒に置き換わるタイミングと、ナビ背景が
+      solid #000 に切り替わるタイミングをぴたっと同期させる。
     - シークバー (top:-14px でナビの外に飛び出して描画される 3px の白いレール) は、
       /feed 表示中はずっと出ている要素。タップ直後にこれを display:none で消すと、
       その瞬間ナビの「視覚的な高さ」が 14px だけ縮んで見え、ユーザーには
@@ -422,10 +473,8 @@ const navStyle = `
       タップ吸い込みだけ pointer-events:none で殺して連打誤動作だけ防ぐ。
     高さや bottom 位置自体は変えないので、bfcache 復帰時のレイアウトも壊れない。
   */
-  html[data-nav-loading="1"] .bottom-nav {
-    background: #000;
-    backdrop-filter: none;
-    -webkit-backdrop-filter: none;
+  html[data-nav-loading="1"] .bottom-nav::before {
+    display: none;
   }
   html[data-nav-loading="1"] .seekbar-track,
   html[data-nav-loading="1"] .seekbar-track.seekbar-track--active {

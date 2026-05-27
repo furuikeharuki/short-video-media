@@ -1,6 +1,7 @@
 import type { Metadata, Viewport } from "next";
 import Header from "@/components/Header";
 import BottomNav from "@/components/BottomNav";
+import BottomNavFreezeBootstrap from "@/components/BottomNavFreezeBootstrap";
 import NavigationLoadingOverlay from "@/components/NavigationLoadingOverlay";
 import SessionProvider from "@/components/SessionProvider";
 import SavedFilterEnforcer from "@/components/SavedFilterEnforcer";
@@ -117,6 +118,13 @@ export default function RootLayout({
     <html lang="ja">
       <head>
         <meta name="x-build-id" content={BUILD_ID} />
+        {/*
+         * BottomNav の Chrome 限定フルページ遷移チラつき対策。
+         * 同期スクリプトとして <head> に置き、ハイドレーション以前 / first paint
+         * 直前に sessionStorage を読んで <html> へ data-nav-freeze-active-href
+         * 属性を付ける。詳細は components/BottomNavFreezeBootstrap.tsx。
+         */}
+        <BottomNavFreezeBootstrap />
         <link rel="preconnect" href="https://cc3001.dmm.co.jp" />
         <link rel="preconnect" href="https://cc3001.dmm.co.jp" crossOrigin="anonymous" />
         <link rel="dns-prefetch" href="https://cc3001.dmm.co.jp" />

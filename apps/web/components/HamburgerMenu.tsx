@@ -6,6 +6,7 @@ import { usePathname } from "next/navigation";
 import { signIn, signOut, useSession } from "next-auth/react";
 import { markFeedStartUnmuted } from "@/lib/feedNav";
 import { buildFeedHrefFromSavedPref } from "@/lib/savedSearchPrefs";
+import { writeBottomNavFreezeSnapshot } from "@/lib/bottomNavFreeze";
 
 // /feed (フィード上モーダル経由で /movies/<slug> になっているケースも含む) から
 // ハンバーガー経由で別ルートへ遷移する瞬間、ヘッダーとボトムナビの間だけ
@@ -54,6 +55,15 @@ export default function HamburgerMenu() {
     pathname === "/feed" ||
     pathname.startsWith("/search/feed") ||
     pathname.startsWith("/movies/");
+  // 着地ページの BottomNav が first paint で「離脱直前の見た目」を維持するための
+  // active href スナップショット。BottomNav の currentActiveHref と同じ法則。
+  const bottomNavActiveHref = onShortFeed
+    ? "/feed"
+    : pathname === "/"
+      ? "/"
+      : pathname.startsWith("/mypage")
+        ? "/mypage"
+        : pathname;
 
   useEffect(() => {
     if (!open) return;
@@ -162,6 +172,7 @@ export default function HamburgerMenu() {
                   // 覆い、「タップが効いていない」体感を消す。SPA の場合は
                   // NavigationLoadingOverlay 側で pathname 変更を検知して自動で消える。
                   if (onShortFeed && !goingToFeed) {
+                    writeBottomNavFreezeSnapshot(bottomNavActiveHref);
                     dispatchNavLoadingShow();
                   }
                   if (goingToFeed && typeof window !== "undefined") {
@@ -190,6 +201,7 @@ export default function HamburgerMenu() {
                     ) {
                       e.preventDefault();
                       const targetHref = buildFeedHrefFromSavedPref();
+                      writeBottomNavFreezeSnapshot(bottomNavActiveHref);
                       dispatchNavLoadingShow();
                       window.location.assign(targetHref);
                     }

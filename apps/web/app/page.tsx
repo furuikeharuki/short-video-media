@@ -3,6 +3,7 @@ import { getHome } from "@/lib/api/home";
 import HorizontalCardRow from "@/components/home/HorizontalCardRow";
 import MovieCardThumb from "@/components/home/MovieCardThumb";
 import ActressCardThumb from "@/components/home/ActressCardThumb";
+import GoodsCardThumb from "@/components/home/GoodsCardThumb";
 import PullToRefresh from "@/components/home/PullToRefresh";
 import AdSlot from "@/components/ads/AdSlot";
 import { isAdZoneEnabled } from "@/lib/ads/config";
@@ -65,14 +66,24 @@ export default async function Page() {
   const actressSections = (data.actress_sections ?? []).filter(
     (s) => s.items.length > 0,
   );
+  const goodsSections = (data.goods_sections ?? []).filter(
+    (s) => s.items.length > 0,
+  );
   // ホームの「人気女優」セクション: 人気動画 (popular) の直後、
-  // かつ 人気商品 (popular_products) の直前に差し込む。
-  // 該当キーが見つからない場合はあえて挿入しない (= フェイルセーフ)。
+  // かつ 人気商品 の直前に差し込む。該当キーが見つからない場合は挿入しない。
   const popularActresses = actressSections.find(
     (s) => s.key === "popular_actresses",
   );
+  // 「人気商品」(Goods) セクション。popular の直後、人気女優の下に差し込む。
+  const popularProducts = goodsSections.find(
+    (s) => s.key === "popular_products",
+  );
 
-  if (sections.length === 0 && actressSections.length === 0) {
+  if (
+    sections.length === 0 &&
+    actressSections.length === 0 &&
+    goodsSections.length === 0
+  ) {
     return (
       <main className="home-main">
         <div className="home-empty">表示できる作品がありません</div>
@@ -85,7 +96,8 @@ export default async function Page() {
   // native（縦型カード）は横スクロール行間には不自然なので使わない。
   //
   // 広告の挿入位置は「特定セクションの直下」で固定する (= section.key で判定する)。
-  // - "popular_products" : 人気動画 → 人気女優 → 人気商品 と並べた末尾の直下
+  // - "popular"          : 人気動画 → 人気女優 → 人気商品 と並べた末尾の直下
+  //                        (人気女優・人気商品は popular の直後にインラインで差し込む)
   // - "ranking_monthly"  : 月間ランキングの直下
   //
   // 過去はフィルタ後の配列 index に対する `(i+1) % 3 === 0` で判定していたが、
@@ -94,7 +106,7 @@ export default async function Page() {
   // 広告が別の場所に出てしまっていた。key 固定にすることで、上位セクションが
   // 表示されなくても人気カテゴリ群 / 月間ランキング の下に必ず広告が並ぶようにする。
   const bannerEnabled = isAdZoneEnabled("mobileBanner300x100");
-  const AD_AFTER_KEYS = new Set(["popular_products", "ranking_monthly"]);
+  const AD_AFTER_KEYS = new Set(["popular", "ranking_monthly"]);
 
   return (
     <PullToRefresh className="home-main">
@@ -117,12 +129,10 @@ export default async function Page() {
           sectionIndex < sections.length - 1 &&
           AD_AFTER_KEYS.has(section.key);
 
-        // 「人気動画」(popular) と「人気商品」(popular_products) の間に
-        // 「人気女優」セクションを挿入する。popular 自体が空でも、
-        // 後ろの popular_products の前に女優セクションを置きたいので、
-        // ここで popular の直後に差し込む形にする。
-        const actressInline =
-          section.key === "popular" ? popularActresses : undefined;
+        // 「人気動画」(popular) の直後に「人気女優」「人気商品」セクションを
+        // インライン挿入する。popular 自体が空でも、後段で同じ位置に出したい
+        // ので popular の直下にまとめて差し込む形にする。
+        const showInlineAfterPopular = section.key === "popular";
 
         return (
           <div key={section.key}>
@@ -147,13 +157,27 @@ export default async function Page() {
                 />
               ))}
             </HorizontalCardRow>
-            {actressInline && (
+            {showInlineAfterPopular && popularActresses && (
               <HorizontalCardRow
-                title={actressInline.title}
-                subtitle={actressInline.subtitle}
+                title={popularActresses.title}
+                subtitle={popularActresses.subtitle}
               >
-                {actressInline.items.map((a) => (
+                {popularActresses.items.map((a) => (
                   <ActressCardThumb key={a.id} actress={a} />
+                ))}
+              </HorizontalCardRow>
+            )}
+            {showInlineAfterPopular && popularProducts && (
+              <HorizontalCardRow
+                title={popularProducts.title}
+                subtitle={popularProducts.subtitle}
+                action={{
+                  label: "もっと見る",
+                  href: "/list/popular_products",
+                }}
+              >
+                {popularProducts.items.map((g) => (
+                  <GoodsCardThumb key={g.id} goods={g} />
                 ))}
               </HorizontalCardRow>
             )}

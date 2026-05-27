@@ -10,17 +10,17 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.repositories.actress_repository import get_actresses_by_ids_ordered
 from app.repositories.event_repository import (
-    aggregate_affiliate_click_ranking_all_time,
     aggregate_affiliate_click_ranking_by_actress_all_time,
     aggregate_search_query_ranking,
     aggregate_view_ranking,
     aggregate_view_ranking_all_time,
 )
+from app.repositories.goods_repository import get_popular_goods
 from app.repositories.movie_repository import (
     get_fallback_ranking_movies,
     get_movies_by_slugs_ordered,
 )
-from app.schemas.actress import ActressCard
+from app.schemas.actress import ActressCard, GoodsCard
 from app.schemas.movie import MovieCard
 from app.services.feed_service import _to_card
 
@@ -132,49 +132,39 @@ def _to_actress_card(actress) -> ActressCard:
     )
 
 
+def _to_goods_card(g) -> GoodsCard:
+    return GoodsCard(
+        id=g.id,
+        content_id=g.content_id,
+        title=g.title,
+        slug=g.slug,
+        image_url_list=g.image_url_list,
+        image_url_large=g.image_url_large,
+        affiliate_url=g.affiliate_url,
+        price_list=g.price_list,
+        price_min=g.price_min,
+        review_count=g.review_count,
+        review_average=(
+            float(g.review_average) if g.review_average is not None else None
+        ),
+        maker_name=g.maker_name,
+    )
+
+
 async def get_popular_products_all_time(
     db: AsyncSession,
     *,
     limit: int = 20,
     offset: int = 0,
-) -> list[MovieCard]:
-    """「人気商品」セクション: 全期間の affiliate_click イベント計順。
+) -> list[GoodsCard]:
+    """「人気商品」セクション: 商品 (Goods テーブル) から人気順に取得する。
 
-    affiliate_click は movie detail ページからのみ発火しているため、
-    集計対象は Movie となり、戻り値は MovieCard。
-    イベントが不足しているときは review_count ベースのフォールバックで穴埋め。
+    動画 (Movie) は対象外。商品単体での affiliate_click イベント発火導線が
+    まだないため、review_count を主キーに review_average / primary_date を
+    タイブレークにして並べる (goods_repository.get_popular_goods)。
     """
-    ranked = await aggregate_affiliate_click_ranking_all_time(
-        db, limit=limit, offset=offset
-    )
-    slugs = [s for s, _ in ranked if s]
-
-    if slugs:
-        movies = await get_movies_by_slugs_ordered(db, slugs)
-        if movies and len(movies) >= limit:
-            return [_to_card(m) for m in movies]
-
-        # イベント由来で limit に満たないときはフォールバックで穴埋め (重複除去)。
-        seen_ids = {m.id for m in movies}
-        cards = [_to_card(m) for m in movies]
-        need = limit - len(cards)
-        fallback = await get_fallback_ranking_movies(
-            db, limit=need * 2, window_days=None, offset=0
-        )
-        for m in fallback:
-            if len(cards) >= limit:
-                break
-            if m.id in seen_ids:
-                continue
-            cards.append(_to_card(m))
-            seen_ids.add(m.id)
-        return cards[:limit]
-
-    # affiliate_click イベントがゼロのときは review_count 順で完全フォールバック。
-    movies = await get_fallback_ranking_movies(
-        db, limit=limit, window_days=None, offset=offset
-    )
-    return [_to_card(m) for m in movies]
+    goods = await get_popular_goods(db, limit=limit, offset=offset)
+    return [_to_goods_card(g) for g in goods]
 
 
 async def get_popular_actresses_all_time(

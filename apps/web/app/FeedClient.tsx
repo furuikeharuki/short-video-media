@@ -430,8 +430,14 @@ export default function FeedClient() {
           nextCursorRef.current = null;
           return;
         }
+        // popular_products (Goods) は動画ではないので /feed 継足し対象外。
+        // 万一ここに来た場合は打ち止め扱いにする (フィードで再生可能なのは MovieCard のみ)。
+        if (source.key === "popular_products") {
+          nextCursorRef.current = null;
+          return;
+        }
         const res = await getHomeSection(
-          source.key as HomeSectionKey,
+          source.key as Exclude<HomeSectionKey, "popular_products">,
           offset,
           20,
           source.genre,

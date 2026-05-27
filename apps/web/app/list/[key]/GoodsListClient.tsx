@@ -1,40 +1,23 @@
 "use client";
 
 import { Fragment, useCallback, useEffect, useRef, useState } from "react";
-import MovieCardThumb from "@/components/home/MovieCardThumb";
 import SimpleBackButton from "@/components/SimpleBackButton";
 import AdSlot from "@/components/ads/AdSlot";
 import { AD_LIST_INTERVAL, isAdZoneEnabled } from "@/lib/ads/config";
-import type { MovieCard } from "@/lib/api/feed";
-import {
-  getHomeSection,
-  type HomeSectionKey,
-  type MovieSectionKey,
-} from "@/lib/api/homeSection";
+import type { GoodsCard } from "@/lib/api/home";
+import { getPopularProductsSection } from "@/lib/api/homeSection";
+import { trackEvent } from "@/lib/analytics/analytics";
 
 type Props = {
-  // 動画系セクション (popular_products は GoodsListClient で扱う)。
-  sectionKey: Exclude<MovieSectionKey, "genre">;
   title: string;
-  /** 順位バッジを出すか (人気・ランキング系) */
-  ranked: boolean;
 };
 
-/**
- * 画面幅に応じた表示列数。CSS の grid-template-columns と必ず一致させること。
- * (search-grid と同じブレイクポイント)
- *   default     : 3 列
- *   >= 640px    : 5 列
- *   >= 1024px   : 7 列
- */
 function columnsForWidth(w: number): number {
   if (w >= 1024) return 7;
   if (w >= 640) return 5;
   return 3;
 }
 
-/** 表示列数に応じたバッチ件数。列数の倍数 (= 行末が必ず揃う) になるよう選ぶ。
- *  3 列 → 21 (7 行)、5 列 → 20 (4 行)、7 列 → 21 (3 行)。 */
 function batchSize(columns: number): number {
   if (columns === 3) return 21;
   if (columns === 5) return 20;
@@ -42,24 +25,17 @@ function batchSize(columns: number): number {
 }
 
 /**
- * セクションの「もっと見る」先。
- * SSR では初期表示分を取らず、クライアントマウント時に画面幅から列数を確定してから
- * 列の倍数の件数で取りにいく。これで初期表示・追加読み込みのいずれも行末が必ず揃う。
- * カードをタップすると同じ並びで /feed に遷移する (MovieCardThumb の playlist 機構)。
+ * 人気商品 (Goods) 一覧ページ用クライアント。
+ * MovieCard と異なり Goods はアフィリエイト URL に直接遷移する物販なので、
+ * 動画用の playlist / feed 起動導線は持たない。
  */
-export default function ListClient({
-  sectionKey,
-  title,
-  ranked,
-}: Props) {
-  const [items, setItems] = useState<MovieCard[]>([]);
+export default function GoodsListClient({ title }: Props) {
+  const [items, setItems] = useState<GoodsCard[]>([]);
   const [nextCursor, setNextCursor] = useState<string | null>(null);
   const [isLoadingMore, setIsLoadingMore] = useState(false);
   const [isInitialLoading, setIsInitialLoading] = useState(true);
   const fetchingRef = useRef(false);
   const sentinelRef = useRef<HTMLDivElement | null>(null);
-  // 列数は初期マウント時に 1 回だけ確定させる (途中でブレイクポイントを跨いでも
-  // 取得件数が混在するとグリッドの整列が崩れるため意図的に固定する)。
   const columnsRef = useRef<number | null>(null);
 
   const fetchMore = useCallback(async () => {
@@ -72,7 +48,7 @@ export default function ListClient({
       const offset = cursor === null ? 0 : parseInt(cursor, 10);
       if (Number.isNaN(offset)) return;
       const limit = batchSize(columnsRef.current);
-      const res = await getHomeSection(sectionKey, offset, limit);
+      const res = await getPopularProductsSection(offset, limit);
       setItems((prev) => {
         const seen = new Set(prev.map((i) => i.id));
         const fresh = res.items.filter((i) => !seen.has(i.id));
@@ -80,26 +56,25 @@ export default function ListClient({
       });
       setNextCursor(res.next_cursor);
     } catch (e) {
-      console.error("section fetchMore failed", e);
+      console.error("popular_products fetchMore failed", e);
     } finally {
       fetchingRef.current = false;
       setIsLoadingMore(false);
     }
-  }, [sectionKey, nextCursor]);
+  }, [nextCursor]);
 
-  // 初回マウント時: window.innerWidth から列数を確定し、その列の倍数で 1 ページ目を取得する。
   useEffect(() => {
     let cancelled = false;
     (async () => {
       columnsRef.current = columnsForWidth(window.innerWidth);
       const limit = batchSize(columnsRef.current);
       try {
-        const res = await getHomeSection(sectionKey, 0, limit);
+        const res = await getPopularProductsSection(0, limit);
         if (cancelled) return;
         setItems(res.items);
         setNextCursor(res.next_cursor);
       } catch (e) {
-        console.error("section initial load failed", e);
+        console.error("popular_products initial load failed", e);
       } finally {
         if (!cancelled) setIsInitialLoading(false);
       }
@@ -107,9 +82,8 @@ export default function ListClient({
     return () => {
       cancelled = true;
     };
-  }, [sectionKey]);
+  }, []);
 
-  // 画面末尾の sentinel が見えたら次ページを取る。
   useEffect(() => {
     const el = sentinelRef.current;
     if (!el) return;
@@ -148,7 +122,7 @@ export default function ListClient({
           <SimpleBackButton />
           <div className="list-subheader-title" title={title}>{title}</div>
         </div>
-        <p className="list-empty">該当する作品が見つかりませんでした</p>
+        <p className="list-empty">該当する商品が見つかりませんでした</p>
         <style>{pageCSS}</style>
       </main>
     );
@@ -160,45 +134,83 @@ export default function ListClient({
         <SimpleBackButton />
         <div className="list-subheader-title" title={title}>{title}</div>
       </div>
-      <div className="list-grid">
-        {items.map((item, index) => {
-          // AD_LIST_INTERVAL ごと (例: 6 件ごと) に 300x250 バナーを行として挟む。
-          // grid-column: 1 / -1 で 1 行全幅を占有させてレイアウトを崩さない。
+      <div className="goods-grid">
+        {items.map((g, index) => {
           const showAdBefore =
             isAdZoneEnabled("mobileBanner300x250") &&
             AD_LIST_INTERVAL > 0 &&
             index > 0 &&
             index % AD_LIST_INTERVAL === 0;
+          const img = g.image_url_large ?? g.image_url_list ?? "";
+          const safeHref =
+            typeof g.affiliate_url === "string" ? g.affiliate_url.trim() : "";
+          const handleClick = () => {
+            if (!safeHref) return;
+            void trackEvent("affiliate_click", {
+              slug: g.slug,
+              title: g.title,
+              affiliate_url: safeHref,
+            });
+          };
           return (
-            <Fragment key={item.id}>
+            <Fragment key={g.id}>
               {showAdBefore && (
                 <div className="list-grid-ad">
                   <AdSlot zone="mobileBanner300x250" />
                 </div>
               )}
-              <MovieCardThumb
-                movie={item}
-                aspect="portrait"
-                fluid
-                // ランキングセクションでも順位バッジは 100 位まで、101 件目以降はバッジなし。
-                rank={ranked && index < 100 ? index + 1 : undefined}
-                playlist={{
-                  key: `list-${sectionKey}`,
-                  title,
-                  startIndex: index,
-                  items,
-                  source: { kind: "section", key: sectionKey },
-                }}
-              />
+              {safeHref ? (
+                <a
+                  href={safeHref}
+                  target="_blank"
+                  rel="noopener noreferrer sponsored"
+                  onClick={handleClick}
+                  className="goods-card"
+                  title={g.title}
+                >
+                  <div className="goods-thumb">
+                    {img ? (
+                      // eslint-disable-next-line @next/next/no-img-element
+                      <img src={img} alt={g.title} loading="lazy" />
+                    ) : (
+                      <div className="goods-thumb-placeholder">No Image</div>
+                    )}
+                  </div>
+                  <div className="goods-title">{g.title}</div>
+                  {g.price_min != null && (
+                    <div className="goods-price">
+                      ¥{g.price_min.toLocaleString()}
+                    </div>
+                  )}
+                </a>
+              ) : (
+                <div className="goods-card goods-card--disabled" title={g.title}>
+                  <div className="goods-thumb">
+                    {img ? (
+                      // eslint-disable-next-line @next/next/no-img-element
+                      <img src={img} alt={g.title} loading="lazy" />
+                    ) : (
+                      <div className="goods-thumb-placeholder">No Image</div>
+                    )}
+                  </div>
+                  <div className="goods-title">{g.title}</div>
+                </div>
+              )}
             </Fragment>
           );
         })}
       </div>
-      {/* 次ページ取得用 sentinel + ロード表示 */}
       {nextCursor && (
-        <div ref={sentinelRef} className="list-load-more" role="status" aria-live="polite">
+        <div
+          ref={sentinelRef}
+          className="list-load-more"
+          role="status"
+          aria-live="polite"
+        >
           <span className="list-spinner" aria-hidden="true" />
-          <span className="list-load-label">{isLoadingMore ? "読み込み中…" : "さらに読み込みます"}</span>
+          <span className="list-load-label">
+            {isLoadingMore ? "読み込み中…" : "さらに読み込みます"}
+          </span>
         </div>
       )}
       <div className="list-footer-spacer" />
@@ -249,13 +261,12 @@ const pageCSS = `
     font-size: 14px;
     margin-top: 80px;
   }
-  .list-grid {
+  .goods-grid {
     display: grid;
     grid-template-columns: repeat(3, minmax(0, 1fr));
     gap: 8px;
     padding: 8px;
   }
-  .list-grid > .mct { width: 100%; min-width: 0; }
   .list-grid-ad {
     grid-column: 1 / -1;
     display: flex;
@@ -263,16 +274,67 @@ const pageCSS = `
     padding: 4px 0;
   }
   @media (min-width: 640px) {
-    .list-grid { grid-template-columns: repeat(5, minmax(0, 1fr)); }
+    .goods-grid { grid-template-columns: repeat(5, minmax(0, 1fr)); }
   }
   @media (min-width: 1024px) {
-    .list-grid {
+    .goods-grid {
       grid-template-columns: repeat(7, minmax(0, 1fr));
       max-width: 1200px;
       margin: 0 auto;
     }
   }
-  /* 末尾の「次を読み込み中」表示 + IntersectionObserver の sentinel を兼ねる */
+  .goods-card {
+    display: block;
+    text-decoration: none;
+    color: #fff;
+    -webkit-tap-highlight-color: transparent;
+    min-width: 0;
+  }
+  .goods-card--disabled { opacity: 0.5; cursor: default; }
+  .goods-thumb {
+    position: relative;
+    width: 100%;
+    aspect-ratio: 9 / 13;
+    border-radius: 10px;
+    overflow: hidden;
+    background: #111;
+  }
+  .goods-thumb img {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    object-fit: contain;
+    background: #111;
+  }
+  .goods-thumb-placeholder {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: linear-gradient(135deg, #1a1a1a, #2a2a2a);
+    color: rgba(255,255,255,0.4);
+    font-size: 12px;
+  }
+  .goods-title {
+    margin-top: 6px;
+    font-size: 12px;
+    font-weight: 600;
+    line-height: 1.35;
+    color: #fff;
+    display: -webkit-box;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
+    overflow: hidden;
+    word-break: break-word;
+  }
+  .goods-price {
+    margin-top: 4px;
+    font-size: 12px;
+    font-weight: 700;
+    color: #ff9d3f;
+  }
   .list-load-more {
     display: flex;
     align-items: center;
@@ -283,7 +345,6 @@ const pageCSS = `
     font-size: 13px;
     min-height: 48px;
   }
-  /* 初期表示中のフルロード表示 */
   .list-initial-loading {
     display: flex;
     align-items: center;

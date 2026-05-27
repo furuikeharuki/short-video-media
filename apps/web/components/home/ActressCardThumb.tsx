@@ -9,8 +9,10 @@ type Props = {
 
 /**
  * 人気女優セクションで使う横スクロール用カード。
- * MovieCardThumb と並べたときに視覚的に統一感が出るよう、
- * 同じ 140px 幅・縦長サムネ枠を使う。リンクは女優詳細ページに飛ばす。
+ * 女優の image_url_large / image_url_small は DMM 由来でほぼ正方形 (約 600x600)
+ * のため、サムネ枠も 1:1 にして元画像のアスペクトに合わせる。
+ * 横幅は MovieCardThumb (140px) と揃え、横スクロール時のリズムを保つ。
+ * リンクは女優詳細ページに飛ばす。
  */
 export default function ActressCardThumb({ actress }: Props) {
   const imgSrc =
@@ -50,7 +52,9 @@ const styles = `
   .act-thumb {
     position: relative;
     width: 100%;
-    aspect-ratio: 9 / 16;
+    /* 元画像が正方形なので 1:1 枠にして上下のトリミングを最小化する。
+       (旧: 9/16 縦長枠だと顔の上下が大きく切れていた) */
+    aspect-ratio: 1 / 1;
     border-radius: 10px;
     overflow: hidden;
     background: #111;
@@ -61,7 +65,7 @@ const styles = `
     width: 100%;
     height: 100%;
     object-fit: cover;
-    object-position: center top;
+    object-position: center center;
   }
   .act-thumb-placeholder {
     position: absolute;

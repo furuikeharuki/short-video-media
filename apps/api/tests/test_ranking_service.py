@@ -183,6 +183,82 @@ def test_get_ranking_invalid_period_raises() -> None:
         asyncio.run(ranking_service.get_ranking(None, period="yearly"))  # type: ignore[arg-type]
 
 
+def _goods(i: int):
+    return SimpleNamespace(
+        id=f"goods-{i:03d}",
+        content_id=f"g{i:05d}",
+        title=f"テスト商品 {i:03d}",
+        slug=f"test-goods-{i:03d}",
+        image_url_list=None,
+        image_url_large=None,
+        affiliate_url=f"https://example.com/goods/{i}",
+        price_list=None,
+        price_min=2980,
+        review_count=10 - i,
+        review_average=4.0,
+        maker_name=None,
+    )
+
+
+def test_popular_products_returns_goods_only(monkeypatch: pytest.MonkeyPatch) -> None:
+    """人気商品ランキングは Goods のみを対象にし、Movie は含まないこと。"""
+    captured: dict = {}
+
+    async def fake_get_popular_goods(db, *, limit, offset=0):  # type: ignore[no-untyped-def]
+        captured["limit"] = limit
+        captured["offset"] = offset
+        return [_goods(i) for i in range(3)]
+
+    # 動画系のフォールバックを呼んだら失敗扱いになるよう監視する
+    movie_fallback_called = False
+
+    async def fake_movie_fallback(*args, **kwargs):  # type: ignore[no-untyped-def]
+        nonlocal movie_fallback_called
+        movie_fallback_called = True
+        return [SimpleNamespace(id="movie-1", slug="movie-1")]
+
+    monkeypatch.setattr(ranking_service, "get_popular_goods", fake_get_popular_goods)
+    monkeypatch.setattr(
+        ranking_service, "get_fallback_ranking_movies", fake_movie_fallback
+    )
+
+    out = asyncio.run(
+        ranking_service.get_popular_products_all_time(None, limit=5, offset=2)  # type: ignore[arg-type]
+    )
+
+    # 全部 GoodsCard で、Movie 由来のフォールバックは呼ばれない
+    assert movie_fallback_called is False
+    assert len(out) == 3
+    for card in out:
+        # GoodsCard には actresses / genres / series_name フィールドが無い
+        assert not hasattr(card, "actresses")
+        assert not hasattr(card, "genres")
+        assert card.slug.startswith("test-goods-")
+    # offset/limit がリポジトリに渡っていること
+    assert captured == {"limit": 5, "offset": 2}
+
+
+def test_popular_products_empty_when_no_goods(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Goods が 1 件もなければ空配列を返し、Movie で補完しないこと。"""
+
+    async def fake_get_popular_goods(db, *, limit, offset=0):  # type: ignore[no-untyped-def]
+        return []
+
+    async def fake_movie_fallback(*args, **kwargs):  # type: ignore[no-untyped-def]
+        # 呼ばれたらテスト失敗
+        raise AssertionError("movie fallback must not be used for popular_products")
+
+    monkeypatch.setattr(ranking_service, "get_popular_goods", fake_get_popular_goods)
+    monkeypatch.setattr(
+        ranking_service, "get_fallback_ranking_movies", fake_movie_fallback
+    )
+
+    out = asyncio.run(
+        ranking_service.get_popular_products_all_time(None, limit=5)  # type: ignore[arg-type]
+    )
+    assert out == []
+
+
 def test_event_repository_since_distinct_per_period() -> None:
     """`_since` が daily/weekly/monthly でそれぞれ違う閾値を返すこと
     (期間 cutoff が混ざらないことの最小確認)。

@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { notFound } from "next/navigation";
 import { type HomeSectionKey } from "@/lib/api/homeSection";
 import ListClient from "./ListClient";
+import GoodsListClient from "./GoodsListClient";
 
 type Props = {
   params: Promise<{ key: string }>;
@@ -49,6 +50,12 @@ export default async function ListPage({ params }: Props) {
   }
 
   const title = KEY_TITLES[key];
+
+  // 人気商品 (Goods) は商品テーブル由来で MovieCard と型が違うため専用クライアントを使う。
+  if (key === "popular_products") {
+    return <GoodsListClient title={title} />;
+  }
+
   // ランキング系は順位を出したい
   const ranked =
     key === "popular" ||

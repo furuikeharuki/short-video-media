@@ -8,11 +8,55 @@ import type { NextConfig } from "next";
  *
  * 注意:
  *  - Content-Security-Policy は ExoClick (a.magsrv.com / a.pemsrv.com) の
- *    動的スクリプト挿入と相性が悪いため、ここでは敢えて未設定にしている。
- *    将来広告基盤を入れ替えるなどで安全に有効化できるようになったら追加する。
+ *    動的スクリプト挿入と相性が悪いため、現状は強制 (Enforce) せずに
+ *    Report-Only として観測のみを行う。`script-src` などには事前に
+ *    広告 / 解析 ベンダの origin を含めているため、Report のみで実害は無い。
+ *    違反が安定して 0 になったら enforce に切り替える。
  *  - これらのヘッダは UI 動作には影響しないが、third-party iframe 等が
  *    必要になった場合は X-Frame-Options を緩める判断が必要。
  */
+
+// CSP Report-Only。
+// `script-src` / `frame-src` には:
+//  - 自サイト ('self', 'unsafe-inline' / 'unsafe-eval' は Next.js dev / ad SDK 互換のため)
+//  - ExoClick: a.magsrv.com / a.pemsrv.com / *.exoclick.com (動的 ad-provider.js)
+//  - Google Analytics: googletagmanager.com / google-analytics.com
+// img/connect は API + 画像 CDN (DMM / FANZA, *.dmm.co.jp) も許可する。
+const cspReportOnly = [
+  "default-src 'self'",
+  "base-uri 'self'",
+  "object-src 'none'",
+  "form-action 'self'",
+  "frame-ancestors 'self'",
+  [
+    "script-src 'self' 'unsafe-inline' 'unsafe-eval'",
+    "https://a.magsrv.com https://a.pemsrv.com",
+    "https://*.exoclick.com https://*.exosrv.com",
+    "https://www.googletagmanager.com https://www.google-analytics.com",
+  ].join(" "),
+  "style-src 'self' 'unsafe-inline'",
+  [
+    "img-src 'self' data: blob: https:",
+  ].join(" "),
+  [
+    "media-src 'self' blob: https:",
+  ].join(" "),
+  [
+    "connect-src 'self'",
+    "https://*.google-analytics.com https://www.googletagmanager.com",
+    "https://a.magsrv.com https://a.pemsrv.com",
+    "https://*.exoclick.com https://*.exosrv.com",
+    "https://*.dmm.co.jp https://*.dmm.com",
+  ].join(" "),
+  [
+    "frame-src 'self'",
+    "https://a.magsrv.com https://a.pemsrv.com",
+    "https://*.exoclick.com https://*.exosrv.com",
+  ].join(" "),
+  "worker-src 'self' blob:",
+  "font-src 'self' data: https:",
+].join("; ");
+
 const securityHeaders = [
   {
     key: "X-Content-Type-Options",
@@ -43,6 +87,11 @@ const securityHeaders = [
       "accelerometer=()",
       "interest-cohort=()",
     ].join(", "),
+  },
+  // 観測のみ。違反が出たら DevTools に warning は出るが、リソース読込は阻害しない。
+  {
+    key: "Content-Security-Policy-Report-Only",
+    value: cspReportOnly,
   },
 ];
 

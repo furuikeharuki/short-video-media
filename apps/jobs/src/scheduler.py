@@ -57,6 +57,7 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 
 # このパッケージのジョブを再利用
+from src.advisory_lock import advisory_lock
 from src.sync_actress_profiles import main as actress_main
 from src.sync_catalog import main as sync_main
 
@@ -122,6 +123,9 @@ async def _run_sync_catalog() -> None:
 
     SCHEDULE_* 環境変数で取得対象を上書きできる。未設定時は従来挙動
     (mode=incremental, hits_per_floor=100, floors_filter=None) を維持。
+
+    複数プロセスでの同時実行を防ぐため Postgres advisory lock を取る。
+    取れなければ "他に走っている" 扱いでスキップ (no-op)。
     """
     mode = os.getenv("SCHEDULE_SYNC_CATALOG_MODE", "incremental").strip() or "incremental"
     hits_per_floor = _env_int("SCHEDULE_SYNC_CATALOG_HITS_PER_FLOOR", 100) or 100
@@ -131,16 +135,19 @@ async def _run_sync_catalog() -> None:
         mode, hits_per_floor, floors_filter,
     )
     try:
-        await sync_main(
-            mode=mode,
-            hits_per_floor=hits_per_floor,
-            floors_filter=floors_filter,
-            dry_run=False,
-            start_date=None,
-            end_date=None,
-            incremental_gte=None,
-            incremental_lte=None,
-        )
+        async with advisory_lock("sync_catalog") as acquired:
+            if not acquired:
+                return
+            await sync_main(
+                mode=mode,
+                hits_per_floor=hits_per_floor,
+                floors_filter=floors_filter,
+                dry_run=False,
+                start_date=None,
+                end_date=None,
+                incremental_gte=None,
+                incremental_lte=None,
+            )
         logger.info("[job] sync_catalog done")
     except Exception:
         logger.error("[job] sync_catalog FAILED\n%s", traceback.format_exc())
@@ -154,11 +161,14 @@ async def _run_sync_actress_profiles() -> None:
         only_missing, limit,
     )
     try:
-        await actress_main(
-            limit=limit,
-            only_missing=only_missing,
-            dry_run=False,
-        )
+        async with advisory_lock("sync_actress_profiles") as acquired:
+            if not acquired:
+                return
+            await actress_main(
+                limit=limit,
+                only_missing=only_missing,
+                dry_run=False,
+            )
         logger.info("[job] sync_actress_profiles done")
     except Exception:
         logger.error("[job] sync_actress_profiles FAILED\n%s", traceback.format_exc())

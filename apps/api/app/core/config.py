@@ -77,11 +77,20 @@ class Settings(BaseSettings):
     DEPLOY_TARGET: str = "railway"
 
     # ─────────────────────────────────────────────
-    # イベント API のレート制限 (per IP)
+    # 各 API のレート制限 (per IP, sliding window)
     # ─────────────────────────────────────────────
-    # 1 秒あたりの最大イベント数 / 1 分あたりの最大イベント数
+    # 1 秒あたりの最大数 / 1 分あたりの最大数
     EVENTS_RATE_LIMIT_PER_SECOND: int = 10
     EVENTS_RATE_LIMIT_PER_MINUTE: int = 120
+    # sign-in は保守的に。盗まれた exchange JWT の総当たり対策。
+    SIGNIN_RATE_LIMIT_PER_SECOND: int = 5
+    SIGNIN_RATE_LIMIT_PER_MINUTE: int = 20
+    # 匿名でも叩ける重いエンドポイント。通常スクロールは妨げない値。
+    FEED_RATE_LIMIT_PER_SECOND: int = 20
+    FEED_RATE_LIMIT_PER_MINUTE: int = 240
+    # DMM への外部リクエストを伴う。
+    RESOLVE_RATE_LIMIT_PER_SECOND: int = 10
+    RESOLVE_RATE_LIMIT_PER_MINUTE: int = 120
 
     # ─────────────────────────────────────────────
     # DB 接続プール (asyncpg)

@@ -154,6 +154,42 @@ export default async function MovieDetailPage({ params }: PageProps) {
       ],
     };
 
+    // Product JSON-LD は価格情報がある場合のみ出力する。
+    // price は sale_price → list_price → price_min の順で採用。
+    // 既存ページの表示には影響せず、Google ショッピング系のリッチリザルト候補。
+    const productJsonLd =
+      price != null
+        ? {
+            "@context": "https://schema.org",
+            "@type": "Product",
+            name: movie.title,
+            description:
+              movie.description ?? `${movie.actresses.join("・")}出演作品`,
+            image: imgSrc || undefined,
+            brand: movie.maker_name
+              ? { "@type": "Brand", name: movie.maker_name }
+              : undefined,
+            sku: movie.maker_product ?? movie.slug,
+            url: canonical,
+            offers: {
+              "@type": "Offer",
+              priceCurrency: "JPY",
+              price: String(price),
+              availability: "https://schema.org/InStock",
+              url: canonical,
+            },
+            aggregateRating: hasReview
+              ? {
+                  "@type": "AggregateRating",
+                  ratingValue: movie.review_average,
+                  reviewCount: movie.review_count,
+                  bestRating: 5,
+                  worstRating: 1,
+                }
+              : undefined,
+          }
+        : null;
+
     return (
       <>
         <script
@@ -164,6 +200,12 @@ export default async function MovieDetailPage({ params }: PageProps) {
           type="application/ld+json"
           dangerouslySetInnerHTML={{ __html: JSON.stringify(breadcrumbJsonLd) }}
         />
+        {productJsonLd && (
+          <script
+            type="application/ld+json"
+            dangerouslySetInnerHTML={{ __html: JSON.stringify(productJsonLd) }}
+          />
+        )}
         <main style={styles.main}>
           <DetailViewTracker slug={movie.slug} title={movie.title} />
 

@@ -6,10 +6,16 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.api.v1.api import api_router
 from app.core.cache import close_redis
 from app.core.config import settings
+from app.core.request_id import REQUEST_ID_HEADER, RequestIdMiddleware
+from app.core.sentry import init_sentry
 from app.services.resolver_client import (
     shutdown_resolver_http_client,
     startup_resolver_http_client,
 )
+
+# Sentry は import 時に環境変数を見て条件付きで有効化する。
+# 未設定 or sentry-sdk 未インストールなら完全 no-op。
+init_sentry()
 
 
 @asynccontextmanager
@@ -48,7 +54,14 @@ app.add_middleware(
         "Content-Type",
         "Origin",
         "X-Requested-With",
+        "X-Request-Id",
     ],
+    # クライアント側 JS から `X-Request-Id` を読めるように expose する。
+    expose_headers=["X-Request-Id"],
 )
+
+# 全てのリクエストに X-Request-Id を伝搬する。
+# 既存ヘッダを優先するため CORS の後段 (= 外側) に置く。
+app.add_middleware(RequestIdMiddleware)
 
 app.include_router(api_router, prefix="/api/v1")

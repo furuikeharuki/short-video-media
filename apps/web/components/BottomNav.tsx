@@ -5,6 +5,7 @@ import { usePathname } from "next/navigation";
 import { useEffect, useRef, useCallback, useState } from "react";
 import { markFeedStartUnmuted } from "@/lib/feedNav";
 import { buildFeedHrefFromSavedPref } from "@/lib/savedSearchPrefs";
+import { writeBottomNavFreezeSnapshot } from "@/lib/bottomNavFreeze";
 
 /**
  * /feed から /, /mypage 等にフルページ遷移するとき、ページ全体の取得が終わるまで
@@ -150,6 +151,19 @@ export default function BottomNav() {
   }, []);
 
   const isShortPage = pathname === "/feed" || pathname.startsWith("/search/feed") || isFeedModalOpen;
+  // フルページ遷移を起こす瞬間に sessionStorage へ書き出す「離脱直前のアクティブ href」。
+  // 着地ページ側で BottomNavFreezeBootstrap がこれを読んで <html> に
+  // data-nav-freeze-active-href として乗せ、first paint を「直前の見た目」に固定する。
+  const currentActiveHref = (() => {
+    for (const it of NAV_ITEMS) {
+      const matches =
+        (it.href === "/" ? pathname === "/" : pathname.startsWith(it.href)) ||
+        it.extraActive.some((p) => pathname.startsWith(p)) ||
+        (it.href === "/feed" && (pathname === "/feed" || isFeedModalOpen));
+      if (matches) return it.href;
+    }
+    return pathname;
+  })();
   // フィード上モーダル中は pathname が /movies/<slug> でも「非表示パス」とは扱わない。
   const isHidden    = !isFeedModalOpen && NAV_HIDDEN_PATHS.some((p) => pathname.startsWith(p));
 
@@ -293,12 +307,27 @@ export default function BottomNav() {
           (item.href === "/" ? pathname === "/" : pathname.startsWith(item.href)) ||
           item.extraActive.some((p) => pathname.startsWith(p)) ||
           (item.href === "/feed" && pathname === "/feed");
-        const icon = isActive ? item.iconFilled : item.iconOutline;
+
+        // 「active / inactive で DOM 構造が異なる」と、freeze CSS で見た目だけ
+        // 切り替えることが出来ない。両方のアイコンを常に DOM に置き、CSS の
+        // bottom-nav-item--active / data-nav-freeze-active-href セレクタで
+        // 表示を切り替える。アイコンの "形" 変化を含めて完全に視覚を凍結できる。
+        const iconNode = (
+          <span className="bottom-nav-icon">
+            <span className="bottom-nav-icon-outline" aria-hidden="true">{item.iconOutline}</span>
+            <span className="bottom-nav-icon-filled"  aria-hidden="true">{item.iconFilled}</span>
+          </span>
+        );
 
         if (isActive) {
           return (
-            <span key={item.href} className="bottom-nav-item bottom-nav-item--active" aria-current="page">
-              <span className="bottom-nav-icon">{icon}</span>
+            <span
+              key={item.href}
+              className="bottom-nav-item bottom-nav-item--active"
+              data-nav-href={item.href}
+              aria-current="page"
+            >
+              {iconNode}
               <span className="bottom-nav-label">{item.label}</span>
             </span>
           );
@@ -344,6 +373,11 @@ export default function BottomNav() {
           const goingToFeed = item.href === "/feed";
           if ((onShortFeed && item.href !== "/feed") || goingToFeed) {
             e.preventDefault();
+            // 着地ページの first paint を「離脱直前の見た目」に固定するため、
+            // sessionStorage にスナップショットを残す。Chrome がフルページ遷移
+            // 直後の compositing で active item / シークバーを 1-2 フレームだけ
+            // 「揺らして」見せるチラつきを完全に消すための鍵。
+            writeBottomNavFreezeSnapshot(currentActiveHref);
             // フィードからの離脱 (= ホーム / マイページへ向かう) では、
             // <video> のデコードを直ちに止めてからフルページ遷移を発行する。
             // 旧フィードの <video> がページ取得中も走り続けて CPU/帯域を奪う
@@ -377,9 +411,10 @@ export default function BottomNav() {
             key={item.href}
             href={item.href}
             className="bottom-nav-item"
+            data-nav-href={item.href}
             onClick={handleNavClick}
           >
-            <span className="bottom-nav-icon">{icon}</span>
+            {iconNode}
             <span className="bottom-nav-label">{item.label}</span>
           </Link>
         );
@@ -479,6 +514,96 @@ const navStyle = `
   html[data-nav-loading="1"] .seekbar-track,
   html[data-nav-loading="1"] .seekbar-track.seekbar-track--active {
     pointer-events: none;
+  }
+
+  /*
+    ────────────────────────────────────────────────────────────────
+    Chrome 限定 first-paint チラつき対策の中核 (data-nav-freeze-active-href)
+    ────────────────────────────────────────────────────────────────
+    BottomNavFreezeBootstrap が <head> 段階で sessionStorage を読み、
+    着地ページの first paint より前に <html data-nav-freeze-active-href="/feed">
+    のような属性を付ける。ここでは CSS だけで:
+      1. 実際の active item (= 着地ページの pathname に対する active) の
+         「filled アイコン + 白文字」を打ち消す
+      2. スナップショットされた href の item に「filled アイコン + 白文字」を強制
+      3. seekbar / ::before blur を完全に消す (=見た目を solid #000 に固定)
+      4. ナビ自体の bottom を -3px から 0 に差し替える (sub-pixel 揺らぎを除去)
+      5. 全ての transition を一時的に無効化し、属性が外れた瞬間にも
+         "急に色が変わる" のではなく次フレームから fade で復帰させる
+    これにより新ページの first paint は「離脱直前のボトムナビ」とピクセル単位で
+    一致し、Chrome がレイヤを作り直す数フレームの間も視覚イベントが発生しない。
+
+    属性は ~150ms 後 (rAF rAF + 80ms) に外され、ナビは本来の active state に
+    自然遷移する。React の state は一切変更していないのでハイドレーション
+    ミスマッチ等のリスクは無い。
+  */
+  html[data-nav-freeze-active-href] .bottom-nav {
+    /*
+      bottom:-3px は Chrome の sub-pixel 描画で compositing レイヤ再生成の
+      瞬間に微妙にずれる原因になる。フリーズ中は 0 に揃え、属性除去後に
+      本来の -3px に戻る。位置オフセットの差 (3px) は <body> 側で
+      padding-bottom: var(--bottom-nav-h) を保っているため、コンテンツ側の
+      レイアウトは動かない。
+    */
+    bottom: 0;
+  }
+  html[data-nav-freeze-active-href] .bottom-nav,
+  html[data-nav-freeze-active-href] .bottom-nav *,
+  html[data-nav-freeze-active-href] .bottom-nav *::before,
+  html[data-nav-freeze-active-href] .bottom-nav *::after {
+    /*
+      フリーズ中はあらゆる transition を止める。属性除去の瞬間に「外した状態へ
+      transition で滑らかに復帰」させたいので、ここで no-transition にしておき、
+      bottom-nav-item / icon 側の transition (color など) は属性が外れて初めて効く。
+    */
+    transition: none !important;
+  }
+  /* 半透明 + blur 背景を消して solid #000 に固定 (= ナビ越しに下が透けない) */
+  html[data-nav-freeze-active-href] .bottom-nav::before {
+    display: none;
+  }
+  /* シークバー (レール + fill + thumb) を完全に視覚的に外す。
+     非フィードからの起動でもフィードからの起動でも同じ見た目に揃える。 */
+  html[data-nav-freeze-active-href] .seekbar-track,
+  html[data-nav-freeze-active-href] .seekbar-track.seekbar-track--active {
+    opacity: 0 !important;
+    pointer-events: none !important;
+  }
+  html[data-nav-freeze-active-href] .seekbar-track.seekbar-track--active::before,
+  html[data-nav-freeze-active-href] .seekbar-track.seekbar-track--active .seekbar-fill,
+  html[data-nav-freeze-active-href] .seekbar-track.seekbar-track--active .seekbar-thumb {
+    display: none !important;
+  }
+
+  /* 実際の active item の "白文字 + filled アイコン" を打ち消す
+     (= 着地ページが /feed なら、本来 active 表示になるはずの ショート を
+     一時的に inactive 表示にする) */
+  html[data-nav-freeze-active-href] .bottom-nav-item--active {
+    color: rgba(255, 255, 255, 0.45);
+  }
+  html[data-nav-freeze-active-href] .bottom-nav-item--active .bottom-nav-icon-filled  {
+    visibility: hidden;
+  }
+  html[data-nav-freeze-active-href] .bottom-nav-item--active .bottom-nav-icon-outline {
+    visibility: visible;
+  }
+
+  /* スナップショット時 active だった href の item を強制的に "active 表示" にする。
+     data-nav-href は React 側で全 item に付与している。 */
+  html[data-nav-freeze-active-href="/"]       .bottom-nav-item[data-nav-href="/"],
+  html[data-nav-freeze-active-href="/feed"]   .bottom-nav-item[data-nav-href="/feed"],
+  html[data-nav-freeze-active-href="/mypage"] .bottom-nav-item[data-nav-href="/mypage"] {
+    color: #fff;
+  }
+  html[data-nav-freeze-active-href="/"]       .bottom-nav-item[data-nav-href="/"]       .bottom-nav-icon-outline,
+  html[data-nav-freeze-active-href="/feed"]   .bottom-nav-item[data-nav-href="/feed"]   .bottom-nav-icon-outline,
+  html[data-nav-freeze-active-href="/mypage"] .bottom-nav-item[data-nav-href="/mypage"] .bottom-nav-icon-outline {
+    visibility: hidden;
+  }
+  html[data-nav-freeze-active-href="/"]       .bottom-nav-item[data-nav-href="/"]       .bottom-nav-icon-filled,
+  html[data-nav-freeze-active-href="/feed"]   .bottom-nav-item[data-nav-href="/feed"]   .bottom-nav-icon-filled,
+  html[data-nav-freeze-active-href="/mypage"] .bottom-nav-item[data-nav-href="/mypage"] .bottom-nav-icon-filled {
+    visibility: visible;
   }
 
   /*
@@ -612,7 +737,29 @@ const navStyle = `
     align-items: center;
     justify-content: center;
     line-height: 1;
+    position: relative;
+    width: 24px;
+    height: 24px;
   }
+  /*
+    outline と filled の SVG を両方常に DOM に置き、active 状態だけで表示を
+    切り替える。これは Chrome 限定フルページ遷移チラつき対策で導入した
+    html[data-nav-freeze-active-href] が、active state を pathname ではなく
+    スナップショットに基づいて CSS だけで切り替えられるようにするため。
+    両方とも同位置に重ねて、見えていない方は visibility:hidden で完全に
+    描画パスから外す (paint コストも、Chrome の sub-pixel の揺らぎも除去)。
+  */
+  .bottom-nav-icon-outline,
+  .bottom-nav-icon-filled {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .bottom-nav-icon-filled { visibility: hidden; }
+  .bottom-nav-item--active .bottom-nav-icon-outline { visibility: hidden; }
+  .bottom-nav-item--active .bottom-nav-icon-filled  { visibility: visible; }
 
   .bottom-nav-label {
     font-size: 10px;

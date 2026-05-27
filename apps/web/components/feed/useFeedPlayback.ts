@@ -523,7 +523,8 @@ export function useFeedPlayback({ slug, title, isActive, videoSrc, boundElement 
         | "canplay"
         | "metadata"
         | "observer"
-        | "element-bound",
+        | "element-bound"
+        | "recovery",
     ) => {
       if (!isActiveRef.current) {
         if (isVideoTimingEnabled()) {
@@ -603,14 +604,14 @@ export function useFeedPlayback({ slug, title, isActive, videoSrc, boundElement 
       // <video> マウントで src 直設定なので React が load() を発火) promote だけ
       // 対象にする。
       if (
-        reason === "promote" &&
+        (reason === "promote" || reason === "recovery") &&
         video.readyState === 0 &&
         !activeAutoplayRecoveredRef.current
       ) {
         if (isVideoTimingEnabled()) {
           // eslint-disable-next-line no-console
           console.debug(
-            `vt ${slug}: active autoplay promote rs=0 force-load reason=promote`,
+            `vt ${slug}: active autoplay ${reason} rs=0 force-load reason=${reason}`,
           );
         }
         try { video.load(); } catch { /* ignore */ }
@@ -924,6 +925,133 @@ export function useFeedPlayback({ slug, title, isActive, videoSrc, boundElement 
       );
     },
     [playVideo, slug, startProgressLoop],
+  );
+
+  // force re-resolve 完了後の active 要素救済。
+  //
+  // 呼び出し元: FeedItem の forceResolveEpoch watcher。useResolvedVideoSrc の
+  // handleError() が成功 (= phase=ready) した直後に 1 回だけ呼ばれる。
+  //
+  // 目的:
+  //   `video-active-stuck` から force-resolve が走り新 URL が来ても、
+  //   - URL 文字列が同一なら FeedItemVideo の src-sync effect が早期 return して
+  //     load()/play() が走らない
+  //   - URL が変わっても watchdog の recovered/signaled flag が立っているので、
+  //     後続の attemptActiveAutoplay 経路で Phase 1/2 が再 arm されない
+  // という二重の no-op で active 要素が rs=0 のまま黒画面で固まる。
+  //
+  // この関数は session レベルの状態を 1 回だけリセットし、active 要素を強制的に
+  // load() + play() の流れに戻す。リトライ上限は useResolvedVideoSrc 側
+  // (MAX_FORCE_RETRIES + 指数バックオフ) で既に管理されているので、ここでは
+  // 「force-resolve が ready を生むたびに 1 回ずつ」が自然な上限になる。
+  const recoverActiveAfterForceResolve = useCallback(
+    (urlAfter: string) => {
+      if (!isActiveRef.current) {
+        if (isVideoTimingEnabled()) {
+          // eslint-disable-next-line no-console
+          console.debug(
+            `vt ${slug}: active recovery abort reason=inactive`,
+          );
+        }
+        return;
+      }
+      if (userPausedRef.current) {
+        if (isVideoTimingEnabled()) {
+          // eslint-disable-next-line no-console
+          console.debug(
+            `vt ${slug}: active recovery abort reason=user-paused`,
+          );
+        }
+        return;
+      }
+      const video = videoRef.current;
+      if (!video) {
+        if (isVideoTimingEnabled()) {
+          // eslint-disable-next-line no-console
+          console.debug(
+            `vt ${slug}: active recovery abort reason=no-element`,
+          );
+        }
+        return;
+      }
+      // 既に再生中なら何もしない (force-resolve が走っても実は鳴っていたケース)。
+      if (
+        !video.paused &&
+        video.readyState >= 3 &&
+        activePlayingObservedRef.current
+      ) {
+        if (isVideoTimingEnabled()) {
+          // eslint-disable-next-line no-console
+          console.debug(
+            `vt ${slug}: active recovery abort reason=already-playing rs=${video.readyState}`,
+          );
+        }
+        return;
+      }
+
+      // Phase 1/2 watchdog の latch を解除して、recover 後の新 session で
+      // 必要なら再 arm できるようにする。playing 観測も再度ゼロから観測しなおす
+      // (force-resolve 後の play() は別 attempt として扱う)。
+      activeAutoplayRecoveredRef.current = false;
+      activeAutoplayStuckSignaledRef.current = false;
+      activePlayingObservedRef.current = false;
+      if (activeAutoplayWatchdogRef.current != null) {
+        clearTimeout(activeAutoplayWatchdogRef.current);
+        activeAutoplayWatchdogRef.current = null;
+      }
+      if (activeAutoplayStuckTimerRef.current != null) {
+        clearTimeout(activeAutoplayStuckTimerRef.current);
+        activeAutoplayStuckTimerRef.current = null;
+      }
+      // attemptId を進めて、古い session の延長で発火する setTimeout を bail させる。
+      activeAutoplayAttemptIdRef.current += 1;
+
+      // active 要素の src を新 URL に強制同期。FeedItemVideo の src-sync effect は
+      // URL 文字列が同一なら no-op するため、ここでは「同じ URL でも明示 load()」
+      // を撃つことで、Range request を最初から発行させ rs=0 stuck を打開する。
+      // promotedElement / JSX <video> どちらでも video.src を上書きすると React 側
+      // の制御と一瞬不一致になるが、後者は handle-error→exhausted フローが優先で
+      // 動くため副作用は許容範囲。
+      const currentSrc = video.currentSrc || video.src;
+      const sameUrl = currentSrc === urlAfter;
+      if (!sameUrl && urlAfter) {
+        try { video.src = urlAfter; } catch { /* ignore */ }
+      }
+      try { video.load(); } catch { /* ignore */ }
+      if (isVideoTimingEnabled()) {
+        // eslint-disable-next-line no-console
+        console.debug(
+          `vt ${slug}: active recovery applying url sameUrl=${sameUrl} rs=${video.readyState}`,
+        );
+        // eslint-disable-next-line no-console
+        console.debug(
+          `vt ${slug}: active recovery reload rs=${video.readyState} networkState=${video.networkState}`,
+        );
+      }
+
+      // pro-actress minStart を再 enforce。load() で currentTime が 0 に巻き戻る
+      // ことがあるため、play() より前に必ず 5 秒に飛ばす。
+      if (
+        isProActressRef.current &&
+        video.currentTime + 0.05 < PRO_ACTRESS_HEAD_SKIP_SEC
+      ) {
+        const dur = video.duration;
+        const tooShort =
+          Number.isFinite(dur) && dur > 0 && dur < PRO_ACTRESS_MIN_DURATION_SEC;
+        if (!tooShort) {
+          try { video.currentTime = PRO_ACTRESS_HEAD_SKIP_SEC; } catch { /* ignore */ }
+        }
+      }
+
+      if (isVideoTimingEnabled()) {
+        // eslint-disable-next-line no-console
+        console.debug(
+          `vt ${slug}: active recovery play retry rs=${video.readyState} paused=${video.paused}`,
+        );
+      }
+      attemptActiveAutoplay("recovery");
+    },
+    [attemptActiveAutoplay, slug],
   );
 
   // pending intent を「現状の videoRef + 状態」で消費する。
@@ -1850,5 +1978,6 @@ export function useFeedPlayback({ slug, title, isActive, videoSrc, boundElement 
     handleMouseUp,
     handleMouseLeave,
     handlePcClick,
+    recoverActiveAfterForceResolve,
   };
 }

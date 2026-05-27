@@ -41,6 +41,12 @@ interface Args {
   slug: string;
   /** isActive=true のスライドだけ解決を走らせるための制御。 */
   enabled: boolean;
+  /**
+   * このスライドが現在「画面中央 (active)」なのか「隣接 (adjacent) preload」
+   * なのかを vt ログに残すためのフラグ。実行ロジックには影響しない。
+   * 観測専用 (`source=active scope=adjacent` のように出る)。
+   */
+  isActive?: boolean;
 }
 
 interface Result {
@@ -48,6 +54,18 @@ interface Result {
   exhausted: boolean;
   resolving: boolean;
   handleError: () => void;
+  /**
+   * force-resolve (handleError) が ready に到達するたびに増えるカウンタ。
+   *
+   * 通常の resolve 完了 (= 初回 / slug 変更後) では 0 のまま。force-retry の結果
+   * `phase: "ready"` に遷移したときだけ +1 する。これにより:
+   *   - 上位 (FeedItem / useFeedPlayback) は「URL 文字列が変わったか」ではなく
+   *     「force-resolve が新しい結果を返したか」を観測できる。
+   *   - 同一 URL を再取得したケース (CDN 接続恒久断などで API が同じ URL を返す)
+   *     でも、上位が認識して active <video> の load()/play() を撃ち直せる。
+   * active session 切り替え (= slug 変更) で 0 にリセット。
+   */
+  forceResolveEpoch: number;
 }
 
 const MAX_FORCE_RETRIES = 3;
@@ -71,6 +89,12 @@ function logSelectedQuality(
   res: { mp4_url: string; high_mp4_url?: string | null },
   picked: string,
   source: "active" | "force-retry",
+  // 「この resolver は呼ばれた時点で active として実行されたのか、隣接 (adjacent)
+  // として実行されたのか」を vt ログで明示する。これが無いと、非 current slug が
+  // adjacent としてリゾルブしたログ (source=active) が「アクティブが切り替わった
+  // のか?」という混乱を呼ぶ。`source=active` は「初回 resolve / enabled=true 経路」
+  // を意味し、slug が実際に画面中央にあるかどうかとは独立。
+  scope: "active" | "adjacent",
 ) {
   if (!isVideoTimingEnabled()) return;
   const tier = inferQualityTier(picked);
@@ -80,12 +104,21 @@ function logSelectedQuality(
     : "none";
   // eslint-disable-next-line no-console
   console.debug(
-    `vt resolve quality slug=${slug} source=${source} quality=${tier} host=${host} drift=${drift}`,
+    `vt resolve quality slug=${slug} source=${source} scope=${scope} quality=${tier} host=${host} drift=${drift}`,
   );
 }
 
-export function useResolvedVideoSrc({ slug, enabled }: Args): Result {
+export function useResolvedVideoSrc({ slug, enabled, isActive = false }: Args): Result {
+  // 最新の isActive を ref で握る。logSelectedQuality の発火タイミング (resolve
+  // 完了時) は props 更新と完全には同期しないため、effect 内で「いま中央か?」を
+  // 観測するには ref が必要。観測ログのためだけに使う。
+  const isActiveRef = useRef(isActive);
+  useEffect(() => {
+    isActiveRef.current = isActive;
+  }, [isActive]);
   const [state, setState] = useState<State>({ phase: "resolving", url: null });
+  // force-resolve が ready を生成した回数。slug 変更 / 初回 resolve では増えない。
+  const [forceResolveEpoch, setForceResolveEpoch] = useState(0);
 
   const forceRetryCountRef = useRef(0);
   const inFlightRef = useRef<AbortController | null>(null);
@@ -107,6 +140,7 @@ export function useResolvedVideoSrc({ slug, enabled }: Args): Result {
     }
     clearBackoff();
     setState({ phase: "resolving", url: null });
+    setForceResolveEpoch(0);
   }, [slug, clearBackoff]);
 
   useEffect(() => {
@@ -135,7 +169,13 @@ export function useResolvedVideoSrc({ slug, enabled }: Args): Result {
         if (res?.mp4_url) {
           timer.mark("resolve:ok");
           const url = pickPlaybackUrl(res);
-          logSelectedQuality(slug, res, url, "active");
+          logSelectedQuality(
+            slug,
+            res,
+            url,
+            "active",
+            isActiveRef.current ? "active" : "adjacent",
+          );
           ensurePreconnect(url);
           setState({ phase: "ready", url });
         } else {
@@ -174,9 +214,29 @@ export function useResolvedVideoSrc({ slug, enabled }: Args): Result {
         if (controller.signal.aborted) return;
         if (res?.mp4_url) {
           const url = pickPlaybackUrl(res);
-          logSelectedQuality(slug, res, url, "force-retry");
+          logSelectedQuality(
+            slug,
+            res,
+            url,
+            "force-retry",
+            isActiveRef.current ? "active" : "adjacent",
+          );
           ensurePreconnect(url);
-          setState({ phase: "ready", url });
+          let sameUrl = false;
+          setState((prev) => {
+            sameUrl = prev.url === url;
+            return { phase: "ready", url };
+          });
+          setForceResolveEpoch((n) => {
+            const next = n + 1;
+            if (isVideoTimingEnabled()) {
+              // eslint-disable-next-line no-console
+              console.debug(
+                `vt ${slug}: force-resolve complete epoch=${next} sameUrl=${sameUrl}`,
+              );
+            }
+            return next;
+          });
           return;
         }
         if (forceRetryCountRef.current < MAX_FORCE_RETRIES) {
@@ -257,5 +317,6 @@ export function useResolvedVideoSrc({ slug, enabled }: Args): Result {
     exhausted: state.phase === "exhausted",
     resolving: state.phase === "resolving" || state.phase === "retrying",
     handleError,
+    forceResolveEpoch,
   };
 }

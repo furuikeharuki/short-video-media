@@ -189,6 +189,14 @@ export default function FeedClient() {
   const [initialIndex, setInitialIndex] = useState(0);
   const [isEmpty,      setIsEmpty]      = useState(false);
   const [isLoading,    setIsLoading]    = useState(true);
+  // 「直近で初期 fetch を発射したとき、何らかのフィルター (詳細検索 / genres) が
+  // 適用されていたか」。URL 由来の hasAnyFilter は SavedFilterEnforcer による
+  // router.replace 注入と FeedClient 側の fetch がレース状態になるタイミングが
+  // あり、URL は空 (= hasAnyFilter=false) のままだが実際には保存済みフィルターを
+  // 含めた状態で fetch 済み・結果 0 件、というケースで空メッセージが出ない不具合の
+  // 原因になっていた。fetch を出した時点での「適用フィルター有無」を保持して、
+  // 空メッセージの表示条件に OR で噛ませる。
+  const [lastFetchHadFilter, setLastFetchHadFilter] = useState(false);
 
   // searchParams から現在のフィルターと署名を計算しておく。
   const { currentGenres, currentAdvanced, currentSig, hasAnyFilter } = useMemo(() => {
@@ -212,6 +220,21 @@ export default function FeedClient() {
   ) => {
     if (isFetchingRef.current) return;
     isFetchingRef.current = true;
+    // この fetch が「フィルター適用済み」かどうかを記録。URL を見るのではなく
+    // 実際に getFeed に渡す引数で判定するため、SavedFilterEnforcer の URL 注入と
+    // fetch のレースに左右されない。
+    const hadFilter =
+      (genres?.length ?? 0) > 0 ||
+      !!advanced?.q ||
+      (advanced?.actresses?.length ?? 0) > 0 ||
+      (advanced?.series_list?.length ?? 0) > 0 ||
+      (advanced?.directors?.length ?? 0) > 0 ||
+      (advanced?.makers?.length ?? 0) > 0 ||
+      (advanced?.labels?.length ?? 0) > 0 ||
+      (advanced?.ng_words?.length ?? 0) > 0 ||
+      !!advanced?.date_from ||
+      !!advanced?.date_to ||
+      !!advanced?.sort;
     try {
       const [res, pinnedMovie] = await Promise.all([
         getFeed(0, 20, seed, genres, advanced),
@@ -230,6 +253,7 @@ export default function FeedClient() {
       setItems(feedItems);
       setInitialIndex(idx);
       setIsEmpty(feedItems.length === 0);
+      setLastFetchHadFilter(hadFilter);
       nextCursorRef.current = res.next_cursor;
       saveSession(seed, idx, feedItems, res.next_cursor, filterSig);
     } catch (e) {
@@ -290,6 +314,7 @@ export default function FeedClient() {
         setItems(pl.items);
         setInitialIndex(idx);
         setIsEmpty(false);
+        setLastFetchHadFilter(false);
         setIsLoading(false);
         // playlist 経由フラグを立てる。これにより fetchMore でも「フィルターを適用しない」を貫く。
         cameFromPlaylistRef.current = true;
@@ -356,6 +381,7 @@ export default function FeedClient() {
       setItems(session.items as MovieCard[]);
       setInitialIndex(idx);
       setIsEmpty(false);
+      setLastFetchHadFilter(hasAnyFilter);
       setIsLoading(false);
       nextCursorRef.current = session.nextCursor;
     } else {
@@ -367,6 +393,7 @@ export default function FeedClient() {
       setIsLoading(true);
       setItems([]);
       setIsEmpty(false);
+      setLastFetchHadFilter(false);
       fetchInitial(
         seed,
         0,
@@ -502,13 +529,24 @@ export default function FeedClient() {
     void fetchMore();
   }, [fetchMore]);
 
-  // 詳細検索 (q / actresses / genres / makers / ...) が効いている状態で
-  // 初期ロードの結果が 0 件だったときだけ、専用の「条件に合う動画がみつかりません」を出す。
+  // 詳細検索 / フィルター (q / actresses / genres / makers / ...) が効いた状態で
+  // 初期ロードの結果が 0 件だったときだけ、専用の「該当する作品が見つかりませんでした」を出す。
+  //
+  // 判定は URL 由来の hasAnyFilter だけでなく、直近の fetch で実際にフィルターを
+  // 渡したか (lastFetchHadFilter) でも OR で判定する。これは BottomNav の
+  // ショートボタン (/feed フルページ遷移) のように、SavedFilterEnforcer が
+  // 保存済みフィルター (例: q だけ保存) を router.replace で注入する前後で、
+  // URL は空のまま fetch だけ走るレースや、注入後の URL が q のみで
+  // hasAdvancedInUrl=false 判定になる経路に依存してメッセージが出ない/出るが
+  // 揺れるのを防ぐ。fetch を発射した時点での適用フィルター有無は確定なので、
+  // それを保持しておけば「フィルター無し fetch で空 (＝通常 feed が空) のときには
+  // 出さない」契約も同時に守れる。
+  //
   // フィルター無しで空のときは従来通りスピナーのままにして、専用文言は出さない。
-  if (isEmpty && hasAnyFilter) {
+  if (isEmpty && (hasAnyFilter || lastFetchHadFilter)) {
     return (
       <div className="feed-empty">
-        <p className="feed-empty-text">条件に合う動画がみつかりません</p>
+        <p className="feed-empty-text">該当する作品が見つかりませんでした</p>
       </div>
     );
   }

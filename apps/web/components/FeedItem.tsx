@@ -92,6 +92,13 @@ export default function FeedItem({ item, isActive, isAdjacent = false, isFirst, 
     useState<string | null>(null);
   const activeReadyRef = useRef(false);
   const activePlayingRef = useRef(false);
+  // force-fallback の useEffect (上の方で定義) から呼ばれる
+  // abandonPendingIfActiveReady の最新参照を保持するための ref。useCallback は
+  // 下の方で宣言されるため直接クロージャに取り込むと TDZ / 古い参照問題があるので、
+  // 下で setup する。
+  const abandonPendingIfActiveReadyRef = useRef<
+    ((reason: "active-playing" | "loadeddata-ready" | "force-fallback") => void) | null
+  >(null);
   // `byte-prefetch promote skipped reason=...` を slug ごとに 1 度だけ出すための ref。
   // 同 effect サイクルで複数回 tryClaim が走っても多重ログを避ける。slug が
   // 変わったら下の slug-change effect でクリアする。
@@ -111,6 +118,11 @@ export default function FeedItem({ item, isActive, isAdjacent = false, isFirst, 
   // この slug については canPromote=false に倒し、JSX <video> を強制マウントする。
   // 解除は slug 変更 / 非 active 化のときに行う。
   const [forceFallbackSlug, setForceFallbackSlug] = useState<string | null>(null);
+  // force-fallback が発火した回数。FeedItemVideo の key に混ぜることで
+  // JSX <video> を確実に unmount→remount し、src 再 attach / load() / play() を
+  // 強制する。canPromote が true→false に倒れただけでは React は同じ
+  // <video> インスタンスを使い回す可能性があり、stuck な MediaElement が残る。
+  const [fallbackEpoch, setFallbackEpoch] = useState(0);
   // active へ移行した時点で promotable な隠し要素があれば即時 claim する。
   // hasPromotableElement は registry を sync に読むので render フェーズで判定でき、
   // expectingPromotion=true を渡せば JSX <video> の一時マウントを完全に回避できる。
@@ -356,6 +368,8 @@ export default function FeedItem({ item, isActive, isAdjacent = false, isFirst, 
     setPendingAbandonedSlug((prev) => (prev === item.slug ? prev : null));
     // 別 slug に切り替わったら fallback フラグも捨てる (この slug の指示ではない)。
     setForceFallbackSlug((prev) => (prev === item.slug ? null : prev));
+    // fallback epoch も slug 変更で 0 にリセット (epoch 単位は slug session 内)。
+    setFallbackEpoch(0);
     activeReadyRef.current = false;
     activePlayingRef.current = false;
   }, [item.slug]);
@@ -368,11 +382,34 @@ export default function FeedItem({ item, isActive, isAdjacent = false, isFirst, 
     const onForceFallback = (e: Event) => {
       const ce = e as CustomEvent<{ slug?: string; reason?: string }>;
       if (ce.detail?.slug !== item.slug) return;
+      // 同 slug に対しても遷移ごとに epoch を bump して JSX <video> を
+      // 強制 remount する。canPromote=false に倒れるだけだと、React が同じ
+      // 要素を再利用して src/load の再 attach が走らず host-only deadlock が
+      // 解消されないケースがあった。key 経由の unmount→remount で
+      // useResolvedVideoSrc の sameUrl 経路でも確実に loadstart からやり直す。
+      let nextEpoch = 0;
+      setFallbackEpoch((prev) => {
+        nextEpoch = prev + 1;
+        return nextEpoch;
+      });
       setForceFallbackSlug((prev) => (prev === item.slug ? prev : item.slug));
+      // remount に備えて videoReady / spinner / settled をリセットしておく。
+      // 新しい <video> は loadstart からやり直すので、旧要素由来の ready 状態を
+      // 引き継いではいけない。
+      setVideoReadyState(false);
+      activeReadyRef.current = false;
+      videoSettledRef.current = false;
+      activePlayingRef.current = false;
+      // この slug の pending handoff entry は force-fallback で確実に放棄する。
+      // 旧 host-only 経路を救うために残しても active <video> は別経路 (JSX) で
+      // 動くので、pin を握り続ける意味は無い。
+      // ref 経由で呼ぶことで「listener が捕まえた古い callback 参照」問題を避ける
+      // (abandonPendingIfActiveReady は本 effect 以降に定義された useCallback)。
+      abandonPendingIfActiveReadyRef.current?.("force-fallback");
       if (isVideoTimingEnabled()) {
         // eslint-disable-next-line no-console
         console.debug(
-          `vt ${item.slug}: force-fallback engaged reason=${ce.detail?.reason ?? "unknown"}`,
+          `vt ${item.slug}: force-fallback engaged reason=${ce.detail?.reason ?? "unknown"} epoch=${nextEpoch}`,
         );
       }
     };
@@ -422,6 +459,7 @@ export default function FeedItem({ item, isActive, isAdjacent = false, isFirst, 
     setPendingAbandonedSlug((prev) => (prev === item.slug ? null : prev));
     // force-fallback も同様に session 単位でリセット。
     setForceFallbackSlug((prev) => (prev === item.slug ? null : prev));
+    setFallbackEpoch(0);
     if (pendingLoggedRef.current === item.slug) {
       unpinSlug(item.slug);
       if (isVideoTimingEnabled()) {
@@ -503,6 +541,7 @@ export default function FeedItem({ item, isActive, isAdjacent = false, isFirst, 
     boundElement: promotedElement,
     onOpenModal: handleOpenModal,
     isProActress,
+    fallbackEpoch,
   });
 
   // preload 戦略:
@@ -523,33 +562,58 @@ export default function FeedItem({ item, isActive, isAdjacent = false, isFirst, 
   }
 
   const handleLoadStart = useCallback(() => {
-    // no-op (ロード中のサムネ表示は thumbnail-cover で別経路)
-  }, []);
+    // ロード中のサムネ表示は thumbnail-cover で別経路。
+    // force-fallback で remount された JSX <video> がここに到達したことを観測する
+    // ために、fallback session 中だけ専用ログを出す。これにより
+    // 「force-fallback engaged は出たが loadstart が来ない (= remount 自体に失敗)」
+    // ケースが切り分けられる。
+    if (forceFallbackSlug === item.slug && isVideoTimingEnabled()) {
+      // eslint-disable-next-line no-console
+      console.debug(
+        `vt ${item.slug}: fallback video src-attached epoch=${fallbackEpoch}`,
+      );
+    }
+  }, [forceFallbackSlug, fallbackEpoch, item.slug]);
 
   const handleLoadedMetadata = useCallback(() => {
     videoSettledRef.current = true;
     clearHardTimeout();
   }, [clearHardTimeout]);
 
-  const abandonPendingIfActiveReady = useCallback(() => {
-    if (pendingLoggedRef.current !== item.slug) return;
-    unpinSlug(item.slug);
-    if (isVideoTimingEnabled()) {
-      const readiness = getReadiness(item.slug) ?? "metadata";
-      // eslint-disable-next-line no-console
-      console.debug(
-        `vt handoff pending abandon slug=${item.slug} reason=active-playing readiness=${readiness}`,
-      );
-    }
-    pendingLoggedRef.current = null;
-    setPendingAbandonedSlug(item.slug);
-  }, [item.slug]);
+  // active <video> 側で ready シグナル (loadeddata / canplay / playing) を受け取った
+  // ときに pending handoff entry を解放する。`reason` 引数で「何がトリガーしたか」を
+  // 明示してログに出す。これまでは全経路で `active-playing` 固定だったが、
+  //   - loadeddata/canplay で abandon: まだ playing していない (loadeddata-ready)
+  //   - playing で abandon: 実際に playing が観測できた (active-playing)
+  //   - force-fallback で abandon: 救済 remount に伴う放棄 (force-fallback)
+  // のように区別する。これによりログから「fallback 経路で playing と取り違えて
+  // pending を捨ててないか」を切り分け可能になる。
+  const abandonPendingIfActiveReady = useCallback(
+    (reason: "active-playing" | "loadeddata-ready" | "force-fallback") => {
+      if (pendingLoggedRef.current !== item.slug) return;
+      unpinSlug(item.slug);
+      if (isVideoTimingEnabled()) {
+        const readiness = getReadiness(item.slug) ?? "metadata";
+        // eslint-disable-next-line no-console
+        console.debug(
+          `vt handoff pending abandon slug=${item.slug} reason=${reason} readiness=${readiness}`,
+        );
+      }
+      pendingLoggedRef.current = null;
+      setPendingAbandonedSlug(item.slug);
+    },
+    [item.slug],
+  );
+  // force-fallback effect から後参照できるよう、最新を ref に流す。
+  useEffect(() => {
+    abandonPendingIfActiveReadyRef.current = abandonPendingIfActiveReady;
+  }, [abandonPendingIfActiveReady]);
 
   const handleLoadedData = useCallback(() => {
     videoSettledRef.current = true;
     clearHardTimeout();
     activeReadyRef.current = true;
-    abandonPendingIfActiveReady();
+    abandonPendingIfActiveReady("loadeddata-ready");
     setVideoReady(true);
     setVideoReadyState(true);
     setSpinnerVisible(false);
@@ -560,7 +624,7 @@ export default function FeedItem({ item, isActive, isAdjacent = false, isFirst, 
     videoSettledRef.current = true;
     clearHardTimeout();
     activeReadyRef.current = true;
-    abandonPendingIfActiveReady();
+    abandonPendingIfActiveReady("loadeddata-ready");
     setVideoReady(true);
     setVideoReadyState(true);
     setSpinnerVisible(false);
@@ -589,7 +653,8 @@ export default function FeedItem({ item, isActive, isAdjacent = false, isFirst, 
     videoSettledRef.current = true;
     clearHardTimeout();
     activeReadyRef.current = true;
-    abandonPendingIfActiveReady();
+    activePlayingRef.current = true;
+    abandonPendingIfActiveReady("active-playing");
     setVideoReady(true);
     setVideoReadyState(true);
     setSpinnerVisible(false);
@@ -801,6 +866,11 @@ export default function FeedItem({ item, isActive, isAdjacent = false, isFirst, 
         {showVideo ? (
           <>
             <FeedItemVideo
+              // fallbackEpoch を key に混ぜることで、force-fallback が engaged する
+              // たびに JSX <video> を unmount→remount し src/load/play を確実に
+              // 再 attach する。slug は同一 session 内なので変化させず、epoch だけ
+              // で remount を制御する。epoch=0 (通常時) は単に "video-<slug>"。
+              key={fallbackEpoch > 0 ? `video-${item.slug}-fb${fallbackEpoch}` : `video-${item.slug}`}
               src={videoSrc as string}
               preload={preloadAttr}
               containerRef={containerRef}

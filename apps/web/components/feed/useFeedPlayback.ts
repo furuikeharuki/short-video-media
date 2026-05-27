@@ -74,9 +74,17 @@ interface UseFeedPlaybackOptions {
    * ただし duration が PRO_ACTRESS_MIN_DURATION_SEC 未満の場合は適用しない (動画が短すぎる)。
    */
   isProActress?: boolean;
+  /**
+   * force-fallback が発火するたびにインクリメントされるカウンタ。FeedItem の
+   * `fallbackEpoch` 状態と一致。autoplay / pro-actress / 各 watchdog の effect の
+   * deps に含めることで、`<video>` が remount された commit で確実に effect が
+   * 再走し、attemptActiveAutoplay("force-fallback") 等で新要素に対する
+   * src 確認 / load() / play() の再起動が行われるようにする。
+   */
+  fallbackEpoch?: number;
 }
 
-export function useFeedPlayback({ slug, title, isActive, videoSrc, boundElement = null, onOpenModal, isProActress = false }: UseFeedPlaybackOptions) {
+export function useFeedPlayback({ slug, title, isActive, videoSrc, boundElement = null, onOpenModal, isProActress = false, fallbackEpoch = 0 }: UseFeedPlaybackOptions) {
   // 初回マウント時に一回だけショートボタンフラグを消費
   consumeStartUnmutedFlag();
 
@@ -709,7 +717,8 @@ export function useFeedPlayback({ slug, title, isActive, videoSrc, boundElement 
         | "metadata"
         | "observer"
         | "element-bound"
-        | "recovery",
+        | "recovery"
+        | "force-fallback",
     ) => {
       if (!isActiveRef.current) {
         if (isVideoTimingEnabled()) {
@@ -1780,7 +1789,8 @@ export function useFeedPlayback({ slug, title, isActive, videoSrc, boundElement 
     [attemptActiveAutoplay, slug, videoSrc],
   );
 
-  // active-change / src 解決 / 要素 rebind (promoted swap) のいずれかで自動再生を起動。
+  // active-change / src 解決 / 要素 rebind (promoted swap) / force-fallback remount
+  // のいずれかで自動再生を起動。
   useEffect(() => {
     if (!isActive) return;
     if (!videoSrc) return;
@@ -1795,7 +1805,7 @@ export function useFeedPlayback({ slug, title, isActive, videoSrc, boundElement 
       if (isVideoTimingEnabled()) {
         // eslint-disable-next-line no-console
         console.debug(
-          `vt ${slug}: active autoplay defer reason=no-element bound=${boundElement ? "set" : "null"}`,
+          `vt ${slug}: active autoplay defer reason=no-element bound=${boundElement ? "set" : "null"} fbEpoch=${fallbackEpoch}`,
         );
       }
       return;
@@ -1807,8 +1817,23 @@ export function useFeedPlayback({ slug, title, isActive, videoSrc, boundElement 
     pendingActiveAutoplayRef.current = null;
     // promote 由来 (boundElement non-null) と通常マウントを reason で区別する。
     // 同じ commit で promoted swap + active 化が起きるケースは promote 側を優先。
-    attemptActiveAutoplay(boundElement ? "promote" : "active-change");
-  }, [isActive, videoSrc, boundElement, attemptActiveAutoplay, slug]);
+    // force-fallback (key 変更による remount) の場合は専用 reason で観測しやすくする。
+    let reason: "promote" | "active-change" | "force-fallback";
+    if (fallbackEpoch > 0 && !boundElement) {
+      reason = "force-fallback";
+    } else if (boundElement) {
+      reason = "promote";
+    } else {
+      reason = "active-change";
+    }
+    if (reason === "force-fallback" && isVideoTimingEnabled()) {
+      // eslint-disable-next-line no-console
+      console.debug(
+        `vt ${slug}: force-fallback autoplay rearm epoch=${fallbackEpoch} rs=${video.readyState}`,
+      );
+    }
+    attemptActiveAutoplay(reason);
+  }, [isActive, videoSrc, boundElement, fallbackEpoch, attemptActiveAutoplay, slug]);
 
   // boundElement (= promoted 要素) が non-null になった commit では、子の
   // FeedItemVideo useLayoutEffect で videoRef.current が adopted 要素に書き換わる。
@@ -2336,7 +2361,9 @@ export function useFeedPlayback({ slug, title, isActive, videoSrc, boundElement 
     // 戻りスワイプで FeedItem が remount される場合は元々 effect が走り直すが、同じ
     // hook インスタンスのまま promoted element が rebind されるケースがあり (P2/P5 系)、
     // そのケースを救うため boundElement を依存に含める。
-  }, [slug, videoSrc, isProActress, boundElement, playVideo, startProgressLoop, clearProActressSeekInFlight, markProActressSeekInFlight]);
+    // fallbackEpoch も同様に依存。force-fallback で <video> が unmount→remount された
+    // 場合に新要素へ listener を確実に張り直す。
+  }, [slug, videoSrc, isProActress, boundElement, fallbackEpoch, playVideo, startProgressLoop, clearProActressSeekInFlight, markProActressSeekInFlight]);
 
   // 自動再生のセーフティネット: active な要素が canplay / loadeddata / loadedmetadata
   // に到達した時点でまだ paused かつ user-paused でないなら、attemptActiveAutoplay を
@@ -2404,7 +2431,7 @@ export function useFeedPlayback({ slug, title, isActive, videoSrc, boundElement 
       video.removeEventListener("loadeddata", onLoadedData);
       video.removeEventListener("loadedmetadata", onLoadedMeta);
     };
-  }, [isActive, videoSrc, boundElement, attemptActiveAutoplay, tryConsumePendingActiveAutoplay]);
+  }, [isActive, videoSrc, boundElement, fallbackEpoch, attemptActiveAutoplay, tryConsumePendingActiveAutoplay]);
 
   // 再生中の読み込み停滞 (waiting/stalled) と、再生再開 (playing/canplaythrough) を検知して
   // スピナーの表示・非表示を切り替える。isActive 中のときだけビデオ要素が
@@ -2541,7 +2568,7 @@ export function useFeedPlayback({ slug, title, isActive, videoSrc, boundElement 
     return () => {
       playObserver.disconnect();
     };
-  }, [attemptActiveAutoplay, isActive, videoSrc, boundElement]);
+  }, [attemptActiveAutoplay, isActive, videoSrc, boundElement, fallbackEpoch]);
 
   // 長押しメニュー・右クリックメニューをフィードアイテム全体で拒否する。
   // 動画コンテナだけだと、サムネイルのみ表示中のスライドやボトムバーの押下でコンテキストメニューが出てしまうため、

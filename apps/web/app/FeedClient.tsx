@@ -613,20 +613,35 @@ export default function FeedClient() {
   // 出さない」契約も同時に守れる。
   //
   // フィルター無しで空のときは従来通りスピナーのままにして、専用文言は出さない。
+  //
+  // 重要: <style>{uiStyle}</style> はどの分岐でも必ず描画する。React 18 では
+  // <style> タグはそれが含まれるツリーがマウントされている間しか CSS を効かせない。
+  // 以前は uiStyle ブロックを FeedSurface の return 経路にしか置いていなかったため、
+  // 「fetch 完了 → 0 件 → empty 分岐」「初回ロード中 → loading 分岐」の経路では
+  // .feed-empty / .feed-empty-text / .feed-loading / .feed-spinner の CSS が
+  // DOM に存在せず、メッセージやスピナーが unstyled (position 不在・font-size 未設定)
+  // のままヘッダー (z-index:100) の裏に隠れて見えなくなっていた。
+  // 全分岐で uiStyle を常駐させ、確実にスタイルが当たるようにする。
   if (isEmpty && (hasAnyFilter || lastFetchHadFilter)) {
     return (
-      <div className="feed-empty">
-        <p className="feed-empty-text">該当する作品が見つかりませんでした</p>
-      </div>
+      <>
+        <div className="feed-empty">
+          <p className="feed-empty-text">該当する作品が見つかりませんでした</p>
+        </div>
+        <style>{uiStyle}</style>
+      </>
     );
   }
 
   // pending 中はスピナーのみ見せ、フィルター未適用の feed を描画しない。
   if (enforceStatus === "pending" || isLoading || items.length === 0) {
     return (
-      <div className="feed-loading">
-        <div className="feed-spinner" />
-      </div>
+      <>
+        <div className="feed-loading">
+          <div className="feed-spinner" />
+        </div>
+        <style>{uiStyle}</style>
+      </>
     );
   }
 

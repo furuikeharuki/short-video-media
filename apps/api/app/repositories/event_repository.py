@@ -5,8 +5,9 @@ from datetime import datetime, timedelta, timezone
 from sqlalchemy import desc, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.db.models.actress import Actress
 from app.db.models.event import Event
-from app.db.models.movie import Movie
+from app.db.models.movie import Movie, MovieActress
 
 
 ALLOWED_EVENT_TYPES = {
@@ -128,6 +129,69 @@ async def aggregate_view_ranking_all_time(
     )
     result = await db.execute(stmt)
     return [(row[0], int(row[1])) for row in result.all()]
+
+
+async def aggregate_affiliate_click_ranking_all_time(
+    db: AsyncSession,
+    *,
+    limit: int = 20,
+    offset: int = 0,
+) -> list[tuple[str, int]]:
+    """全期間の event_type='affiliate_click' を slug 単位で集計し、(slug, count) を降順で返す。
+
+    現在 movies テーブルに存在し is_visible な slug のみを集計対象とする。
+    「人気商品」セクション用。
+    """
+    stmt = (
+        select(Event.slug, func.count(Event.id).label("c"))
+        .join(Movie, Movie.slug == Event.slug)
+        .where(
+            Event.event_type == "affiliate_click",
+            Event.slug.is_not(None),
+            Movie.is_visible.is_(True),
+        )
+        .group_by(Event.slug)
+        .order_by(desc("c"), Event.slug)
+        .offset(offset)
+        .limit(limit)
+    )
+    result = await db.execute(stmt)
+    return [(row[0], int(row[1])) for row in result.all()]
+
+
+async def aggregate_affiliate_click_ranking_by_actress_all_time(
+    db: AsyncSession,
+    *,
+    limit: int = 20,
+    offset: int = 0,
+) -> list[tuple[int, int]]:
+    """全期間の affiliate_click イベントを「女優」単位で集計し、(actress_id, count) を降順で返す。
+
+    Event → Movie(slug 一致) → MovieActress → Actress の JOIN で
+    女優ごとのアフィリエイトクリック総数を算出する。
+    1作品に複数女優が紐づくときは全員にカウントを加算する (現行の関連付け仕様)。
+    「人気女優」セクション用。
+    """
+    stmt = (
+        select(
+            MovieActress.actress_id,
+            func.count(Event.id).label("c"),
+        )
+        .join(Movie, Movie.slug == Event.slug)
+        .join(MovieActress, MovieActress.movie_id == Movie.id)
+        .join(Actress, Actress.id == MovieActress.actress_id)
+        .where(
+            Event.event_type == "affiliate_click",
+            Event.slug.is_not(None),
+            Movie.is_visible.is_(True),
+        )
+        .group_by(MovieActress.actress_id)
+        .order_by(desc("c"), MovieActress.actress_id)
+        .offset(offset)
+        .limit(limit)
+    )
+    result = await db.execute(stmt)
+    return [(int(row[0]), int(row[1])) for row in result.all()]
 
 
 async def aggregate_search_query_ranking(

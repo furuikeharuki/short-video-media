@@ -12,7 +12,8 @@ export const revalidate = 0;
 
 /** key → 画面のタイトル。ジャンルは別ルート (/search?genre=...) を使うのでここでは扱わない。 */
 const KEY_TITLES: Record<string, string> = {
-  popular: "人気",
+  popular: "人気動画",
+  popular_products: "人気商品",
   new: "本日配信開始",
   recent: "新着",
   ranking_daily: "日間ランキング",

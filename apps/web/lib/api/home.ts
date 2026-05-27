@@ -8,8 +8,25 @@ export type HomeSection = {
   items: MovieCard[];
 };
 
+export type ActressCard = {
+  id: number;
+  name: string;
+  slug: string | null;
+  thumbnail_url: string | null;
+  image_url_small: string | null;
+  image_url_large: string | null;
+};
+
+export type HomeActressSection = {
+  key: string;
+  title: string;
+  subtitle: string | null;
+  items: ActressCard[];
+};
+
 export type HomeResponse = {
   sections: HomeSection[];
+  actress_sections?: HomeActressSection[];
 };
 
 const API_BASE_URL =

@@ -185,7 +185,25 @@ export function useFeedPlayback({ slug, title, isActive, videoSrc, boundElement 
   // 何のログも残さずサイレント no-op していた。本フラグは playing イベントで
   // のみ true にし、watchdog 内では「本当に再生開始したか」を paused ではなく
   // これで判定する。isActive=false / unmount でリセット。
+  //
+  // 加えて、watchdog 発火時に「currentTime が arm 時点より進んでいる」or
+  // 「play() promise が resolve して rs>=3 になっている」も「実質再生中」として
+  // この ref を立てる。playing イベントは Chrome では canplay → playing の順で
+  // 並ぶが、handler attach タイミング (effect 再走 / boundElement rebind) によって
+  // 1 回 lost するケースがあり、その結果 playing 観測 false のまま rs=4 で動く
+  // 動画に対して Phase 1 が load() を撃ってしまい playback を kill していた。
   const activePlayingObservedRef = useRef(false);
+  // watchdog のセッション識別子。attemptActiveAutoplay で新規に arm するたびに
+  // インクリメントし、setTimeout クロージャはこの値をキャプチャする。発火時に
+  // 現在値と一致しなければ「もう古い attempt」とみなして bail。これにより、
+  // 「resolve 済みの古い session の watchdog が、後の rebind/promote の途中で
+  // 発火して playback を kill する」race を防ぐ。
+  const activeAutoplayAttemptIdRef = useRef(0);
+  // 「最後に stuck signal を dispatch した時刻」を slug 単位で記録する。
+  // 同一 slug に対して短時間 (STUCK_COOLDOWN_MS) 内に複数回 stuck signal が出ると、
+  // 同じ URL に対する force-resolve が連発して状態が変わらないまま無限ループに
+  // なりうるので、cooldown 中は dispatch を抑制する。
+  const lastStuckSignalRef = useRef<{ slug: string; at: number }>({ slug: "", at: 0 });
 
   // active autoplay intent の保留状態。
   //
@@ -616,10 +634,21 @@ export function useFeedPlayback({ slug, title, isActive, videoSrc, boundElement 
       // は play() を呼んだ後では常に false で素通りしてしまい、Phase 1 / Phase 2 が
       // 両方ともサイレント no-op になっていた。
       //
+      // ただし playing イベント単独では取りこぼしがある (handler attach タイミング /
+      // rebind / promote race)。そこで bail 判定では以下を「実質再生中」とみなす:
+      //   - activePlayingObservedRef (playing event)
+      //   - currentTime が arm 時点より >0.05s 進んでいる (frame は出ている)
+      //   - rs >= HAVE_FUTURE_DATA(3) かつ !paused (描画可能 + 一時停止していない)
+      // これにより、rs=4 で動いている動画に Phase 1 が誤って load() を撃って
+      // playback を kill するケースを防ぐ。
+      //
       // 同 active session 内では recovered / signaled が立っていない限り、最初に
       // 武装したタイマーをそのまま使う (新しい reason で再 entry されるたびに
       // タイマーをリセットすると、metadata / canplay の連続発火で締切が延々と延び、
       // 結果として永久に発火しない race を防ぐため)。
+      //
+      // 加えて、attemptId をキャプチャして発火時に現在値と比較する。古い session の
+      // 残骸 timer が新 session の playback を kill しないようにする。
       const watchdogVideo = video;
       const ACTIVE_AUTOPLAY_WATCHDOG_MS = 1500;
       const ACTIVE_AUTOPLAY_STUCK_MS = 3500;
@@ -629,16 +658,30 @@ export function useFeedPlayback({ slug, title, isActive, videoSrc, boundElement 
       const needArmPhase2 =
         activeAutoplayStuckTimerRef.current == null &&
         !activeAutoplayStuckSignaledRef.current;
+      // 新規に arm するときだけ attemptId を進める。再 entry (canplay 連発等) で
+      // 既存タイマーがあるときは ID を維持して既存 timer の検証を有効に保つ。
+      if (needArmPhase1 || needArmPhase2) {
+        activeAutoplayAttemptIdRef.current += 1;
+      }
+      const armAttemptId = activeAutoplayAttemptIdRef.current;
+      const armCurrentTime = video.currentTime;
+      // 共通の「実質再生中」判定。
+      const isEffectivelyPlaying = (v: HTMLVideoElement): boolean => {
+        if (activePlayingObservedRef.current) return true;
+        if (!v.paused && v.currentTime > armCurrentTime + 0.05) return true;
+        if (!v.paused && v.readyState >= 3 && !v.ended) return true;
+        return false;
+      };
       if (needArmPhase1 && isVideoTimingEnabled()) {
         // eslint-disable-next-line no-console
         console.debug(
-          `vt ${slug}: active autoplay watchdog armed phase=1 reason=${reason} rs=${video.readyState} timeout=${ACTIVE_AUTOPLAY_WATCHDOG_MS}`,
+          `vt ${slug}: active autoplay watchdog armed phase=1 reason=${reason} rs=${video.readyState} timeout=${ACTIVE_AUTOPLAY_WATCHDOG_MS} attemptId=${armAttemptId} t=${armCurrentTime.toFixed(2)}`,
         );
       }
       if (needArmPhase2 && isVideoTimingEnabled()) {
         // eslint-disable-next-line no-console
         console.debug(
-          `vt ${slug}: active autoplay watchdog armed phase=2 reason=${reason} rs=${video.readyState} timeout=${ACTIVE_AUTOPLAY_STUCK_MS}`,
+          `vt ${slug}: active autoplay watchdog armed phase=2 reason=${reason} rs=${video.readyState} timeout=${ACTIVE_AUTOPLAY_STUCK_MS} attemptId=${armAttemptId} t=${armCurrentTime.toFixed(2)}`,
         );
       }
       if (needArmPhase1) activeAutoplayWatchdogRef.current = setTimeout(() => {
@@ -653,10 +696,16 @@ export function useFeedPlayback({ slug, title, isActive, videoSrc, boundElement 
             ? videoRef.current
             : watchdogVideo;
         let bail: string | null = null;
-        if (!isActiveRef.current) bail = "inactive";
+        if (armAttemptId !== activeAutoplayAttemptIdRef.current) bail = "stale-attempt";
+        else if (!isActiveRef.current) bail = "inactive";
         else if (userPausedRef.current) bail = "user-paused";
         else if (!liveVideo) bail = "no-element";
-        else if (activePlayingObservedRef.current) bail = "playing-observed";
+        else if (isEffectivelyPlaying(liveVideo)) {
+          // playing event 未観測でも実体は動いているので observed フラグを立てて
+          // 後続 (Phase 2 / 重複 arm) の誤発火を防ぐ。
+          activePlayingObservedRef.current = true;
+          bail = "playing-effective";
+        }
         else if (activeAutoplayRecoveredRef.current) bail = "already-recovered";
         if (bail) {
           if (isVideoTimingEnabled()) {
@@ -737,12 +786,16 @@ export function useFeedPlayback({ slug, title, isActive, videoSrc, boundElement 
             ? videoRef.current
             : watchdogVideo;
         let bail: string | null = null;
-        if (!isActiveRef.current) bail = "inactive";
+        if (armAttemptId !== activeAutoplayAttemptIdRef.current) bail = "stale-attempt";
+        else if (!isActiveRef.current) bail = "inactive";
         else if (userPausedRef.current) bail = "user-paused";
         else if (!liveVideo) bail = "no-element";
-        else if (activePlayingObservedRef.current) bail = "playing-observed";
+        else if (isEffectivelyPlaying(liveVideo)) {
+          activePlayingObservedRef.current = true;
+          bail = "playing-effective";
+        }
         else if (activeAutoplayStuckSignaledRef.current) bail = "already-signaled";
-        else if (liveVideo.readyState >= 3) bail = `rs-ok=${liveVideo.readyState}`;
+        else if (liveVideo.readyState >= 3 && !liveVideo.paused) bail = `rs-ok=${liveVideo.readyState}`;
         if (bail) {
           if (isVideoTimingEnabled()) {
             // eslint-disable-next-line no-console
@@ -753,6 +806,25 @@ export function useFeedPlayback({ slug, title, isActive, videoSrc, boundElement 
           return;
         }
         const target = liveVideo as HTMLVideoElement;
+        // 同一 slug への stuck signal が短時間に連発するのを抑制する。
+        // 連発すると force-resolve が同じ URL に対して何度も走り、playback 状態が
+        // 一切変わらないまま無限ループになりうる (CDN 接続恒久断 + 新 URL も同じ
+        // host の場合等)。cooldown 内は signal を捨て、recovered/signaled も立てて
+        // 次の active session まで再 arm しない。
+        const STUCK_COOLDOWN_MS = 5000;
+        const now = Date.now();
+        const last = lastStuckSignalRef.current;
+        if (last.slug === slug && now - last.at < STUCK_COOLDOWN_MS) {
+          activeAutoplayStuckSignaledRef.current = true;
+          if (isVideoTimingEnabled()) {
+            // eslint-disable-next-line no-console
+            console.debug(
+              `vt ${slug}: active autoplay stuck signal suppressed reason=cooldown delta=${now - last.at}ms`,
+            );
+          }
+          return;
+        }
+        lastStuckSignalRef.current = { slug, at: now };
         activeAutoplayStuckSignaledRef.current = true;
         if (isVideoTimingEnabled()) {
           // eslint-disable-next-line no-console
@@ -790,6 +862,31 @@ export function useFeedPlayback({ slug, title, isActive, videoSrc, boundElement 
             console.debug(
               `vt ${slug}: active autoplay resolved reason=${reason} paused=${video.paused} rs=${video.readyState}`,
             );
+          }
+          // play() promise が resolve した時点で rs>=3 かつ !paused なら、playing
+          // イベントの到来を待たずに「実質再生中」とみなして watchdog を解除する。
+          // playing イベントは effect 再走 / boundElement rebind のタイミング次第で
+          // 取りこぼされることがあり、その状態で Phase 1 が load() を撃つと
+          // 動いていた再生が止まる回帰になる。resolved + rs>=3 は強い成功シグナルなので
+          // ここで先回りクリアして良い。
+          if (!video.paused && video.readyState >= 3) {
+            activePlayingObservedRef.current = true;
+            const hadP1 = activeAutoplayWatchdogRef.current != null;
+            const hadP2 = activeAutoplayStuckTimerRef.current != null;
+            if (hadP1) {
+              clearTimeout(activeAutoplayWatchdogRef.current!);
+              activeAutoplayWatchdogRef.current = null;
+            }
+            if (hadP2) {
+              clearTimeout(activeAutoplayStuckTimerRef.current!);
+              activeAutoplayStuckTimerRef.current = null;
+            }
+            if ((hadP1 || hadP2) && isVideoTimingEnabled()) {
+              // eslint-disable-next-line no-console
+              console.debug(
+                `vt ${slug}: active autoplay watchdog cleared reason=resolved-rs-ok p1=${hadP1} p2=${hadP2}`,
+              );
+            }
           }
         },
         (err: unknown) => {
@@ -981,6 +1078,9 @@ export function useFeedPlayback({ slug, title, isActive, videoSrc, boundElement 
     activeAutoplayRecoveredRef.current = false;
     activeAutoplayStuckSignaledRef.current = false;
     activePlayingObservedRef.current = false;
+    // attemptId を進めて、既にクリアした timer が万一 setTimeout キューに残って
+    // いた場合でも fire 時に stale-attempt として bail させる。
+    activeAutoplayAttemptIdRef.current += 1;
     // active 化時の保留 autoplay intent も非アクティブで破棄する。
     pendingActiveAutoplayRef.current = null;
     userPausedRef.current = false;

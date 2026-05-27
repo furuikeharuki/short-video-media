@@ -462,12 +462,39 @@ export default function FeedItem({ item, isActive, isAdjacent = false, isFirst, 
   // useResolvedVideoSrc.handleError は <video> の onerror からも呼ばれるが、stuck
   // ケースでは error イベントが発火しない (= 単に Range request が永久 pending) ため
   // 明示的なシグナルが必要。
+  //
+  // 防御層: useFeedPlayback 側の cooldown に加えて FeedItem 側でも cooldown を
+  // 持つ。force-resolve は同一 URL に対して何度走っても状態が変わらないケースが
+  // あり (新 URL が同 host / 同 CDN 接続不通)、その場合 stuck→force-resolve→
+  // stuck の永久ループになる。FeedItem 側 cooldown は「この slug が active で
+  // ある間の連続発火」を抑え、上位 (useResolvedVideoSrc) の force retry counter と
+  // backoff に処理を委ねる。
+  const lastStuckRecoveryRef = useRef<{ slug: string; at: number }>({ slug: "", at: 0 });
+  useEffect(() => {
+    // active session が切れたら cooldown もリセットする。
+    if (!isActive) {
+      lastStuckRecoveryRef.current = { slug: "", at: 0 };
+    }
+  }, [isActive]);
   useEffect(() => {
     if (!isActive) return;
     if (!videoSrc) return;
     const onStuck = (e: Event) => {
       const ce = e as CustomEvent<{ slug?: string }>;
       if (ce.detail?.slug !== item.slug) return;
+      const STUCK_RECOVERY_COOLDOWN_MS = 6000;
+      const now = Date.now();
+      const last = lastStuckRecoveryRef.current;
+      if (last.slug === item.slug && now - last.at < STUCK_RECOVERY_COOLDOWN_MS) {
+        if (isVideoTimingEnabled()) {
+          // eslint-disable-next-line no-console
+          console.debug(
+            `vt ${item.slug}: active stuck recovery suppressed reason=cooldown delta=${now - last.at}ms`,
+          );
+        }
+        return;
+      }
+      lastStuckRecoveryRef.current = { slug: item.slug, at: now };
       if (isVideoTimingEnabled()) {
         // eslint-disable-next-line no-console
         console.debug(

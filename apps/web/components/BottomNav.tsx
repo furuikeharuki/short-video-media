@@ -5,6 +5,80 @@ import { usePathname } from "next/navigation";
 import { useEffect, useRef, useCallback, useState } from "react";
 import { markFeedStartUnmuted } from "@/lib/feedNav";
 
+/**
+ * /feed から /, /mypage 等にフルページ遷移するとき、ページ全体の取得が終わるまで
+ * 古い <video> が再生継続して CPU / 帯域を食い、画面遷移が体感的に重く感じる。
+ *
+ * クリック直後に全 <video> を pause + src 解除して、デコード負荷をすぐ落とす。
+ * 加えて即座に黒い遷移オーバーレイを乗せ、フィード UI のアニメーション・スクロール
+ * 受け付けを止めて「タップが効いた」フィードバックを返す。
+ *
+ * window.location.assign は同期処理だが、ブラウザは現在のドキュメントを直ちに
+ * tear down するわけではないので、この前準備は十分に体感に効く。
+ */
+function stopFeedPlaybackImmediately() {
+  if (typeof document === "undefined") return;
+  try {
+    const videos = document.querySelectorAll("video");
+    videos.forEach((v) => {
+      try {
+        v.pause();
+        // 大きな MP4 のデコード継続を確実に止めるため removeAttribute("src") + load()。
+        // src を空にしておくとブラウザがバッファを解放する。
+        v.removeAttribute("src");
+        v.load();
+      } catch {
+        /* ignore */
+      }
+    });
+  } catch {
+    /* ignore */
+  }
+}
+
+function showNavigationOverlay() {
+  if (typeof document === "undefined") return;
+  try {
+    // 既存のオーバーレイがあれば作り直さない
+    if (document.getElementById("__feed-nav-overlay__")) return;
+    const overlay = document.createElement("div");
+    overlay.id = "__feed-nav-overlay__";
+    overlay.setAttribute("aria-hidden", "true");
+    overlay.style.cssText = [
+      "position:fixed",
+      "inset:0",
+      "z-index:2147483647",
+      "background:#000",
+      "display:flex",
+      "align-items:center",
+      "justify-content:center",
+      "pointer-events:auto",
+      "opacity:1",
+      "transition:none",
+    ].join(";");
+    const spinner = document.createElement("div");
+    spinner.style.cssText = [
+      "width:36px",
+      "height:36px",
+      "border:3px solid rgba(255,255,255,0.18)",
+      "border-top-color:#fff",
+      "border-radius:50%",
+      "animation:__feedNavSpin 0.8s linear infinite",
+    ].join(";");
+    overlay.appendChild(spinner);
+
+    // keyframes をその場で注入
+    const style = document.createElement("style");
+    style.textContent =
+      "@keyframes __feedNavSpin{to{transform:rotate(360deg)}}";
+    overlay.appendChild(style);
+
+    document.body.appendChild(overlay);
+  } catch {
+    /* ignore */
+  }
+}
+
 // ショートボタンを押して /feed に遷移するときに、保存されているフィードのスナップショットを破棄して
 // ランダム再生を保証する。FeedClient 側は sessionStorage が空なら getFeed を新しい seed で取り直す。
 // さらに、このクリックをユーザージェスチャーとして採用し、次のフィード起動時に音声 ON で始まるようフラグを立てる
@@ -265,6 +339,19 @@ export default function BottomNav() {
           const goingToFeed = item.href === "/feed";
           if ((onShortFeed && item.href !== "/feed") || goingToFeed) {
             e.preventDefault();
+            // フィードからの離脱 (= ホーム / マイページへ向かう) では、
+            // <video> のデコードを直ちに止め、即時に遷移中オーバーレイを出してから
+            // フルページ遷移を発行する。これにより:
+            //   - 旧フィードの <video> がページ取得中も走り続けて CPU/帯域を奪う
+            //     "遷移が重い" 感覚を解消する。
+            //   - ユーザのタップが効いた視覚フィードバックを直ちに返す
+            //     (白画面 / 反応なしと誤認される時間を消す)。
+            // フィードへ向かう経路 (goingToFeed) では <video> 停止は不要だが、
+            // オーバーレイは出して遷移中の "何も起きていない" 感を埋める。
+            if (!goingToFeed) {
+              stopFeedPlaybackImmediately();
+            }
+            showNavigationOverlay();
             window.location.assign(item.href);
           }
           // それ以外は <Link> のデフォルト挙動 (Next の SPA 遷移) に任せる。

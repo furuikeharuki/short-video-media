@@ -156,6 +156,26 @@ export default function BottomNav() {
   const trackRef   = useRef<HTMLDivElement>(null);
   const isDragging = useRef(false);
   const [progress, setProgress] = useState(0);
+  // シークバーは /feed のナビ上端から 5–6px 上に飛び出して描画される (top:-14px の
+  // トラック内に 3px の白いレールがある)。フィードに「入る」フルページ遷移
+  // (home / mypage → /feed) では、遷移直前まで出ていた home のナビは seekbar 無し
+  // (= 53px) で、新ページの初回ペイントで突然 seekbar 入り (= 58–59px) になる。
+  // この 5–6px の出現が体感的には「ナビが一瞬高くなって元に戻る」チラつきとして
+  // 認識される (#249 で leaving 側の 14px 縮みは抑えたが、entering 側はまだ残っていた)。
+  //
+  // 対策: SSR 初回ペイントでは seekbar を opacity:0 で出しておき、マウント後の
+  // useEffect で ready=true に切り替えて短い transition で fade-in させる。
+  // - useState の初期値は SSR/CSR で同じ false なのでハイドレーション差分なし。
+  // - bfcache 復帰時は state が保持されるため即 visible のまま (チラつかない)。
+  // - leaving 側は ready=true のまま出続けるので #249 の挙動を一切壊さない。
+  // - DOM 上は常にレンダーしているため、CSS の :hover/:active や ref 接続も維持される。
+  const [seekbarReady, setSeekbarReady] = useState(false);
+  useEffect(() => {
+    // 1 フレーム待ってから ready にする。SSR 直後のフレームで opacity:0 を確実に
+    // 描画してから fade-in させ、「seekbar が突然現れた」と知覚されないようにする。
+    const id = requestAnimationFrame(() => setSeekbarReady(true));
+    return () => cancelAnimationFrame(id);
+  }, []);
 
   // 「ショートページにいるかどうか」を ref にミラーして、video-progress リスナを
   // useEffect の依存に乗せずに済むようにする。依存に isShortPage を載せていた以前の
@@ -229,7 +249,7 @@ export default function BottomNav() {
       {isShortPage && (
         <div
           ref={trackRef}
-          className="seekbar-track"
+          className={`seekbar-track${seekbarReady ? " seekbar-track--ready" : ""}`}
           onMouseDown={handleMouseDown}
           onTouchStart={handleTouchStart}
           onTouchMove={handleTouchMove}
@@ -401,6 +421,23 @@ const navStyle = `
     z-index: 10;
     display: flex;
     align-items: center;
+    /*
+      フィードに「入る」フルページ遷移 (home/mypage → /feed) では、直前まで
+      表示されていた home のナビは seekbar 無しで、新ページの初回ペイントで
+      突然 seekbar 入りになる。この 5–6px の出現が体感的には「ナビが一瞬
+      高くなる」チラつきになる。
+      初期は opacity:0 で描画し、マウント後に付く --ready で fade-in させて
+      ナビの視覚的な高さが瞬間的に増えるのを避ける。
+      visibility は維持 (touch hit や ref 接続を生かしたまま見た目だけ消す)。
+    */
+    opacity: 0;
+    transition: opacity 220ms ease;
+  }
+  .seekbar-track.seekbar-track--ready {
+    opacity: 1;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .seekbar-track { transition: none; }
   }
 
   .seekbar-track::before {

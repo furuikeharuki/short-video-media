@@ -16,6 +16,7 @@ from fastapi.testclient import TestClient
 
 from app.api.v1.endpoints import home as home_endpoint
 from app.main import app
+from app.schemas.actress import GoodsCard
 from app.schemas.movie import MovieCard, PriceList
 
 
@@ -74,6 +75,31 @@ def _paged_cards(total: int, offset: int, limit: int) -> list[MovieCard]:
     return [_card(i) for i in range(start, end)]
 
 
+def _goods_card(i: int) -> GoodsCard:
+    return GoodsCard(
+        id=f"goods-{i:03d}",
+        content_id=f"g{i:05d}",
+        title=f"テスト商品 {i:03d}",
+        slug=f"test-goods-{i:03d}",
+        image_url_list=None,
+        image_url_large=None,
+        affiliate_url=f"https://example.com/goods/{i}",
+        price_list=None,
+        price_min=2980,
+        review_count=10,
+        review_average=4.0,
+        maker_name=None,
+    )
+
+
+def _paged_goods(total: int, offset: int, limit: int) -> list[GoodsCard]:
+    start = max(0, offset)
+    end = min(total, offset + limit)
+    if start >= end:
+        return []
+    return [_goods_card(i) for i in range(start, end)]
+
+
 def _paged_movies(total: int, offset: int, limit: int):
     start = max(0, offset)
     end = min(total, offset + limit)
@@ -107,7 +133,8 @@ def client(monkeypatch: pytest.MonkeyPatch) -> Iterator[TestClient]:
         return _paged_movies(GENRE_TOTAL, offset, limit)
 
     async def fake_get_popular_products_all_time(db, limit, offset=0):  # type: ignore[no-untyped-def]
-        return _paged_cards(POPULAR_TOTAL, offset, limit)
+        # 人気商品は Goods (GoodsCard) を返す。
+        return _paged_goods(POPULAR_TOTAL, offset, limit)
 
     async def fake_get_popular_actresses_all_time(db, limit, offset=0):  # type: ignore[no-untyped-def]
         # 人気女優は ActressCard を返すが、本ファイルの section/list 系テストは
@@ -300,17 +327,15 @@ def test_home_sections_order_and_titles(client: TestClient) -> None:
     data = res.json()
     sections = data["sections"]
 
-    # 必要な並び順:
-    #   new, recent, popular(人気動画), popular_products(人気商品),
-    #   ranking_daily, ranking_weekly, ranking_monthly, ...
-    # 人気女優 (popular_actresses) は別フィールド (actress_sections) で返るので
-    # ここでは現れない。
+    # 必要な並び順 (動画系 sections のみ):
+    #   new, recent, popular(人気動画), ranking_daily, ranking_weekly, ranking_monthly, ...
+    # 人気女優 (popular_actresses) は actress_sections、
+    # 人気商品 (popular_products) は goods_sections と別フィールドで返るのでここでは現れない。
     keys = [s["key"] for s in sections]
-    assert keys[:7] == [
+    assert keys[:6] == [
         "new",
         "recent",
         "popular",
-        "popular_products",
         "ranking_daily",
         "ranking_weekly",
         "ranking_monthly",
@@ -318,12 +343,25 @@ def test_home_sections_order_and_titles(client: TestClient) -> None:
     titles = {s["key"]: s["title"] for s in sections}
     # 「人気」は「人気動画」にリネームされていること
     assert titles["popular"] == "人気動画"
-    # 「人気商品」セクションが追加されていること
-    assert titles["popular_products"] == "人気商品"
+    # 「人気商品」は sections には現れない (goods_sections 側にいる)
+    assert "popular_products" not in titles
     # 「デイリーランキング」ではなく「日間ランキング」になっていること
     assert titles["ranking_daily"] == "日間ランキング"
     assert titles["ranking_weekly"] == "週間ランキング"
     assert titles["ranking_monthly"] == "月間ランキング"
+
+    # 人気商品は goods_sections に「人気商品」タイトルで返ること
+    goods_sections = data.get("goods_sections", [])
+    assert len(goods_sections) == 1
+    assert goods_sections[0]["key"] == "popular_products"
+    assert goods_sections[0]["title"] == "人気商品"
+    assert len(goods_sections[0]["items"]) > 0
+    # GoodsCard の最低限のフィールドが返ること (動画用フィールドは無いこと)
+    item0 = goods_sections[0]["items"][0]
+    assert "slug" in item0 and "affiliate_url" in item0
+    # MovieCard 固有のフィールド (actresses / genres / series_name) は GoodsCard に無い
+    assert "actresses" not in item0
+    assert "genres" not in item0
 
 
 def test_home_actress_section_returned_when_data_available(
@@ -419,30 +457,48 @@ def test_home_actress_section_omitted_when_no_data(
     assert data["actress_sections"] == []
 
 
-def test_section_popular_products_paginated(
+def test_section_popular_products_uses_dedicated_endpoint(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """/home/section?key=popular_products が offset/limit を SQL レベルで
-    使ってページングできること。"""
-
-    async def big_products(db, limit, offset=0):  # type: ignore[no-untyped-def]
-        return _paged_cards(80, offset, limit)
-
-    monkeypatch.setattr(home_endpoint, "get_popular_products_all_time", big_products)
-
+    """/home/section?key=popular_products は 400 を返し、専用エンドポイントへ誘導する。
+    Goods は MovieCard と型が違うのでこのエンドポイントの response_model で扱えない。"""
     client = TestClient(app)
     res = client.get(
         "/api/v1/home/section",
         params={"key": "popular_products", "offset": 0, "limit": 20},
     )
+    assert res.status_code == 400
+
+
+def test_section_popular_products_goods_endpoint_paginated(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """/home/section/popular_products (Goods 専用) が offset/limit を SQL レベルで
+    使ってページングできること。"""
+
+    async def big_products(db, limit, offset=0):  # type: ignore[no-untyped-def]
+        # 80 件想定。GoodsCard を返すこと。
+        return _paged_goods(80, offset, limit)
+
+    monkeypatch.setattr(home_endpoint, "get_popular_products_all_time", big_products)
+
+    client = TestClient(app)
+    res = client.get(
+        "/api/v1/home/section/popular_products",
+        params={"offset": 0, "limit": 20},
+    )
     assert res.status_code == 200
     data = res.json()
     assert len(data["items"]) == 20
     assert data["next_cursor"] == "20"
+    # MovieCard ではなく GoodsCard が返っている (動画用フィールドは無い)
+    item = data["items"][0]
+    assert "actresses" not in item
+    assert "genres" not in item
 
     res2 = client.get(
-        "/api/v1/home/section",
-        params={"key": "popular_products", "offset": 60, "limit": 20},
+        "/api/v1/home/section/popular_products",
+        params={"offset": 60, "limit": 20},
     )
     data2 = res2.json()
     assert len(data2["items"]) == 20

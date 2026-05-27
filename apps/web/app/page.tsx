@@ -158,26 +158,30 @@ export default async function Page() {
               ))}
             </HorizontalCardRow>
             {showInlineAfterPopular && popularActresses && (
-              <HorizontalCardRow
-                title={popularActresses.title}
-                subtitle={popularActresses.subtitle}
-              >
-                {popularActresses.items.map((a) => (
-                  <ActressCardThumb key={a.id} actress={a} />
+              <HorizontalCardRow title={popularActresses.title}>
+                {popularActresses.items.map((a, i) => (
+                  <ActressCardThumb
+                    key={a.id}
+                    actress={a}
+                    rank={i < 100 ? i + 1 : undefined}
+                  />
                 ))}
               </HorizontalCardRow>
             )}
             {showInlineAfterPopular && popularProducts && (
               <HorizontalCardRow
                 title={popularProducts.title}
-                subtitle={popularProducts.subtitle}
                 action={{
                   label: "もっと見る",
                   href: "/list/popular_products",
                 }}
               >
-                {popularProducts.items.map((g) => (
-                  <GoodsCardThumb key={g.id} goods={g} />
+                {popularProducts.items.map((g, i) => (
+                  <GoodsCardThumb
+                    key={g.id}
+                    goods={g}
+                    rank={i < 100 ? i + 1 : undefined}
+                  />
                 ))}
               </HorizontalCardRow>
             )}

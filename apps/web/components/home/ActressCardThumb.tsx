@@ -5,6 +5,8 @@ import type { ActressCard } from "@/lib/api/home";
 
 type Props = {
   actress: ActressCard;
+  /** ランキング順位 (1始まり)。指定時は左上にバッジ表示。 */
+  rank?: number;
 };
 
 /**
@@ -14,7 +16,7 @@ type Props = {
  * 横幅は MovieCardThumb (140px) と揃え、横スクロール時のリズムを保つ。
  * リンクは女優詳細ページに飛ばす。
  */
-export default function ActressCardThumb({ actress }: Props) {
+export default function ActressCardThumb({ actress, rank }: Props) {
   const imgSrc =
     actress.image_url_large ??
     actress.image_url_small ??
@@ -30,6 +32,11 @@ export default function ActressCardThumb({ actress }: Props) {
           <img src={imgSrc} alt={actress.name} loading="lazy" />
         ) : (
           <div className="act-thumb-placeholder" />
+        )}
+        {rank != null && (
+          <span className={`act-rank ${rank <= 3 ? "act-rank--top" : ""}`}>
+            {rank}
+          </span>
         )}
       </div>
       <div className="act-name" title={actress.name}>
@@ -71,6 +78,24 @@ const styles = `
     position: absolute;
     inset: 0;
     background: linear-gradient(180deg, #222, #111);
+  }
+  .act-rank {
+    position: absolute;
+    z-index: 2;
+    top: 6px; left: 6px;
+    min-width: 24px; height: 24px;
+    padding: 0 6px;
+    display: inline-flex; align-items: center; justify-content: center;
+    background: rgba(0,0,0,0.7);
+    color: #fff;
+    font-size: 13px;
+    font-weight: 800;
+    border-radius: 6px;
+    backdrop-filter: blur(4px);
+    -webkit-backdrop-filter: blur(4px);
+  }
+  .act-rank--top {
+    background: linear-gradient(135deg, #e91e63, #ff5174);
   }
   .act-name {
     margin-top: 6px;

@@ -159,15 +159,9 @@ export default function GoodsListClient({ title }: Props) {
                   <AdSlot zone="mobileBanner300x250" />
                 </div>
               )}
-              {safeHref ? (
-                <a
-                  href={safeHref}
-                  target="_blank"
-                  rel="noopener noreferrer sponsored"
-                  onClick={handleClick}
-                  className="goods-card"
-                  title={g.title}
-                >
+              {(() => {
+                const rank = index < 100 ? index + 1 : undefined;
+                const thumb = (
                   <div className="goods-thumb">
                     {img ? (
                       // eslint-disable-next-line @next/next/no-img-element
@@ -175,27 +169,39 @@ export default function GoodsListClient({ title }: Props) {
                     ) : (
                       <div className="goods-thumb-placeholder">No Image</div>
                     )}
-                  </div>
-                  <div className="goods-title">{g.title}</div>
-                  {g.price_min != null && (
-                    <div className="goods-price">
-                      ¥{g.price_min.toLocaleString()}
-                    </div>
-                  )}
-                </a>
-              ) : (
-                <div className="goods-card goods-card--disabled" title={g.title}>
-                  <div className="goods-thumb">
-                    {img ? (
-                      // eslint-disable-next-line @next/next/no-img-element
-                      <img src={img} alt={g.title} loading="lazy" />
-                    ) : (
-                      <div className="goods-thumb-placeholder">No Image</div>
+                    {rank != null && (
+                      <span
+                        className={`goods-rank ${rank <= 3 ? "goods-rank--top" : ""}`}
+                      >
+                        {rank}
+                      </span>
                     )}
                   </div>
-                  <div className="goods-title">{g.title}</div>
-                </div>
-              )}
+                );
+                return safeHref ? (
+                  <a
+                    href={safeHref}
+                    target="_blank"
+                    rel="noopener noreferrer sponsored"
+                    onClick={handleClick}
+                    className="goods-card"
+                    title={g.title}
+                  >
+                    {thumb}
+                    <div className="goods-title">{g.title}</div>
+                    {g.price_min != null && (
+                      <div className="goods-price">
+                        ¥{g.price_min.toLocaleString()}
+                      </div>
+                    )}
+                  </a>
+                ) : (
+                  <div className="goods-card goods-card--disabled" title={g.title}>
+                    {thumb}
+                    <div className="goods-title">{g.title}</div>
+                  </div>
+                );
+              })()}
             </Fragment>
           );
         })}
@@ -294,7 +300,7 @@ const pageCSS = `
   .goods-thumb {
     position: relative;
     width: 100%;
-    aspect-ratio: 9 / 13;
+    aspect-ratio: 1 / 1;
     border-radius: 10px;
     overflow: hidden;
     background: #111;
@@ -304,7 +310,8 @@ const pageCSS = `
     inset: 0;
     width: 100%;
     height: 100%;
-    object-fit: contain;
+    object-fit: cover;
+    object-position: center center;
     background: #111;
   }
   .goods-thumb-placeholder {
@@ -316,6 +323,24 @@ const pageCSS = `
     background: linear-gradient(135deg, #1a1a1a, #2a2a2a);
     color: rgba(255,255,255,0.4);
     font-size: 12px;
+  }
+  .goods-rank {
+    position: absolute;
+    z-index: 2;
+    top: 6px; left: 6px;
+    min-width: 24px; height: 24px;
+    padding: 0 6px;
+    display: inline-flex; align-items: center; justify-content: center;
+    background: rgba(0,0,0,0.7);
+    color: #fff;
+    font-size: 13px;
+    font-weight: 800;
+    border-radius: 6px;
+    backdrop-filter: blur(4px);
+    -webkit-backdrop-filter: blur(4px);
+  }
+  .goods-rank--top {
+    background: linear-gradient(135deg, #e91e63, #ff5174);
   }
   .goods-title {
     margin-top: 6px;

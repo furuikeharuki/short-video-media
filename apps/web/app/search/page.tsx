@@ -119,9 +119,20 @@ export default async function SearchPage({ searchParams }: Props) {
       ? (sp.sort as SortKey)
       : undefined;
 
+  // タグ文脈 (genre/director/maker/label/series) と q が同居している場合、
+  // 「詳細検索のフリーワードを適用したままジャンルタグを押した」状況なので、
+  // 両方を AND するために advanced 経路へ振り分ける必要がある。
+  // (genre 単独は従来通り genre feed、q 単独は従来通りキーワード検索のまま。)
+  const hasTagContext =
+    !!genreTag ||
+    !!directorName ||
+    !!makerName ||
+    !!labelName ||
+    !!seriesName;
+
   // 「詳細検索っぽい条件」が 1 つでも乗っていたら advanced 経路に分岐する。
-  // q だけしか無い場合や、director/maker/label/series/genre 単独はこれまで通り
-  // 既存の検索パスを維持する。
+  // - 配列系 / 日付 / NG / sort のいずれかが乗っている
+  // - もしくは q とタグ文脈が同居している (= 詳細検索 q + ジャンルタグ等の AND)
   const hasAdvancedFilter =
     genres.length > 0 ||
     actresses.length > 0 ||
@@ -132,7 +143,8 @@ export default async function SearchPage({ searchParams }: Props) {
     ngWords.length > 0 ||
     !!dateFrom ||
     !!dateTo ||
-    !!sort;
+    !!sort ||
+    (!!query && hasTagContext);
 
   if (hasAdvancedFilter) {
     // 文脈クエリ (genre / director / maker / label / series の単一キー) を advanced 入力に統合して

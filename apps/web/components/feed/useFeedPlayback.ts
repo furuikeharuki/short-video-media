@@ -150,10 +150,10 @@ export function useFeedPlayback({ slug, title, isActive, videoSrc, boundElement 
   // 救済用 watchdog timer。
   //
   // 背景: 順方向に再生 (8→9→10) してから 1 つ戻る (10→9) と、FeedItem 9 は
-  // adjacent の間 isActive=false で video.pause()/currentTime=0 が走って一旦
-  // 待機状態に入る。Chrome は背景の <video> のメディアバッファを memory
-  // pressure や inactive 経過時間で破棄するため、戻ったとき promoted 要素の
-  // readyState が 0 まで落ちていることがある。この状態で attemptActiveAutoplay
+  // adjacent の間 isActive=false で video.pause() が走り待機状態に入る
+  // (currentTime は playhead resume のため温存)。Chrome は背景の <video> の
+  // メディアバッファを memory pressure や inactive 経過時間で破棄するため、
+  // 戻ったとき promoted 要素の readyState が 0 まで落ちていることがある。この状態で attemptActiveAutoplay
   // が play() を呼んでも canplay まで待たされ、何らかの理由 (Range request が
   // 遅延 / blocked / loadeddata 来ない) で永久 pending になる事例が観測された。
   //
@@ -1366,6 +1366,20 @@ export function useFeedPlayback({ slug, title, isActive, videoSrc, boundElement 
   // 黒画面 + スピナーの一瞬挟まりを防ぐため、ここで setVideoReady(false) / setSpinnerVisible(true) は
   // 呼ばない (隣接スライドで opacity を 0 に戻すと、次に中央に来た瞬間 loadeddata/playing まで
   // 黒画面が見えてしまう)。スピナーは明示的に非表示にし、中央遷移後は waiting イベントで再表示される。
+  //
+  // 戻りスワイプの高速復帰について:
+  //   従来は中央→隣接遷移で video.currentTime = 0 にリセットしていたが、
+  //   - playhead 0 への seek は Chrome/Safari 共に「現在地から離れた位置」への seek
+  //     と判断され、デコード済みバッファや一部 buffered range を破棄する契機となる
+  //     ことがある。戻りスワイプで同じ <video> が再 active 化する瞬間、rs=0/1 まで
+  //     落ちて canplay 待ちが発生して再生開始が体感数百 ms 〜 1s 遅れる。
+  //   - lastPlaybackRef には timeupdate ごとに直近 playhead が記録されているため、
+  //     currentTime を残しておけば「直前まで見ていた位置」から即時 resume できる
+  //     (TikTok と同じ挙動)。前進方向のスワイプでは戻ってこない限り unmount される
+  //     ため副作用なし。
+  //   playbackRate / muted は念のため戻すが、currentTime は触らない。これにより、
+  //   戻りスワイプ時の attemptActiveAutoplay は video.play() を呼ぶだけで rs>=3 の
+  //   buffer から即座に再生再開する高速復帰経路を取れる。
   useEffect(() => {
     if (isActive) return;
     const video = videoRef.current;
@@ -1399,7 +1413,6 @@ export function useFeedPlayback({ slug, title, isActive, videoSrc, boundElement 
     stopProgressLoop();
     if (video) {
       video.pause();
-      video.currentTime = 0;
       video.playbackRate = 1;
       video.muted = globalIsMuted;
     }

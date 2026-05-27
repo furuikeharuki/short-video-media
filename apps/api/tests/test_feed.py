@@ -55,6 +55,37 @@ def test_feed_returns_items(client: TestClient) -> None:
     assert len(data["items"]) >= 1
 
 
+def test_feed_q_only_zero_results_returns_empty_items(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """q だけが指定された (free-words のみ) リクエストで 0 件ヒットの場合、
+    feed エンドポイントが `items: []` をきちんと返すことを保証する。
+
+    フロント (FeedClient) はこのレスポンスを受けて「該当する作品が
+    見つかりませんでした」を表示するので、API 側がここで例外を投げたり
+    items 抜きのレスポンスを返すと、UI ががスピナーで固まる。
+    """
+    captured: dict[str, object] = {}
+
+    async def fake_get_feed_paginated(*args, **kwargs):  # type: ignore[no-untyped-def]
+        captured.update(kwargs)
+        return FeedResponse(items=[], next_cursor=None)
+
+    monkeypatch.setattr(feed_service, "get_feed_paginated", fake_get_feed_paginated)
+    from app.api.v1.endpoints import feed as feed_endpoint
+
+    monkeypatch.setattr(feed_endpoint, "get_feed_paginated", fake_get_feed_paginated)
+
+    client = TestClient(app)
+    response = client.get("/api/v1/feed?q=zzz1+zzz2+zzz3")
+    assert response.status_code == 200
+    data = response.json()
+    assert data["items"] == []
+    assert data["next_cursor"] is None
+    # q が strip 済みでサービス層へ渡っていること
+    assert captured.get("q") == "zzz1 zzz2 zzz3"
+
+
 def test_feed_item_uses_actual_movie_card_schema(client: TestClient) -> None:
     """MovieCard で定義した実フィールドだけが返ることを確認する。
 

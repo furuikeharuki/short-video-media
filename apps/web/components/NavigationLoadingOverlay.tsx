@@ -76,12 +76,30 @@ const css = `
     top: var(--header-h, 52px);
     left: 0;
     right: 0;
-    bottom: var(--bottom-nav-h, 56px);
+    /*
+     * BottomNav は \`bottom: -3px; height: var(--bottom-nav-h, 56px)\` で
+     * 配置されているため、ナビの「視覚的な上端」は viewport_bottom から
+     * 53px (= 56 - 3) の位置にある。一方で \`--bottom-nav-h\` の値そのものは
+     * 56px のままなので、overlay を \`bottom: var(--bottom-nav-h)\` で置くと
+     * overlay の下端 (56px) と ナビ上端 (53px) の間に 3px の隙間が出来、
+     * 遷移時にその 3px だけ下のページが透けて見えて「ナビが一瞬高くなって
+     * 戻る」ようにちらつく原因になっていた。
+     *
+     * overlay を viewport の底まで伸ばし、BottomNav の z-index (200) が
+     * overlay (150) より上であることを利用してナビを上に重ねる構成にする。
+     * これで \`--bottom-nav-h\` や \`bottom: -3px\` がどう変わっても隙間は出ない。
+     */
+    bottom: 0;
     z-index: 150;
     background: #000;
     display: flex;
     align-items: center;
     justify-content: center;
+    /*
+     * spinner はナビと重ならない領域 (ヘッダーとナビの間) に置きたいので、
+     * overlay 自体は底まで伸びていても padding でナビ高さ分を確保する。
+     */
+    padding-bottom: var(--bottom-nav-h, 56px);
     /* タップを吸わせて誤操作 (連打) を防ぐ */
     touch-action: none;
     -webkit-tap-highlight-color: transparent;

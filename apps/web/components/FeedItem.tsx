@@ -106,6 +106,11 @@ export default function FeedItem({ item, isActive, isAdjacent = false, isFirst, 
   //     canplay 到達した pool entry を late claim できる (下記 tryClaim の canplay
   //     経路は pendingAbandonedSlug ガードを通さない)。
   const [handoffRevision, setHandoffRevision] = useState(0);
+  // host-only (canPromote=true) のまま promoted 要素が来ず、かつ recoverActive…
+  // や no-element watchdog から force-fallback 要求が来た slug を覚える。
+  // この slug については canPromote=false に倒し、JSX <video> を強制マウントする。
+  // 解除は slug 変更 / 非 active 化のときに行う。
+  const [forceFallbackSlug, setForceFallbackSlug] = useState<string | null>(null);
   // active へ移行した時点で promotable な隠し要素があれば即時 claim する。
   // hasPromotableElement は registry を sync に読むので render フェーズで判定でき、
   // expectingPromotion=true を渡せば JSX <video> の一時マウントを完全に回避できる。
@@ -116,9 +121,13 @@ export default function FeedItem({ item, isActive, isAdjacent = false, isFirst, 
   // 「最初の active commit で一瞬 claim に失敗した slug」でも、後から pool に
   // canplay が現れたなら rebind したい。pendingAbandonedSlug は pending 経路
   // (canplay 未到達の hidden element を待つ subscribe ループ) を畳むためだけに使う。
+  //
+  // forceFallbackSlug が立っている slug は host-only 経路を完全に放棄して JSX
+  // <video> を新規マウントする (host-only deadlock 解除)。
   const canPromote =
     isActive &&
     !!videoSrc &&
+    forceFallbackSlug !== item.slug &&
     (hasPromotableElement(item.slug, videoSrc) ||
       (pendingAbandonedSlug !== item.slug &&
         hasPendingElement(item.slug, videoSrc)));
@@ -345,9 +354,60 @@ export default function FeedItem({ item, isActive, isAdjacent = false, isFirst, 
       claimMissLoggedRef.current = null;
     }
     setPendingAbandonedSlug((prev) => (prev === item.slug ? prev : null));
+    // 別 slug に切り替わったら fallback フラグも捨てる (この slug の指示ではない)。
+    setForceFallbackSlug((prev) => (prev === item.slug ? null : prev));
     activeReadyRef.current = false;
     activePlayingRef.current = false;
   }, [item.slug]);
+
+  // useFeedPlayback の recoverActiveAfterForceResolve や no-element watchdog から
+  // 発火される強制 fallback シグナル。自分の slug 宛なら host-only 経路を畳んで
+  // JSX <video> を新規マウントさせる (canPromote=false に倒す)。
+  useEffect(() => {
+    if (!isActive) return;
+    const onForceFallback = (e: Event) => {
+      const ce = e as CustomEvent<{ slug?: string; reason?: string }>;
+      if (ce.detail?.slug !== item.slug) return;
+      setForceFallbackSlug((prev) => (prev === item.slug ? prev : item.slug));
+      if (isVideoTimingEnabled()) {
+        // eslint-disable-next-line no-console
+        console.debug(
+          `vt ${item.slug}: force-fallback engaged reason=${ce.detail?.reason ?? "unknown"}`,
+        );
+      }
+    };
+    window.addEventListener("video-force-fallback", onForceFallback);
+    return () => {
+      window.removeEventListener("video-force-fallback", onForceFallback);
+    };
+  }, [isActive, item.slug]);
+
+  // host-only deadlock 監視: isActive かつ videoSrc 解決済みかつ canPromote=true で
+  // promoted 要素がまだ来ていない状態が長時間続くと、pool entry が canplay に到達
+  // できない (or registry race) ことが確定的。一定時間 (4s) 経過しても解消しない
+  // なら自分宛に video-force-fallback を発火させて JSX <video> 経路に逃がす。
+  // 解消条件 (promotedElement set / 非 active / videoSrc 消失) は依存配列の変化で
+  // 自動的に timer cleanup される。
+  useEffect(() => {
+    if (!isActive) return;
+    if (!videoSrc) return;
+    if (!canPromote) return;
+    if (promotedElement) return;
+    if (forceFallbackSlug === item.slug) return;
+    const HOST_ONLY_DEADLOCK_MS = 4000;
+    const timer = setTimeout(() => {
+      try {
+        window.dispatchEvent(
+          new CustomEvent("video-force-fallback", {
+            detail: { slug: item.slug, reason: "host-only-deadlock" },
+          }),
+        );
+      } catch {
+        /* ignore */
+      }
+    }, HOST_ONLY_DEADLOCK_MS);
+    return () => clearTimeout(timer);
+  }, [isActive, videoSrc, canPromote, promotedElement, forceFallbackSlug, item.slug]);
   // アンマウント / 非 active 化で残った pending pin を解除する。
   // pinned entry を解放しないと、別ユーザー操作で同 slug が active になるまで
   // pool に居座り続けて cap を圧迫する。
@@ -360,6 +420,8 @@ export default function FeedItem({ item, isActive, isAdjacent = false, isFirst, 
     // 非 active になったら abandoned flag も解除する。次に再び active になった
     // ときは新しい session として canPromote / tryClaim の評価をゼロから走らせる。
     setPendingAbandonedSlug((prev) => (prev === item.slug ? null : prev));
+    // force-fallback も同様に session 単位でリセット。
+    setForceFallbackSlug((prev) => (prev === item.slug ? null : prev));
     if (pendingLoggedRef.current === item.slug) {
       unpinSlug(item.slug);
       if (isVideoTimingEnabled()) {

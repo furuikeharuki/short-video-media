@@ -3,6 +3,16 @@ from pydantic import BaseModel
 from app.schemas.movie import MovieCard, PriceList
 
 
+class ActressCard(BaseModel):
+    """ホームの「人気女優」セクションなど、横スクロール一覧で使う軽量カード。"""
+    id: int
+    name: str
+    slug: str | None = None
+    thumbnail_url: str | None = None
+    image_url_small: str | None = None
+    image_url_large: str | None = None
+
+
 class GoodsCard(BaseModel):
     """女優詳細ページの「関連商品」セクションで使うグッズ表示用カード"""
     id: str

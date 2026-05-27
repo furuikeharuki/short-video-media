@@ -106,7 +106,21 @@ def client(monkeypatch: pytest.MonkeyPatch) -> Iterator[TestClient]:
     async def fake_get_movies_by_genre(db, genre_name, limit, offset=0):  # type: ignore[no-untyped-def]
         return _paged_movies(GENRE_TOTAL, offset, limit)
 
+    async def fake_get_popular_products_all_time(db, limit, offset=0):  # type: ignore[no-untyped-def]
+        return _paged_cards(POPULAR_TOTAL, offset, limit)
+
+    async def fake_get_popular_actresses_all_time(db, limit, offset=0):  # type: ignore[no-untyped-def]
+        # 人気女優は ActressCard を返すが、本ファイルの section/list 系テストは
+        # 動画系セクションだけを検証しているので空配列で十分。
+        return []
+
     monkeypatch.setattr(home_endpoint, "get_popular_all_time", fake_get_popular_all_time)
+    monkeypatch.setattr(
+        home_endpoint, "get_popular_products_all_time", fake_get_popular_products_all_time
+    )
+    monkeypatch.setattr(
+        home_endpoint, "get_popular_actresses_all_time", fake_get_popular_actresses_all_time
+    )
     monkeypatch.setattr(home_endpoint, "get_ranking", fake_get_ranking)
     monkeypatch.setattr(home_endpoint, "get_new_release_movies", fake_get_new_release_movies)
     monkeypatch.setattr(home_endpoint, "get_recent_release_movies", fake_get_recent_release_movies)
@@ -286,18 +300,150 @@ def test_home_sections_order_and_titles(client: TestClient) -> None:
     data = res.json()
     sections = data["sections"]
 
-    # 必要な並び順: new, recent, popular, ranking_daily, ranking_weekly, ranking_monthly, ...
+    # 必要な並び順:
+    #   new, recent, popular(人気動画), popular_products(人気商品),
+    #   ranking_daily, ranking_weekly, ranking_monthly, ...
+    # 人気女優 (popular_actresses) は別フィールド (actress_sections) で返るので
+    # ここでは現れない。
     keys = [s["key"] for s in sections]
-    assert keys[:6] == [
+    assert keys[:7] == [
         "new",
         "recent",
         "popular",
+        "popular_products",
         "ranking_daily",
         "ranking_weekly",
         "ranking_monthly",
     ]
     titles = {s["key"]: s["title"] for s in sections}
+    # 「人気」は「人気動画」にリネームされていること
+    assert titles["popular"] == "人気動画"
+    # 「人気商品」セクションが追加されていること
+    assert titles["popular_products"] == "人気商品"
     # 「デイリーランキング」ではなく「日間ランキング」になっていること
     assert titles["ranking_daily"] == "日間ランキング"
     assert titles["ranking_weekly"] == "週間ランキング"
     assert titles["ranking_monthly"] == "月間ランキング"
+
+
+def test_home_actress_section_returned_when_data_available(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """affiliate_click 集計で人気女優が取れたとき、actress_sections に
+    'popular_actresses' を 'タイトル=人気女優' で返すこと。
+    """
+    from app.schemas.actress import ActressCard
+
+    async def fake_popular_movies(db, limit, offset=0):  # type: ignore[no-untyped-def]
+        return []
+
+    async def fake_popular_products(db, limit, offset=0):  # type: ignore[no-untyped-def]
+        return []
+
+    async def fake_ranking(db, period, limit, offset=0):  # type: ignore[no-untyped-def]
+        return []
+
+    async def fake_new(db, limit, fallback_days, offset=0):  # type: ignore[no-untyped-def]
+        return []
+
+    async def fake_recent(db, days, limit, offset=0):  # type: ignore[no-untyped-def]
+        return []
+
+    async def empty(*args, **kwargs):  # type: ignore[no-untyped-def]
+        return []
+
+    async def fake_popular_actresses(db, limit, offset=0):  # type: ignore[no-untyped-def]
+        return [
+            ActressCard(
+                id=1,
+                name="テスト女優1",
+                slug="test-actress-1",
+                thumbnail_url=None,
+                image_url_small=None,
+                image_url_large=None,
+            ),
+            ActressCard(
+                id=2,
+                name="テスト女優2",
+                slug="test-actress-2",
+                thumbnail_url=None,
+                image_url_small=None,
+                image_url_large=None,
+            ),
+        ]
+
+    monkeypatch.setattr(home_endpoint, "get_popular_all_time", fake_popular_movies)
+    monkeypatch.setattr(home_endpoint, "get_popular_products_all_time", fake_popular_products)
+    monkeypatch.setattr(home_endpoint, "get_popular_actresses_all_time", fake_popular_actresses)
+    monkeypatch.setattr(home_endpoint, "get_ranking", fake_ranking)
+    monkeypatch.setattr(home_endpoint, "get_new_release_movies", fake_new)
+    monkeypatch.setattr(home_endpoint, "get_recent_release_movies", fake_recent)
+    monkeypatch.setattr(home_endpoint, "get_popular_search_genres", empty)
+    monkeypatch.setattr(home_endpoint, "get_top_genres_by_movie_count", empty)
+
+    client = TestClient(app)
+    res = client.get("/api/v1/home", params={"section_limit": 20})
+    assert res.status_code == 200
+    data = res.json()
+    assert "actress_sections" in data
+    actress_sections = data["actress_sections"]
+    assert len(actress_sections) == 1
+    assert actress_sections[0]["key"] == "popular_actresses"
+    assert actress_sections[0]["title"] == "人気女優"
+    assert len(actress_sections[0]["items"]) == 2
+    assert actress_sections[0]["items"][0]["name"] == "テスト女優1"
+
+
+def test_home_actress_section_omitted_when_no_data(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """人気女優の集計結果がゼロのときは actress_sections に出さないこと
+    (空セクションを返してフロントで余白が出るのを防ぐ)。"""
+
+    async def empty(*args, **kwargs):  # type: ignore[no-untyped-def]
+        return []
+
+    monkeypatch.setattr(home_endpoint, "get_popular_all_time", empty)
+    monkeypatch.setattr(home_endpoint, "get_popular_products_all_time", empty)
+    monkeypatch.setattr(home_endpoint, "get_popular_actresses_all_time", empty)
+    monkeypatch.setattr(home_endpoint, "get_ranking", empty)
+    monkeypatch.setattr(home_endpoint, "get_new_release_movies", empty)
+    monkeypatch.setattr(home_endpoint, "get_recent_release_movies", empty)
+    monkeypatch.setattr(home_endpoint, "get_popular_search_genres", empty)
+    monkeypatch.setattr(home_endpoint, "get_top_genres_by_movie_count", empty)
+
+    client = TestClient(app)
+    res = client.get("/api/v1/home", params={"section_limit": 20})
+    assert res.status_code == 200
+    data = res.json()
+    assert data["actress_sections"] == []
+
+
+def test_section_popular_products_paginated(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """/home/section?key=popular_products が offset/limit を SQL レベルで
+    使ってページングできること。"""
+
+    async def big_products(db, limit, offset=0):  # type: ignore[no-untyped-def]
+        return _paged_cards(80, offset, limit)
+
+    monkeypatch.setattr(home_endpoint, "get_popular_products_all_time", big_products)
+
+    client = TestClient(app)
+    res = client.get(
+        "/api/v1/home/section",
+        params={"key": "popular_products", "offset": 0, "limit": 20},
+    )
+    assert res.status_code == 200
+    data = res.json()
+    assert len(data["items"]) == 20
+    assert data["next_cursor"] == "20"
+
+    res2 = client.get(
+        "/api/v1/home/section",
+        params={"key": "popular_products", "offset": 60, "limit": 20},
+    )
+    data2 = res2.json()
+    assert len(data2["items"]) == 20
+    assert data2["next_cursor"] is None

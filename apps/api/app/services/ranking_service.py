@@ -8,7 +8,10 @@ from __future__ import annotations
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.repositories.actress_repository import get_actresses_by_ids_ordered
 from app.repositories.event_repository import (
+    aggregate_affiliate_click_ranking_all_time,
+    aggregate_affiliate_click_ranking_by_actress_all_time,
     aggregate_search_query_ranking,
     aggregate_view_ranking,
     aggregate_view_ranking_all_time,
@@ -17,8 +20,9 @@ from app.repositories.movie_repository import (
     get_fallback_ranking_movies,
     get_movies_by_slugs_ordered,
 )
-from app.services.feed_service import _to_card
+from app.schemas.actress import ActressCard
 from app.schemas.movie import MovieCard
+from app.services.feed_service import _to_card
 
 
 VALID_PERIODS = ("daily", "weekly", "monthly")
@@ -115,6 +119,83 @@ async def get_popular_all_time(
         db, limit=limit, window_days=None, offset=offset
     )
     return [_to_card(m) for m in movies]
+
+
+def _to_actress_card(actress) -> ActressCard:
+    return ActressCard(
+        id=actress.id,
+        name=actress.name,
+        slug=actress.slug,
+        thumbnail_url=actress.thumbnail_url,
+        image_url_small=actress.image_url_small,
+        image_url_large=actress.image_url_large,
+    )
+
+
+async def get_popular_products_all_time(
+    db: AsyncSession,
+    *,
+    limit: int = 20,
+    offset: int = 0,
+) -> list[MovieCard]:
+    """「人気商品」セクション: 全期間の affiliate_click イベント計順。
+
+    affiliate_click は movie detail ページからのみ発火しているため、
+    集計対象は Movie となり、戻り値は MovieCard。
+    イベントが不足しているときは review_count ベースのフォールバックで穴埋め。
+    """
+    ranked = await aggregate_affiliate_click_ranking_all_time(
+        db, limit=limit, offset=offset
+    )
+    slugs = [s for s, _ in ranked if s]
+
+    if slugs:
+        movies = await get_movies_by_slugs_ordered(db, slugs)
+        if movies and len(movies) >= limit:
+            return [_to_card(m) for m in movies]
+
+        # イベント由来で limit に満たないときはフォールバックで穴埋め (重複除去)。
+        seen_ids = {m.id for m in movies}
+        cards = [_to_card(m) for m in movies]
+        need = limit - len(cards)
+        fallback = await get_fallback_ranking_movies(
+            db, limit=need * 2, window_days=None, offset=0
+        )
+        for m in fallback:
+            if len(cards) >= limit:
+                break
+            if m.id in seen_ids:
+                continue
+            cards.append(_to_card(m))
+            seen_ids.add(m.id)
+        return cards[:limit]
+
+    # affiliate_click イベントがゼロのときは review_count 順で完全フォールバック。
+    movies = await get_fallback_ranking_movies(
+        db, limit=limit, window_days=None, offset=offset
+    )
+    return [_to_card(m) for m in movies]
+
+
+async def get_popular_actresses_all_time(
+    db: AsyncSession,
+    *,
+    limit: int = 20,
+    offset: int = 0,
+) -> list[ActressCard]:
+    """「人気女優」セクション: 全期間の affiliate_click イベントを女優単位に集計した順。
+
+    affiliate_click イベントは Movie の slug に紐づくので、
+    Event → Movie → MovieActress → Actress の JOIN で女優ごとの総クリック数を算出する。
+    """
+    ranked = await aggregate_affiliate_click_ranking_by_actress_all_time(
+        db, limit=limit, offset=offset
+    )
+    ids = [aid for aid, _ in ranked]
+    if not ids:
+        return []
+    actresses = await get_actresses_by_ids_ordered(db, ids)
+    return [_to_actress_card(a) for a in actresses]
 
 
 async def get_popular_search_genres(

@@ -16,6 +16,7 @@ const API_BASE_URL =
 
 export type HomeSectionKey =
   | "popular"
+  | "popular_products"
   | "new"
   | "recent"
   | "ranking_daily"

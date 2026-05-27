@@ -12,10 +12,12 @@ from app.repositories.movie_repository import (
     get_top_genres_by_movie_count,
 )
 from app.schemas.feed import FeedResponse
-from app.schemas.home import HomeResponse, HomeSection
+from app.schemas.home import HomeActressSection, HomeResponse, HomeSection
 from app.services.feed_service import _to_card
 from app.services.ranking_service import (
+    get_popular_actresses_all_time,
     get_popular_all_time,
+    get_popular_products_all_time,
     get_popular_search_genres,
     get_ranking,
 )
@@ -33,6 +35,7 @@ async def get_home(
     db: AsyncSession = Depends(get_db),
 ) -> HomeResponse:
     sections: list[HomeSection] = []
+    actress_sections: list[HomeActressSection] = []
 
     # 1. 本日配信開始 (今日の primary_date の作品のみ。フォールバックなし)
     new_movies = await get_new_release_movies(
@@ -57,14 +60,37 @@ async def get_home(
         )
     )
 
-    # 3. 人気 (全期間の総視聴回数順)
+    # 3. 人気動画 (全期間の総視聴回数順)
     popular_items = await get_popular_all_time(db, limit=section_limit)
     sections.append(
         HomeSection(
             key="popular",
-            title="人気",
+            title="人気動画",
             subtitle="総視聴回数順",
             items=popular_items,
+        )
+    )
+
+    # 3b. 人気女優 (全期間のアフィリエイトクリック総数を女優単位で集計)
+    popular_actresses = await get_popular_actresses_all_time(db, limit=section_limit)
+    if popular_actresses:
+        actress_sections.append(
+            HomeActressSection(
+                key="popular_actresses",
+                title="人気女優",
+                subtitle="アフィリエイトクリック総数順",
+                items=popular_actresses,
+            )
+        )
+
+    # 3c. 人気商品 (全期間のアフィリエイトクリック総数順)
+    popular_products = await get_popular_products_all_time(db, limit=section_limit)
+    sections.append(
+        HomeSection(
+            key="popular_products",
+            title="人気商品",
+            subtitle="アフィリエイトクリック総数順",
+            items=popular_products,
         )
     )
 
@@ -125,7 +151,7 @@ async def get_home(
 
     sections.extend(genre_sections)
 
-    return HomeResponse(sections=sections)
+    return HomeResponse(sections=sections, actress_sections=actress_sections)
 
 
 
@@ -182,6 +208,10 @@ async def get_home_section(
 
     if key == "popular":
         items = await get_popular_all_time(db, limit=fetch_limit, offset=offset)
+        return _to_response(items, offset, limit)
+
+    if key == "popular_products":
+        items = await get_popular_products_all_time(db, limit=fetch_limit, offset=offset)
         return _to_response(items, offset, limit)
 
     if key == "ranking_daily":

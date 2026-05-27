@@ -8,6 +8,20 @@ from app.db.models.goods import ActressGoods, Goods
 from app.db.models.movie import Movie
 
 
+async def get_actresses_by_ids_ordered(
+    db: AsyncSession,
+    ids: list[int],
+) -> list[Actress]:
+    """id リストの順序を保ったまま女優を返す。"""
+    if not ids:
+        return []
+    result = await db.execute(select(Actress).where(Actress.id.in_(ids)))
+    actresses = list(result.scalars().unique().all())
+    order_index = {i: idx for idx, i in enumerate(ids)}
+    actresses.sort(key=lambda a: order_index.get(a.id, 1 << 30))
+    return actresses
+
+
 async def get_actress_by_name(db: AsyncSession, name: str) -> Actress | None:
     """女優名完全一致で 1 件取得。"""
     stmt = select(Actress).where(Actress.name == name).limit(1)

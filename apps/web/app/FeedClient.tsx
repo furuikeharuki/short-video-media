@@ -353,14 +353,19 @@ export default function FeedClient() {
     // 基本 fetch しない。フィルター未適用のフィードを 1 回取りに行って "違反作品が
     // 一瞬見える" のを防ぐため。
     //
-    // ただし、URL が空 + 保存済み pref がある (fellBackToSavedPref=true) ときは、
-    // 既にこの render で saved pref を currentGenres/currentAdvanced に積んでおり、
-    // enforce の結果を待つ必要は無い (待っても同じ条件で fetch するか、enforce が
-    // router.replace して URL が更新されたら currentSig が変わって再 effect で
-    // 改めて fetch が走るだけ)。むしろ enforce の async が認証ロード中等で長引いて
-    // pending のまま固まるとここで loading から永久に抜けられず黒画面が残るため、
-    // saved pref がある場合は enforce を待たずに即 fetch する方が安全。
-    if (enforceStatus === "pending" && !fellBackToSavedPref) {
+    // ただし以下のときは enforce を待たずに即 fetch する:
+    //   - URL が空 + 保存済み pref がある (fellBackToSavedPref=true): 既にこの render で
+    //     saved pref を currentGenres/currentAdvanced に積んでおり、待っても同じ条件で
+    //     fetch するだけ。
+    //   - URL に既に何らかのフィルター (hasAnyFilter=true) が乗っている: ユーザーは
+    //     その URL で /feed を意図的に開いた (詳細検索アイコンから適用 / ハンバーガー
+    //     経由で保存済み q を展開 / 直リンク 等)。SavedFilterEnforcer が更に追加条件を
+    //     注入したら currentSig が変わって effect が再走するだけなので、ここで待つ意味は
+    //     無い。むしろ enforce が認証ロード中・サーバ pref 取得遅延・q-only URL の
+    //     hasAdvancedInUrl=false 判定 (q は意図的に除外) などで pending が長引くと、
+    //     0 件結果でも「該当する作品が見つかりませんでした」が永久に出ず、スピナーが
+    //     固まる事故になる。フィルター情報が URL に既にある以上、即 fetch する方が安全。
+    if (enforceStatus === "pending" && !fellBackToSavedPref && !hasAnyFilter) {
       setIsLoading(true);
       return;
     }

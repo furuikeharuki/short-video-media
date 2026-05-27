@@ -80,9 +80,15 @@ export function middleware(request: NextRequest) {
 
   // 未認証なら age-gate へ。リダイレクト応答自体にも X-Robots-Tag を付けて、
   // クローラがこのレスポンスを辿った場合でも index 対象にしない。
+  // next には pathname だけでなく query string も含めて元 URL を完全に保持する。
+  // 例: /feed?q=巨乳 → /age-gate?next=/feed?q=巨乳
+  // これを怠ると年齢確認後に /feed に着地して q が失われ、絞り込みが効かなくなる。
   const url = request.nextUrl.clone();
   url.pathname = "/age-gate";
-  url.searchParams.set("next", pathname);
+  // 既存の query param は age-gate には不要なので一旦クリアしてから next を立て直す。
+  url.search = "";
+  const originalSearch = request.nextUrl.search; // "" or "?foo=bar"
+  url.searchParams.set("next", `${pathname}${originalSearch}`);
   const redirect = NextResponse.redirect(url);
   redirect.headers.set("X-Robots-Tag", "noindex, nofollow, noarchive");
   return redirect;

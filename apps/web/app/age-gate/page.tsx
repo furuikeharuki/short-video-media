@@ -37,9 +37,19 @@ type AgeGatePageProps = {
   }>;
 };
 
+// オープンリダイレクト防止: next は同一オリジン内の相対パスに限定する。
+// "/" で始まり "//" や "/\" で始まらないものだけ許可。query string と
+// fragment はそのまま温存する (例: "/feed?q=巨乳" は OK、"//evil.com" は NG)。
+function sanitizeNextPath(raw: string | undefined): string {
+  if (!raw) return "/";
+  if (!raw.startsWith("/")) return "/";
+  if (raw.startsWith("//") || raw.startsWith("/\\")) return "/";
+  return raw;
+}
+
 export default async function AgeGatePage({ searchParams }: AgeGatePageProps) {
   const params = await searchParams;
-  const nextPath = params.next || "/";
+  const nextPath = sanitizeNextPath(params.next);
 
   return (
     <main style={styles.main}>

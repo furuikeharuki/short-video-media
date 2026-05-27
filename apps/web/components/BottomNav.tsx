@@ -156,26 +156,35 @@ export default function BottomNav() {
   const trackRef   = useRef<HTMLDivElement>(null);
   const isDragging = useRef(false);
   const [progress, setProgress] = useState(0);
-  // シークバーは /feed のナビ上端から 5–6px 上に飛び出して描画される (top:-14px の
-  // トラック内に 3px の白いレールがある)。フィードに「入る」フルページ遷移
-  // (home / mypage → /feed) では、遷移直前まで出ていた home のナビは seekbar 無し
-  // (= 53px) で、新ページの初回ペイントで突然 seekbar 入り (= 58–59px) になる。
-  // この 5–6px の出現が体感的には「ナビが一瞬高くなって元に戻る」チラつきとして
-  // 認識される (#249 で leaving 側の 14px 縮みは抑えたが、entering 側はまだ残っていた)。
+  // フィードに「入る」フルページ遷移 (home / mypage → /feed) で、新ページの初回
+  // ペイントに seekbar (top:-14px の 3px レール) が突然現れると、ナビが 5–6px だけ
+  // 高くなったように知覚される。#249/#250 で opacity fade-in を入れて緩和したが、
+  // それでも「レールが現れる視覚イベント」が残るため、引き続き「ナビが一瞬高くなる」
+  // チラつきとして見える。
   //
-  // 対策: SSR 初回ペイントでは seekbar を opacity:0 で出しておき、マウント後の
-  // useEffect で ready=true に切り替えて短い transition で fade-in させる。
-  // - useState の初期値は SSR/CSR で同じ false なのでハイドレーション差分なし。
-  // - bfcache 復帰時は state が保持されるため即 visible のまま (チラつかない)。
-  // - leaving 側は ready=true のまま出続けるので #249 の挙動を一切壊さない。
-  // - DOM 上は常にレンダーしているため、CSS の :hover/:active や ref 接続も維持される。
-  const [seekbarReady, setSeekbarReady] = useState(false);
+  // 対策はレイヤを分ける:
+  //   1. seekbar-track 自体は ::before のレール/fill/thumb を持たない素の box として
+  //      非フィードルートでも常時 DOM に置く。これによりナビの「視覚的フットプリント」
+  //      (DOM 構造としてナビが占める領域) はルート間で同一になる。
+  //   2. ::before のレール、fill、thumb は seekbar-track--active が付いたときだけ
+  //      描画する。--active は「フィードにいる && 実際に再生中 (= video-progress が
+  //      届いた)」を満たしたタイミングで付与する。これにより /feed の初回ペイント
+  //      では何も描画されず、動画再生開始と一緒に seekbar が自然に現れる。
+  //      ユーザーには「動画と一緒に再生 UI が出てきた」と感じられ、ナビ高さの
+  //      ポップとして知覚されない。
+  //   3. bfcache 復帰のように既に再生済み状態が残っているケースでは hasProgress が
+  //      true のまま戻るので即 visible (チラつかない)。
+  //   4. 非アクティブ時は pointer-events:none。タップ吸い込みも起きない。
+  const [hasProgress, setHasProgress] = useState(false);
+  // /feed を抜けて home/mypage に着いたとき、レール表示状態 (hasProgress=true) を
+  // 即落としておく。次回 /feed に入ったときの「初回 progress 到着で fade-in」挙動
+  // を毎回成立させるため。
   useEffect(() => {
-    // 1 フレーム待ってから ready にする。SSR 直後のフレームで opacity:0 を確実に
-    // 描画してから fade-in させ、「seekbar が突然現れた」と知覚されないようにする。
-    const id = requestAnimationFrame(() => setSeekbarReady(true));
-    return () => cancelAnimationFrame(id);
-  }, []);
+    if (!isShortPage) {
+      setHasProgress(false);
+      setProgress(0);
+    }
+  }, [isShortPage]);
 
   // 「ショートページにいるかどうか」を ref にミラーして、video-progress リスナを
   // useEffect の依存に乗せずに済むようにする。依存に isShortPage を載せていた以前の
@@ -196,6 +205,10 @@ export default function BottomNav() {
       // 同値で setState すると React は bail-out するが、念のため明示的にガードして
       // 不要な再レンダーを完全に避ける。
       setProgress((prev) => (prev === next ? prev : next));
+      // 初回 progress 到着で seekbar の見た目 (レール/fill/thumb) を解禁する。
+      // ナビ高さ変化を伴うチラつきの原因 = /feed 初回ペイントでのレール出現、を
+      // 動画再生開始タイミングまで遅らせるため。
+      setHasProgress((prev) => (prev ? prev : true));
     };
     window.addEventListener("video-progress", handler);
     return () => window.removeEventListener("video-progress", handler);
@@ -246,24 +259,34 @@ export default function BottomNav() {
   return (
     <nav className="bottom-nav" aria-label="メインナビゲーション">
 
-      {isShortPage && (
-        <div
-          ref={trackRef}
-          className={`seekbar-track${seekbarReady ? " seekbar-track--ready" : ""}`}
-          onMouseDown={handleMouseDown}
-          onTouchStart={handleTouchStart}
-          onTouchMove={handleTouchMove}
-          onTouchEnd={handleTouchEnd}
-          aria-label="再生位置"
-          role="slider"
-          aria-valuemin={0}
-          aria-valuemax={100}
-          aria-valuenow={Math.round(progress * 100)}
-        >
-          <div className="seekbar-fill" style={{ width: `${progress * 100}%` }} />
-          <div className="seekbar-thumb" style={{ left: `${progress * 100}%` }} />
-        </div>
-      )}
+      {/*
+        seekbar-track はフィード/非フィードを問わず常に DOM に置く。
+        これによりナビの「視覚的フットプリント」(ナビ上端から 14px 上のレール領域)
+        がルート間で同一になり、フィードに入る瞬間に「ナビが急に高くなった」と
+        知覚されない。--active が付くまでレール/fill/thumb は描画されず、
+        pointer-events も無効。
+        isShortPage=false のときは aria-hidden で支援技術からも隠す。
+      */}
+      <div
+        ref={trackRef}
+        className={`seekbar-track${
+          isShortPage && hasProgress ? " seekbar-track--active" : ""
+        }`}
+        onMouseDown={handleMouseDown}
+        onTouchStart={handleTouchStart}
+        onTouchMove={handleTouchMove}
+        onTouchEnd={handleTouchEnd}
+        aria-hidden={!isShortPage || undefined}
+        aria-label={isShortPage ? "再生位置" : undefined}
+        role={isShortPage ? "slider" : undefined}
+        aria-valuemin={isShortPage ? 0 : undefined}
+        aria-valuemax={isShortPage ? 100 : undefined}
+        aria-valuenow={isShortPage ? Math.round(progress * 100) : undefined}
+      >
+        <div className="seekbar-fill" style={{ width: `${progress * 100}%` }} />
+        <div className="seekbar-thumb" style={{ left: `${progress * 100}%` }} />
+      </div>
+
 
       {NAV_ITEMS.map((item) => {
         const isActive =
@@ -404,43 +427,60 @@ const navStyle = `
     backdrop-filter: none;
     -webkit-backdrop-filter: none;
   }
-  html[data-nav-loading="1"] .seekbar-track {
+  html[data-nav-loading="1"] .seekbar-track,
+  html[data-nav-loading="1"] .seekbar-track.seekbar-track--active {
     pointer-events: none;
   }
 
+  /*
+    seekbar-track は全ルートで常にレンダーする (フックの hooks 依存ではなく、
+    isHidden=false の全ナビ表示ルートで DOM 上に存在する)。
+    これによりナビの上端から 14px 上に伸びる「視覚的フットプリント」が
+    home / mypage / feed のいずれでも同一になり、ルート切替でナビの「高さ」が
+    変動して見える錯覚を完全に消す。
+    非アクティブ時:
+      - 自身は opacity:0 (見えない)
+      - ::before / fill / thumb は描画されない (CSS 側で seekbar-track--active が
+        付いたときだけ描画)
+      - pointer-events:none で touch hit も発生しない
+    アクティブ時 (= /feed にいて video-progress が一度でも来た):
+      - opacity:1 (フェード in)
+      - レール、fill、thumb が出現
+      - 操作可能
+    /feed 初回ペイントでは hasProgress=false なので何も描画されない。動画再生
+    開始 (= 最初の video-progress) で初めてレールが出現するため、ユーザーには
+    「動画と一緒に再生 UI が現れた」と感じられ、ナビ高さのポップとして
+    知覚されない。
+  */
   .seekbar-track {
     position: absolute;
     top: -14px;
     left: 0;
     right: 0;
     height: 20px;
-    cursor: pointer;
     -webkit-tap-highlight-color: transparent;
     touch-action: none;
     user-select: none;
     z-index: 10;
     display: flex;
     align-items: center;
-    /*
-      フィードに「入る」フルページ遷移 (home/mypage → /feed) では、直前まで
-      表示されていた home のナビは seekbar 無しで、新ページの初回ペイントで
-      突然 seekbar 入りになる。この 5–6px の出現が体感的には「ナビが一瞬
-      高くなる」チラつきになる。
-      初期は opacity:0 で描画し、マウント後に付く --ready で fade-in させて
-      ナビの視覚的な高さが瞬間的に増えるのを避ける。
-      visibility は維持 (touch hit や ref 接続を生かしたまま見た目だけ消す)。
-    */
     opacity: 0;
+    pointer-events: none;
+    cursor: default;
     transition: opacity 220ms ease;
   }
-  .seekbar-track.seekbar-track--ready {
+  .seekbar-track.seekbar-track--active {
     opacity: 1;
+    pointer-events: auto;
+    cursor: pointer;
   }
   @media (prefers-reduced-motion: reduce) {
     .seekbar-track { transition: none; }
   }
 
-  .seekbar-track::before {
+  /* レール (::before) / fill / thumb は --active のときだけ描画する。
+     非フィードルートで余計な視覚要素が漏れて出ないようにする防衛線。 */
+  .seekbar-track.seekbar-track--active::before {
     content: '';
     position: absolute;
     left: 0;
@@ -453,6 +493,7 @@ const navStyle = `
   }
 
   .seekbar-fill {
+    display: none;
     position: absolute;
     left: 0;
     top: 50%;
@@ -463,8 +504,12 @@ const navStyle = `
     pointer-events: none;
     transition: width 0.1s linear;
   }
+  .seekbar-track.seekbar-track--active .seekbar-fill {
+    display: block;
+  }
 
   .seekbar-thumb {
+    display: none;
     position: absolute;
     top: 50%;
     transform: translate(-50%, -50%) scale(0);
@@ -476,17 +521,20 @@ const navStyle = `
     transition: transform 0.15s ease, left 0.1s linear;
     box-shadow: 0 1px 4px rgba(0,0,0,0.5);
   }
+  .seekbar-track.seekbar-track--active .seekbar-thumb {
+    display: block;
+  }
 
-  .seekbar-track:hover .seekbar-fill,
-  .seekbar-track:active .seekbar-fill {
+  .seekbar-track.seekbar-track--active:hover .seekbar-fill,
+  .seekbar-track.seekbar-track--active:active .seekbar-fill {
     height: 5px;
   }
-  .seekbar-track:hover .seekbar-thumb,
-  .seekbar-track:active .seekbar-thumb {
+  .seekbar-track.seekbar-track--active:hover .seekbar-thumb,
+  .seekbar-track.seekbar-track--active:active .seekbar-thumb {
     transform: translate(-50%, -50%) scale(1);
   }
-  .seekbar-track:hover::before,
-  .seekbar-track:active::before {
+  .seekbar-track.seekbar-track--active:hover::before,
+  .seekbar-track.seekbar-track--active:active::before {
     height: 5px;
   }
 

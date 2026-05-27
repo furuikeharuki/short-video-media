@@ -364,6 +364,28 @@ const navStyle = `
     padding-bottom: 5px;
   }
 
+  /*
+    遷移オーバーレイ表示中はナビを「視覚的に凍結」する。
+    - 半透明背景 + backdrop-filter のままだと、ナビ越しに見えていた <video> が
+      一瞬で黒に置き換わって色味がフラッシュする (= 「ナビが点滅する」体感)。
+      solid #000 + backdrop-filter:none に切り替えて、オーバーレイの出現/消失と
+      ナビ背景がぴたっと同期するようにする。
+    - シークバーレール (top:-14px でナビの外に飛び出して描画される 20px ぶんの
+      ヒット領域 + 3px の白いレール) は、オーバーレイ (z:150) より上の階層に
+      乗ってしまうため、黒オーバーレイの上に白いラインが浮いて見えて
+      「ナビが急に高くなった/低くなった」ように錯覚させる。
+      pointer-events: none で当たり判定も殺し、display:none で完全に消す。
+    高さや bottom 位置自体は変えないので、bfcache 復帰時のレイアウトも壊れない。
+  */
+  html[data-nav-loading="1"] .bottom-nav {
+    background: #000;
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+  }
+  html[data-nav-loading="1"] .seekbar-track {
+    display: none;
+  }
+
   .seekbar-track {
     position: absolute;
     top: -14px;

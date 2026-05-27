@@ -48,6 +48,26 @@ export default function NavigationLoadingOverlay() {
     setVisible(false);
   }, [pathname]);
 
+  // オーバーレイ表示中は <html data-nav-loading="1"> を付ける。
+  // これを CSS セレクタにして BottomNav 側を「視覚的に凍結」する:
+  //   - 半透明背景 + backdrop-filter を solid #000 に切り替えてフィードが
+  //     透けて見えていた状態から黒オーバーレイに変わる「色味の変化」を消す
+  //   - シークバー (top: -14px でナビの外に出ているレール) を非表示にして、
+  //     ナビが急に高くなる/低くなるように見える錯覚を消す
+  // 物理的な高さや bottom 位置は一切触らないので、bfcache 復帰時の見た目もそのまま。
+  useEffect(() => {
+    if (typeof document === "undefined") return;
+    const root = document.documentElement;
+    if (visible) {
+      root.setAttribute("data-nav-loading", "1");
+    } else {
+      root.removeAttribute("data-nav-loading");
+    }
+    return () => {
+      root.removeAttribute("data-nav-loading");
+    };
+  }, [visible]);
+
   if (!visible) return null;
 
   return (

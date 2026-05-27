@@ -2,10 +2,13 @@
 
 import { useEffect, useRef, useState } from "react";
 import { useSearchParams } from "next/navigation";
-import FeedViewer from "@/components/FeedViewer";
+import FeedSurface from "@/components/feed/FeedSurface";
 import type { MovieCard } from "@/lib/api/feed";
 
 const STORAGE_KEY = "search_feed_items";
+// /search/feed の現在 index を保存する sessionStorage キー。
+// /feed (FeedClient) とはキーを分けて、入口ごとに独立した位置記憶にする。
+const SEARCH_FEED_INDEX_KEY = "search_feed_index";
 
 function shuffle<T>(arr: T[]): T[] {
   const a = [...arr];
@@ -24,6 +27,8 @@ export default function SearchFeedPage() {
   const [items,   setItems]   = useState<MovieCard[]>([]);
   const [isEmpty, setIsEmpty] = useState(false);
 
+  // 検索結果フィードの並び順アルゴリズム (selected 先頭 + 残りを shuffle) は
+  // 現状の挙動を維持。FeedSurface に渡る items の順序は変更しない。
   useEffect(() => {
     if (initialized.current) return;
     initialized.current = true;
@@ -49,7 +54,17 @@ export default function SearchFeedPage() {
     return <div style={emptyStyle}>読み込み中...</div>;
   }
 
-  return <FeedViewer items={items} initialIndex={0} />;
+  // FeedSurface 経由で FeedViewer を描画することで、/feed (FeedClient) と同じ
+  // 再生アルゴリズム (高速スワイプ・動画プリフェッチ・ウィンドウィング・広告挿入)
+  // と、同じ視聴ログ (markSeen / view イベント / 視聴履歴記録) が適用される。
+  return (
+    <FeedSurface
+      items={items}
+      initialIndex={0}
+      ready={items.length > 0}
+      sessionIndexKey={SEARCH_FEED_INDEX_KEY}
+    />
+  );
 }
 
 const emptyStyle: React.CSSProperties = {

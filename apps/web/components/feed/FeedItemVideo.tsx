@@ -135,24 +135,22 @@ export default function FeedItemVideo({
     promotedElement.addEventListener("error", er);
     promotedElement.addEventListener("contextmenu", cm);
 
-    // 既に canplay 到達済みのはずなので、合成イベントとして手動で通知して
-    // 親の videoReady を立てる (新規 listener では二度と発火しない可能性あり)。
+    // 既に canplay/loadeddata/loadedmetadata 到達済みのはずなので、合成イベント
+    // として手動で通知して親の videoReady を立てる (新規 listener では二度と
+    // 発火しない可能性あり)。
+    //
+    // 旧実装は queueMicrotask で遅延発火し `adoptedRef.current !== promotedElement`
+    // のとき drop していたが、rapid swipe で adopt 直後にもう一度 promoted swap が
+    // 起きるケースで synthetic event が握りつぶされ「動画は取れているのに
+    // thumbnail-cover + spinner が残り続ける」状態を誘発していた (P5)。
+    // adopt は同期で完了しており adoptedRef はこの直後の return まで確実に
+    // promotedElement を指すため、microtask に遅延させずこの場で直接呼ぶ。
     if (promotedElement.readyState >= 3) {
-      // microtask で送って、host 内 ref 設定や effect 連鎖と競合しないようにする
-      queueMicrotask(() => {
-        if (adoptedRef.current !== promotedElement) return;
-        onCanPlay();
-      });
+      onCanPlay();
     } else if (promotedElement.readyState >= 2) {
-      queueMicrotask(() => {
-        if (adoptedRef.current !== promotedElement) return;
-        onLoadedData();
-      });
+      onLoadedData();
     } else if (promotedElement.readyState >= 1) {
-      queueMicrotask(() => {
-        if (adoptedRef.current !== promotedElement) return;
-        onLoadedMetadata();
-      });
+      onLoadedMetadata();
     }
 
     return () => {

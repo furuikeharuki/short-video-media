@@ -1291,6 +1291,11 @@ export function useFeedPlayback({ slug, title, isActive, videoSrc, boundElement 
         // 即時 dispatch される。loading-grace timer (ACTIVE_AUTOPLAY_LOADING_GRACE_MS)
         // を 1 度だけ武装し、依然として進捗無しなら本当に死んでいると判定。
         const ACTIVE_AUTOPLAY_LOADING_GRACE_MS = 6500;
+        // 早期 fail-fast 用の中間チェック: grace のフル待機 (6.5s) を待つと、
+        // 「Range request は飛んでいるが何も返ってきていない (= buffered.length===0)」
+        // 完全に詰まったケースで救済が遅れる。中間時点で進捗ゼロなら早期に
+        // stuck signal を発火して force-resolve recovery を起こす。
+        const ACTIVE_AUTOPLAY_LOADING_GRACE_EARLY_MS = 3500;
         if (
           target.readyState === 0 &&
           target.networkState === 2 &&
@@ -1302,7 +1307,7 @@ export function useFeedPlayback({ slug, title, isActive, videoSrc, boundElement 
           if (isVideoTimingEnabled()) {
             // eslint-disable-next-line no-console
             console.debug(
-              `vt ${slug}: active autoplay watchdog bail phase=2 reason=active-loading-no-metadata grace=${ACTIVE_AUTOPLAY_LOADING_GRACE_MS}`,
+              `vt ${slug}: active autoplay watchdog bail phase=2 reason=active-loading-no-metadata grace=${ACTIVE_AUTOPLAY_LOADING_GRACE_MS} early=${ACTIVE_AUTOPLAY_LOADING_GRACE_EARLY_MS}`,
             );
           }
           if (activeAutoplayLoadingGraceTimerRef.current != null) {
@@ -1310,7 +1315,9 @@ export function useFeedPlayback({ slug, title, isActive, videoSrc, boundElement 
           }
           const graceAttemptId = armAttemptId;
           const graceWatchdogVideo = watchdogVideo;
-          activeAutoplayLoadingGraceTimerRef.current = setTimeout(() => {
+          // フル grace 満了時に走るロジック (関数化)。早期 fail-fast チェックが
+          // 「進捗あり」と判定した場合はこれを後段でスケジュールする。
+          const runFullGraceExpiry = () => {
             activeAutoplayLoadingGraceTimerRef.current = null;
             const graceLive =
               videoRef.current && videoRef.current.isConnected
@@ -1344,7 +1351,48 @@ export function useFeedPlayback({ slug, title, isActive, videoSrc, boundElement 
               );
             }
             dispatchStuckSignal(graceLive as HTMLVideoElement, "loading-grace");
-          }, ACTIVE_AUTOPLAY_LOADING_GRACE_MS);
+          };
+          // 中間チェック: ACTIVE_AUTOPLAY_LOADING_GRACE_EARLY_MS 経過時点で進捗が
+          // 全く無い (buffered.length===0 かつ rs=0 のまま) なら、フル grace を
+          // 待たずに stuck signal を発火する。これにより、本当に Range が返って
+          // きていない死 element を 3.5s で救済できる。進捗が見える (buffered>0 や
+          // rs>=1) ならフル grace 残り時間を待つ。
+          activeAutoplayLoadingGraceTimerRef.current = setTimeout(() => {
+            activeAutoplayLoadingGraceTimerRef.current = null;
+            const earlyLive =
+              videoRef.current && videoRef.current.isConnected
+                ? videoRef.current
+                : graceWatchdogVideo;
+            if (
+              graceAttemptId !== activeAutoplayAttemptIdRef.current ||
+              !isActiveRef.current ||
+              userPausedRef.current ||
+              !earlyLive ||
+              activeAutoplayStuckSignaledRef.current
+            ) {
+              // 状況変化済み: フル grace は走らせず黙って降りる (再 arm は別経路)。
+              return;
+            }
+            const noProgress =
+              earlyLive.readyState === 0 &&
+              earlyLive.buffered.length === 0 &&
+              earlyLive.currentTime === 0;
+            if (noProgress) {
+              if (isVideoTimingEnabled()) {
+                // eslint-disable-next-line no-console
+                console.debug(
+                  `vt ${slug}: active autoplay loading-grace early-fail rs=0 buffered=0 -> stuck`,
+                );
+              }
+              dispatchStuckSignal(earlyLive as HTMLVideoElement, "loading-grace-early");
+              return;
+            }
+            // 進捗あり -> 残り時間でフル grace 完了を待つ
+            activeAutoplayLoadingGraceTimerRef.current = setTimeout(
+              runFullGraceExpiry,
+              ACTIVE_AUTOPLAY_LOADING_GRACE_MS - ACTIVE_AUTOPLAY_LOADING_GRACE_EARLY_MS,
+            );
+          }, ACTIVE_AUTOPLAY_LOADING_GRACE_EARLY_MS);
           return;
         }
         dispatchStuckSignal(target, "phase2");

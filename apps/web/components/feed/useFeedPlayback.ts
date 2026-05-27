@@ -184,6 +184,16 @@ export function useFeedPlayback({ slug, title, isActive, videoSrc, boundElement 
   // 再 arm しない)。
   const activeAutoplayLoadKickTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const activeAutoplayLoadKickedRef = useRef(false);
+  // Phase 2 loading-grace timer: Phase 2 (3500ms) 到達時点で
+  // rs=0 / networkState=NETWORK_LOADING(2) / no error / currentTime=0 のときは、
+  // ブラウザがまさに Range request 中で metadata 未到達のため `video-active-stuck`
+  // dispatch (= sameUrl force-resolve + recovery) は害になる (in-flight load を
+  // AbortError で kill して逆に latency が悪化する)。Phase 2 で即 dispatch せず、
+  // この grace timer (= Phase 2 から追加で ACTIVE_AUTOPLAY_LOADING_GRACE_MS) を
+  // 武装し、依然として進捗無し (rs=0 のまま) であれば本当に死んでいると判定して
+  // recovery を発火する。1 active session につき 1 回だけ arm する。
+  const activeAutoplayLoadingGraceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const activeAutoplayLoadingGraceArmedRef = useRef(false);
   // この active session で playing イベントを 1 度でも観測したか。
   //
   // HTML5 仕様上 video.play() は呼んだ瞬間に video.paused=false にセットされる
@@ -1218,39 +1228,104 @@ export function useFeedPlayback({ slug, title, isActive, videoSrc, boundElement 
           return;
         }
         const target = liveVideo as HTMLVideoElement;
-        // 同一 slug への stuck signal が短時間に連発するのを抑制する。
-        // 連発すると force-resolve が同じ URL に対して何度も走り、playback 状態が
-        // 一切変わらないまま無限ループになりうる (CDN 接続恒久断 + 新 URL も同じ
-        // host の場合等)。cooldown 内は signal を捨て、recovered/signaled も立てて
-        // 次の active session まで再 arm しない。
-        const STUCK_COOLDOWN_MS = 5000;
-        const now = Date.now();
-        const last = lastStuckSignalRef.current;
-        if (last.slug === slug && now - last.at < STUCK_COOLDOWN_MS) {
+        // stuck signal の dispatch ロジック (cooldown + ログ + window event)。
+        // Phase 2 即時発火経路と、後段の loading-grace 経路の両方から呼ばれる。
+        const dispatchStuckSignal = (el: HTMLVideoElement, source: string) => {
+          const STUCK_COOLDOWN_MS = 5000;
+          const now = Date.now();
+          const last = lastStuckSignalRef.current;
+          if (last.slug === slug && now - last.at < STUCK_COOLDOWN_MS) {
+            activeAutoplayStuckSignaledRef.current = true;
+            if (isVideoTimingEnabled()) {
+              // eslint-disable-next-line no-console
+              console.debug(
+                `vt ${slug}: active autoplay stuck signal suppressed reason=cooldown delta=${now - last.at}ms source=${source}`,
+              );
+            }
+            return;
+          }
+          lastStuckSignalRef.current = { slug, at: now };
           activeAutoplayStuckSignaledRef.current = true;
           if (isVideoTimingEnabled()) {
             // eslint-disable-next-line no-console
             console.debug(
-              `vt ${slug}: active autoplay stuck signal suppressed reason=cooldown delta=${now - last.at}ms`,
+              `vt ${slug}: active autoplay stuck signal rs=${el.readyState} networkState=${el.networkState} currentTime=${el.currentTime.toFixed(2)} hasError=${el.error !== null} same-el=${el === watchdogVideo} source=${source}`,
             );
           }
+          try {
+            window.dispatchEvent(
+              new CustomEvent("video-active-stuck", { detail: { slug } }),
+            );
+          } catch {
+            /* ignore */
+          }
+        };
+        // Phase 2 到達時点で rs=0 / networkState=NETWORK_LOADING(2) / no error /
+        // currentTime=0 のままなら、ブラウザがまさに Range request 中 (metadata
+        // 未到達) のことが多い。ここで stuck signal を発火すると sameUrl
+        // force-resolve + recovery が走り、in-flight load を AbortError で kill
+        // して逆に latency が悪化する (実測で +6s 程度の delay を確認)。
+        // 真の死 (rs=0 で networkState=EMPTY|NO_SOURCE 等) はこの条件を満たさず
+        // 即時 dispatch される。loading-grace timer (ACTIVE_AUTOPLAY_LOADING_GRACE_MS)
+        // を 1 度だけ武装し、依然として進捗無しなら本当に死んでいると判定。
+        const ACTIVE_AUTOPLAY_LOADING_GRACE_MS = 6500;
+        if (
+          target.readyState === 0 &&
+          target.networkState === 2 &&
+          target.error === null &&
+          target.currentTime === 0 &&
+          !activeAutoplayLoadingGraceArmedRef.current
+        ) {
+          activeAutoplayLoadingGraceArmedRef.current = true;
+          if (isVideoTimingEnabled()) {
+            // eslint-disable-next-line no-console
+            console.debug(
+              `vt ${slug}: active autoplay watchdog bail phase=2 reason=active-loading-no-metadata grace=${ACTIVE_AUTOPLAY_LOADING_GRACE_MS}`,
+            );
+          }
+          if (activeAutoplayLoadingGraceTimerRef.current != null) {
+            clearTimeout(activeAutoplayLoadingGraceTimerRef.current);
+          }
+          const graceAttemptId = armAttemptId;
+          const graceWatchdogVideo = watchdogVideo;
+          activeAutoplayLoadingGraceTimerRef.current = setTimeout(() => {
+            activeAutoplayLoadingGraceTimerRef.current = null;
+            const graceLive =
+              videoRef.current && videoRef.current.isConnected
+                ? videoRef.current
+                : graceWatchdogVideo;
+            let graceBail: string | null = null;
+            if (graceAttemptId !== activeAutoplayAttemptIdRef.current) graceBail = "stale-attempt";
+            else if (!isActiveRef.current) graceBail = "inactive";
+            else if (userPausedRef.current) graceBail = "user-paused";
+            else if (!graceLive) graceBail = "no-element";
+            else if (activeAutoplayStuckSignaledRef.current) graceBail = "already-signaled";
+            else if (isEffectivelyPlaying(graceLive)) {
+              activePlayingObservedRef.current = true;
+              graceBail = "playing-effective";
+            }
+            else if (graceLive.readyState >= 1) graceBail = `metadata-arrived rs=${graceLive.readyState}`;
+            else if (proActressSeekInFlightRef.current) graceBail = "pro-actress-seek";
+            if (graceBail) {
+              if (isVideoTimingEnabled()) {
+                // eslint-disable-next-line no-console
+                console.debug(
+                  `vt ${slug}: active autoplay loading-grace bail reason=${graceBail}`,
+                );
+              }
+              return;
+            }
+            if (isVideoTimingEnabled()) {
+              // eslint-disable-next-line no-console
+              console.debug(
+                `vt ${slug}: active autoplay loading-grace expired -> stuck rs=${graceLive.readyState} networkState=${graceLive.networkState} currentTime=${graceLive.currentTime.toFixed(2)} hasError=${graceLive.error !== null}`,
+              );
+            }
+            dispatchStuckSignal(graceLive as HTMLVideoElement, "loading-grace");
+          }, ACTIVE_AUTOPLAY_LOADING_GRACE_MS);
           return;
         }
-        lastStuckSignalRef.current = { slug, at: now };
-        activeAutoplayStuckSignaledRef.current = true;
-        if (isVideoTimingEnabled()) {
-          // eslint-disable-next-line no-console
-          console.debug(
-            `vt ${slug}: active autoplay stuck signal rs=${target.readyState} networkState=${target.networkState} currentTime=${target.currentTime.toFixed(2)} hasError=${target.error !== null} same-el=${target === watchdogVideo}`,
-          );
-        }
-        try {
-          window.dispatchEvent(
-            new CustomEvent("video-active-stuck", { detail: { slug } }),
-          );
-        } catch {
-          /* ignore */
-        }
+        dispatchStuckSignal(target, "phase2");
       }, ACTIVE_AUTOPLAY_STUCK_MS);
       // playVideo (= 既存の muted フォールバック / proActress 先頭 5 秒 seek 込み) に
       // そのまま委譲する。playVideo 内で resolve/reject は握り潰されているが、
@@ -1286,6 +1361,7 @@ export function useFeedPlayback({ slug, title, isActive, videoSrc, boundElement 
             const hadP0 = activeAutoplayLoadKickTimerRef.current != null;
             const hadP1 = activeAutoplayWatchdogRef.current != null;
             const hadP2 = activeAutoplayStuckTimerRef.current != null;
+            const hadPG = activeAutoplayLoadingGraceTimerRef.current != null;
             if (hadP0) {
               clearTimeout(activeAutoplayLoadKickTimerRef.current!);
               activeAutoplayLoadKickTimerRef.current = null;
@@ -1298,10 +1374,14 @@ export function useFeedPlayback({ slug, title, isActive, videoSrc, boundElement 
               clearTimeout(activeAutoplayStuckTimerRef.current!);
               activeAutoplayStuckTimerRef.current = null;
             }
-            if ((hadP0 || hadP1 || hadP2) && isVideoTimingEnabled()) {
+            if (hadPG) {
+              clearTimeout(activeAutoplayLoadingGraceTimerRef.current!);
+              activeAutoplayLoadingGraceTimerRef.current = null;
+            }
+            if ((hadP0 || hadP1 || hadP2 || hadPG) && isVideoTimingEnabled()) {
               // eslint-disable-next-line no-console
               console.debug(
-                `vt ${slug}: active autoplay watchdog cleared reason=resolved-rs-ok p0=${hadP0} p1=${hadP1} p2=${hadP2}`,
+                `vt ${slug}: active autoplay watchdog cleared reason=resolved-rs-ok p0=${hadP0} p1=${hadP1} p2=${hadP2} pg=${hadPG}`,
               );
             }
           }
@@ -1411,6 +1491,7 @@ export function useFeedPlayback({ slug, title, isActive, videoSrc, boundElement 
       activeAutoplayRecoveredRef.current = false;
       activeAutoplayStuckSignaledRef.current = false;
       activeAutoplayLoadKickedRef.current = false;
+      activeAutoplayLoadingGraceArmedRef.current = false;
       activePlayingObservedRef.current = false;
       if (activeAutoplayLoadKickTimerRef.current != null) {
         clearTimeout(activeAutoplayLoadKickTimerRef.current);
@@ -1423,6 +1504,10 @@ export function useFeedPlayback({ slug, title, isActive, videoSrc, boundElement 
       if (activeAutoplayStuckTimerRef.current != null) {
         clearTimeout(activeAutoplayStuckTimerRef.current);
         activeAutoplayStuckTimerRef.current = null;
+      }
+      if (activeAutoplayLoadingGraceTimerRef.current != null) {
+        clearTimeout(activeAutoplayLoadingGraceTimerRef.current);
+        activeAutoplayLoadingGraceTimerRef.current = null;
       }
       // attemptId を進めて、古い session の延長で発火する setTimeout を bail させる。
       activeAutoplayAttemptIdRef.current += 1;
@@ -1684,6 +1769,10 @@ export function useFeedPlayback({ slug, title, isActive, videoSrc, boundElement 
         clearTimeout(activeAutoplayStuckTimerRef.current);
         activeAutoplayStuckTimerRef.current = null;
       }
+      if (activeAutoplayLoadingGraceTimerRef.current != null) {
+        clearTimeout(activeAutoplayLoadingGraceTimerRef.current);
+        activeAutoplayLoadingGraceTimerRef.current = null;
+      }
       // 保留 autoplay intent もアンマウントで破棄。
       pendingActiveAutoplayRef.current = null;
       if (proActressSeekDeadlineRef.current != null) {
@@ -1742,9 +1831,14 @@ export function useFeedPlayback({ slug, title, isActive, videoSrc, boundElement 
       clearTimeout(activeAutoplayStuckTimerRef.current);
       activeAutoplayStuckTimerRef.current = null;
     }
+    if (activeAutoplayLoadingGraceTimerRef.current != null) {
+      clearTimeout(activeAutoplayLoadingGraceTimerRef.current);
+      activeAutoplayLoadingGraceTimerRef.current = null;
+    }
     activeAutoplayRecoveredRef.current = false;
     activeAutoplayStuckSignaledRef.current = false;
     activeAutoplayLoadKickedRef.current = false;
+    activeAutoplayLoadingGraceArmedRef.current = false;
     activePlayingObservedRef.current = false;
     // attemptId を進めて、既にクリアした timer が万一 setTimeout キューに残って
     // いた場合でも fire 時に stale-attempt として bail させる。
@@ -2230,6 +2324,7 @@ export function useFeedPlayback({ slug, title, isActive, videoSrc, boundElement 
       const hadP0 = activeAutoplayLoadKickTimerRef.current != null;
       const hadP1 = activeAutoplayWatchdogRef.current != null;
       const hadP2 = activeAutoplayStuckTimerRef.current != null;
+      const hadPG = activeAutoplayLoadingGraceTimerRef.current != null;
       if (hadP0) {
         clearTimeout(activeAutoplayLoadKickTimerRef.current!);
         activeAutoplayLoadKickTimerRef.current = null;
@@ -2242,10 +2337,14 @@ export function useFeedPlayback({ slug, title, isActive, videoSrc, boundElement 
         clearTimeout(activeAutoplayStuckTimerRef.current!);
         activeAutoplayStuckTimerRef.current = null;
       }
-      if ((hadP0 || hadP1 || hadP2) && isVideoTimingEnabled()) {
+      if (hadPG) {
+        clearTimeout(activeAutoplayLoadingGraceTimerRef.current!);
+        activeAutoplayLoadingGraceTimerRef.current = null;
+      }
+      if ((hadP0 || hadP1 || hadP2 || hadPG) && isVideoTimingEnabled()) {
         // eslint-disable-next-line no-console
         console.debug(
-          `vt ${slugTag}: active autoplay watchdog cleared reason=playing p0=${hadP0} p1=${hadP1} p2=${hadP2}`,
+          `vt ${slugTag}: active autoplay watchdog cleared reason=playing p0=${hadP0} p1=${hadP1} p2=${hadP2} pg=${hadPG}`,
         );
       }
     };
@@ -2374,6 +2473,10 @@ export function useFeedPlayback({ slug, title, isActive, videoSrc, boundElement 
         clearTimeout(activeAutoplayStuckTimerRef.current);
         activeAutoplayStuckTimerRef.current = null;
       }
+      if (activeAutoplayLoadingGraceTimerRef.current != null) {
+        clearTimeout(activeAutoplayLoadingGraceTimerRef.current);
+        activeAutoplayLoadingGraceTimerRef.current = null;
+      }
       clearProActressSeekInFlight();
       video.pause();
       isPlayingRef.current = false;
@@ -2439,6 +2542,10 @@ export function useFeedPlayback({ slug, title, isActive, videoSrc, boundElement 
       if (activeAutoplayStuckTimerRef.current != null) {
         clearTimeout(activeAutoplayStuckTimerRef.current);
         activeAutoplayStuckTimerRef.current = null;
+      }
+      if (activeAutoplayLoadingGraceTimerRef.current != null) {
+        clearTimeout(activeAutoplayLoadingGraceTimerRef.current);
+        activeAutoplayLoadingGraceTimerRef.current = null;
       }
       clearProActressSeekInFlight();
       video.pause();

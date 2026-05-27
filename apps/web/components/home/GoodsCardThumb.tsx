@@ -13,8 +13,7 @@ type Props = {
  * 人気商品セクションで使う横スクロール用カード。
  * 商品 (Goods) は動画ではなく FANZA mono/goods フロアの物販なので、
  * タップで再生せずアフィリエイト URL に直接遷移させる。
- * MovieCardThumb と並んだときに視覚的に揃うよう、同じ 140px 幅・縦長の枠で
- * 商品画像を中央に contain 表示する (商品画像は縦横比がバラバラなため)。
+ * 商品画像は基本正方形なので 1:1 枠で表示し、人気女優カードと並びを揃える。
  */
 export default function GoodsCardThumb({ goods, rank }: Props) {
   const imgSrc = goods.image_url_large ?? goods.image_url_list ?? "";
@@ -97,9 +96,8 @@ const styles = `
   .gct-thumb {
     position: relative;
     width: 100%;
-    /* 商品画像は比率がバラバラなので、縦長 (9/13) 枠に contain 表示で全体を見せる。
-       MovieCardThumb (portrait) と同じ枠高さに揃えて横スクロール時のリズムを保つ。 */
-    aspect-ratio: 9 / 13;
+    /* 商品画像は正方形なので 1:1 枠にして、人気女優カードと揃える。 */
+    aspect-ratio: 1 / 1;
     border-radius: 10px;
     overflow: hidden;
     background: #111;
@@ -109,7 +107,8 @@ const styles = `
     inset: 0;
     width: 100%;
     height: 100%;
-    object-fit: contain;
+    object-fit: cover;
+    object-position: center center;
     background: #111;
   }
   .gct-thumb-fallback {

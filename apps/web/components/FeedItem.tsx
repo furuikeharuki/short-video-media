@@ -581,6 +581,21 @@ export default function FeedItem({ item, isActive, isAdjacent = false, isFirst, 
     setShimmerVisible(false);
   }, [setVideoReady, setSpinnerVisible, setShimmerVisible, clearHardTimeout]);
 
+  // `playing` イベント経路。 autoplay が resolved まで進んでも canplay/loadeddata
+  // が React 側に届かない (= reset useEffect で videoReadyState=false に巻き戻された
+  // 後に同じ event が再発火しない) ケースで thumbnail-cover + spinner が残るのを
+  // 防ぐ。promote 経路 / JSX <video> 両方で発火する。
+  const handlePlaying = useCallback(() => {
+    videoSettledRef.current = true;
+    clearHardTimeout();
+    activeReadyRef.current = true;
+    abandonPendingIfActiveReady();
+    setVideoReady(true);
+    setVideoReadyState(true);
+    setSpinnerVisible(false);
+    setShimmerVisible(false);
+  }, [setVideoReady, setSpinnerVisible, setShimmerVisible, clearHardTimeout, abandonPendingIfActiveReady]);
+
   const handleVideoError = useCallback(() => {
     videoSettledRef.current = true;
     clearHardTimeout();
@@ -801,6 +816,7 @@ export default function FeedItem({ item, isActive, isAdjacent = false, isFirst, 
               onLoadedData={handleLoadedData}
               onCanPlay={handleCanPlay}
               onSeeked={handleSeeked}
+              onPlaying={handlePlaying}
               onError={handleVideoError}
               onTouchStart={handleTouchStart}
               onTouchEnd={handleTouchEnd}

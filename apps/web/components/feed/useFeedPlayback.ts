@@ -2264,6 +2264,25 @@ export function useFeedPlayback({ slug, title, isActive, videoSrc, boundElement 
     const handleCanPlay = () => {
       tryConsumePlayRetry("canplay");
     };
+    // playing イベント時の safety net: rs=0 から rs=4 まで一気に駆け上がって play()
+    // が resolve したケースで、loadedmetadata/seeking/seeked の発火順序によっては
+    // enforceLowerBound() が一度も走らないことがある (戻りスワイプで pool の古い
+    // promoted element を adopt したケースで観測)。
+    // currentTime < minStart のまま再生が始まったらここで強制クランプする。
+    const handlePlayingEnforce = () => {
+      if (!isActiveRef.current) return;
+      if (!skipEffectiveRef.current) return;
+      const lower = skipLowerBoundRef.current;
+      if (lower <= 0) return;
+      if (video.currentTime + 0.05 >= lower) return;
+      if (isVideoTimingEnabled()) {
+        // eslint-disable-next-line no-console
+        console.debug(
+          `vt ${slug}: pro-actress enforce on=playing currentTime=${video.currentTime.toFixed(2)} -> ${lower} rs=${video.readyState}`,
+        );
+      }
+      enforceLowerBound();
+    };
     const handleEnded = () => {
       // 既存ループ仕様 (HTMLVideoElement の loop 属性は未使用、再生終端で何が起きるかは
       // ブラウザ依存) に合わせ、明示的に 5 秒に戻して再生再開する。
@@ -2287,13 +2306,20 @@ export function useFeedPlayback({ slug, title, isActive, videoSrc, boundElement 
     video.addEventListener("seeking", handleSeeking);
     video.addEventListener("seeked", handleSeeked);
     video.addEventListener("canplay", handleCanPlay);
+    video.addEventListener("playing", handlePlayingEnforce);
     video.addEventListener("ended", handleEnded);
+    // 初期評価で「もう再生が始まっている」(= adopt 時点で promoted が paused=false)
+    // ケースを救う safety net。listener attach 後に playing が来ない可能性があるため。
+    if (!video.paused && skipEffectiveRef.current && skipLowerBoundRef.current > 0) {
+      handlePlayingEnforce();
+    }
     return () => {
       video.removeEventListener("loadedmetadata", handleLoadedMeta);
       video.removeEventListener("timeupdate", handleTimeUpdate);
       video.removeEventListener("seeking", handleSeeking);
       video.removeEventListener("seeked", handleSeeked);
       video.removeEventListener("canplay", handleCanPlay);
+      video.removeEventListener("playing", handlePlayingEnforce);
       video.removeEventListener("ended", handleEnded);
       // 次の <video> インスタンスに pending 状態が漏れないようリセット。
       proActressPlayRetryPendingRef.current = false;
@@ -2302,7 +2328,15 @@ export function useFeedPlayback({ slug, title, isActive, videoSrc, boundElement 
         proActressPlayFallbackTimerRef.current = null;
       }
     };
-  }, [slug, videoSrc, isProActress, playVideo, startProgressLoop, clearProActressSeekInFlight, markProActressSeekInFlight]);
+    // boundElement を deps に含めることが必須。promote swap / force-fallback /
+    // hardReset で videoRef.current が差し替わったとき、deps に含めないと effect が
+    // 再走せず、loadedmetadata/seeking/seeked/canplay/timeupdate/ended listener が
+    // 旧 (detach 済み) 要素にしか紐付かない。結果として pro-actress enforce 経路全体が
+    // 新要素では走らず、5s skip が漏れる。
+    // 戻りスワイプで FeedItem が remount される場合は元々 effect が走り直すが、同じ
+    // hook インスタンスのまま promoted element が rebind されるケースがあり (P2/P5 系)、
+    // そのケースを救うため boundElement を依存に含める。
+  }, [slug, videoSrc, isProActress, boundElement, playVideo, startProgressLoop, clearProActressSeekInFlight, markProActressSeekInFlight]);
 
   // 自動再生のセーフティネット: active な要素が canplay / loadeddata / loadedmetadata
   // に到達した時点でまだ paused かつ user-paused でないなら、attemptActiveAutoplay を

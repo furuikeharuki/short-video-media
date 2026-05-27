@@ -176,6 +176,14 @@ export function useFeedPlayback({ slug, title, isActive, videoSrc, boundElement 
   const activeAutoplayRecoveredRef = useRef(false);
   const activeAutoplayStuckTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const activeAutoplayStuckSignaledRef = useRef(false);
+  // Phase 0 (load-kick) watchdog: promote 直後の force-load 単発 `video.load()` が
+  // ブラウザ内部の状態 race (= src attached だが Range request が立ち上がらない、
+  // networkState=NETWORK_EMPTY/NO_SOURCE のまま固まる) で no-op になるケースを、
+  // Phase 1 (1500ms) より早い段階で検知して hard-reset を撃つ。
+  // 1 active session につき 1 度だけ発火 (load-kick ref が立ったらこの session では
+  // 再 arm しない)。
+  const activeAutoplayLoadKickTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const activeAutoplayLoadKickedRef = useRef(false);
   // この active session で playing イベントを 1 度でも観測したか。
   //
   // HTML5 仕様上 video.play() は呼んだ瞬間に video.paused=false にセットされる
@@ -290,6 +298,48 @@ export function useFeedPlayback({ slug, title, isActive, videoSrc, boundElement 
       }
     }, PRO_ACTRESS_SEEK_DEADLINE_MS);
   }, [slug]);
+
+  // active 要素を強制的に再ロードさせる hard-reset。
+  //
+  // 単純な `video.load()` は、Chrome / Safari の HTMLMediaElement 内部状態 race
+  // (= src attached だが Range request が立ち上がらない、networkState=EMPTY/NO_SOURCE
+  // のまま固まる) で no-op になるケースがある。これは特に「prefetch buffer に
+  // 居た要素を host へ adopt した直後」「戻りスワイプ後の rebind 直後」など、
+  // 要素が DOM ツリーをまたいで移動した際に観測される。
+  //
+  // hard-reset 手順 (recovery 経路の sameUrl=true / stuckLow と同じ):
+  //   1. video.pause() で play() promise の中断を確定させる。
+  //   2. removeAttribute("src") + load() で element 状態をリセット。
+  //   3. src を再代入 + load() で新規 Range request を発行する。
+  //
+  // 注意: AbortError ループを誘発しないよう「進行中の load() があるとき」(=
+  // networkState=NETWORK_LOADING(2)) は呼出側でガードして呼ばないこと。
+  const hardResetActiveLoad = useCallback(
+    (video: HTMLVideoElement, label: string) => {
+      const url = video.src || video.currentSrc;
+      if (!url) {
+        if (isVideoTimingEnabled()) {
+          // eslint-disable-next-line no-console
+          console.debug(
+            `vt ${slug}: active load-kick skip reason=no-src label=${label}`,
+          );
+        }
+        return;
+      }
+      if (isVideoTimingEnabled()) {
+        // eslint-disable-next-line no-console
+        console.debug(
+          `vt ${slug}: active load-kick start label=${label} rs=${video.readyState} networkState=${video.networkState}`,
+        );
+      }
+      try { video.pause(); } catch { /* ignore */ }
+      try { video.removeAttribute("src"); } catch { /* ignore */ }
+      try { video.load(); } catch { /* ignore */ }
+      try { video.src = url; } catch { /* ignore */ }
+      try { video.load(); } catch { /* ignore */ }
+    },
+    [slug],
+  );
 
   // slug が変わったら lastPlaybackRef をリセット。同じ <video> 上で src が差し替わる force リトライのときだけ
   // 以前の位置を保持したいため、videoSrc 変化ではリセットしないことに注意。
@@ -760,13 +810,24 @@ export function useFeedPlayback({ slug, title, isActive, videoSrc, boundElement 
           video.networkState === 0 ||
           video.networkState === 3);
       if (needForceLoad) {
+        // rs=0 のうち networkState も EMPTY(0)/NO_SOURCE(3) のときは、単純な
+        // load() が no-op になる Chrome の race を観測しているため、最初から
+        // hard-reset を撃って確実に Range request を立ち上げる。NETWORK_LOADING(2)
+        // などで既に進行中の場合は触らない (interrupt loop を誘発する)。
+        const stuckLoad =
+          video.networkState === 0 || video.networkState === 3;
+        const useHardReset = stuckLoad && (video.currentSrc || video.src);
         if (isVideoTimingEnabled()) {
           // eslint-disable-next-line no-console
           console.debug(
-            `vt ${slug}: active autoplay ${reason} force-load rs=${video.readyState} networkState=${video.networkState}`,
+            `vt ${slug}: active autoplay ${reason} force-load rs=${video.readyState} networkState=${video.networkState} hardReset=${useHardReset}`,
           );
         }
-        try { video.load(); } catch { /* ignore */ }
+        if (useHardReset) {
+          hardResetActiveLoad(video, "promote-force-load");
+        } else {
+          try { video.load(); } catch { /* ignore */ }
+        }
       }
       if (isVideoTimingEnabled()) {
         // eslint-disable-next-line no-console
@@ -803,8 +864,17 @@ export function useFeedPlayback({ slug, title, isActive, videoSrc, boundElement 
       // 加えて、attemptId をキャプチャして発火時に現在値と比較する。古い session の
       // 残骸 timer が新 session の playback を kill しないようにする。
       const watchdogVideo = video;
+      // Phase 0 (load-kick): 600ms 経過しても rs=0 かつ networkState=EMPTY(0)/
+      // NO_SOURCE(3) (= load() を呼んだのに Range request が立ち上がっていない)
+      // ケースを早期検知して hard-reset を撃ち、Phase 1 (1500ms) / Phase 2
+      // (3500ms) より前に loadstart を発生させる。
+      const ACTIVE_AUTOPLAY_LOAD_KICK_MS = 600;
       const ACTIVE_AUTOPLAY_WATCHDOG_MS = 1500;
       const ACTIVE_AUTOPLAY_STUCK_MS = 3500;
+      const needArmPhase0 =
+        activeAutoplayLoadKickTimerRef.current == null &&
+        !activeAutoplayLoadKickedRef.current &&
+        !activeAutoplayRecoveredRef.current;
       const needArmPhase1 =
         activeAutoplayWatchdogRef.current == null &&
         !activeAutoplayRecoveredRef.current;
@@ -825,6 +895,12 @@ export function useFeedPlayback({ slug, title, isActive, videoSrc, boundElement 
         if (!v.paused && v.readyState >= 3 && !v.ended) return true;
         return false;
       };
+      if (needArmPhase0 && isVideoTimingEnabled()) {
+        // eslint-disable-next-line no-console
+        console.debug(
+          `vt ${slug}: active autoplay watchdog armed phase=0 reason=${reason} rs=${video.readyState} networkState=${video.networkState} timeout=${ACTIVE_AUTOPLAY_LOAD_KICK_MS} attemptId=${armAttemptId}`,
+        );
+      }
       if (needArmPhase1 && isVideoTimingEnabled()) {
         // eslint-disable-next-line no-console
         console.debug(
@@ -837,6 +913,59 @@ export function useFeedPlayback({ slug, title, isActive, videoSrc, boundElement 
           `vt ${slug}: active autoplay watchdog armed phase=2 reason=${reason} rs=${video.readyState} timeout=${ACTIVE_AUTOPLAY_STUCK_MS} attemptId=${armAttemptId} t=${armCurrentTime.toFixed(2)}`,
         );
       }
+      // Phase 0 watchdog (load-kick): rs=0 / networkState=EMPTY|NO_SOURCE が
+      // ACTIVE_AUTOPLAY_LOAD_KICK_MS 経過しても続いていたら、Range request が
+      // 立ち上がっていない可能性が極めて高い。hard-reset を撃って次の loadstart
+      // を確実に発生させる。Phase 1 より前に発火するため Phase 1 watchdog の
+      // recovered latch には影響しない (loadKick 専用 ref で 1 セッション 1 回)。
+      if (needArmPhase0) activeAutoplayLoadKickTimerRef.current = setTimeout(() => {
+        activeAutoplayLoadKickTimerRef.current = null;
+        const liveVideo =
+          videoRef.current && videoRef.current.isConnected
+            ? videoRef.current
+            : watchdogVideo;
+        let bail: string | null = null;
+        if (armAttemptId !== activeAutoplayAttemptIdRef.current) bail = "stale-attempt";
+        else if (!isActiveRef.current) bail = "inactive";
+        else if (userPausedRef.current) bail = "user-paused";
+        else if (!liveVideo) bail = "no-element";
+        else if (activeAutoplayRecoveredRef.current) bail = "already-recovered";
+        else if (activeAutoplayLoadKickedRef.current) bail = "already-kicked";
+        else if (isEffectivelyPlaying(liveVideo)) {
+          activePlayingObservedRef.current = true;
+          bail = "playing-effective";
+        }
+        // pro-actress 0->5 seek 中は rs が一時的に 1 に落ちて当然なので
+        // load-kick も抑止する。
+        else if (proActressSeekInFlightRef.current) bail = "pro-actress-seek";
+        // 既に rs>=1 まで進んでいる or networkState=LOADING(2) なら Range
+        // request が走っているので load-kick は不要。
+        else if (liveVideo.readyState >= 1) bail = `rs-ok=${liveVideo.readyState}`;
+        else if (liveVideo.networkState === 2) bail = "loading";
+        if (bail) {
+          if (isVideoTimingEnabled()) {
+            // eslint-disable-next-line no-console
+            console.debug(
+              `vt ${slug}: active autoplay watchdog bail phase=0 reason=${bail}`,
+            );
+          }
+          return;
+        }
+        const target = liveVideo as HTMLVideoElement;
+        activeAutoplayLoadKickedRef.current = true;
+        if (isVideoTimingEnabled()) {
+          // eslint-disable-next-line no-console
+          console.debug(
+            `vt ${slug}: active autoplay load-kick fire reason=${reason} rs=${target.readyState} networkState=${target.networkState} same-el=${target === watchdogVideo}`,
+          );
+        }
+        hardResetActiveLoad(target, "watchdog-phase0");
+        // hard-reset 後は loadedmetadata / canplay が来た時点で
+        // 後段の handleCanPlay / handleLoadedData セーフティネット effect が
+        // attemptActiveAutoplay を呼び直すので、ここでは play() を撃たない。
+        // 直接 play() を撃つと、上位 attemptActiveAutoplay の play() promise と
+        // 競合して AbortError ループを誘発する。
+      }, ACTIVE_AUTOPLAY_LOAD_KICK_MS);
       if (needArmPhase1) activeAutoplayWatchdogRef.current = setTimeout(() => {
         activeAutoplayWatchdogRef.current = null;
         // watchdog 起動時の bail 理由をすべてログに残す。silent no-op を防ぐ。
@@ -883,13 +1012,25 @@ export function useFeedPlayback({ slug, title, isActive, videoSrc, boundElement 
         // - NETWORK_EMPTY(0) / NETWORK_IDLE(1) / NETWORK_NO_SOURCE(3): 進捗が完全に
         //   止まっているので load() で Range request を発行し直す価値がある。
         const shouldReload = target.networkState !== 2;
+        // networkState が EMPTY(0)/NO_SOURCE(3) かつ rs=0 のままなら、単純な
+        // load() は no-op になることが分かっているので hard-reset (detach + load
+        // + re-attach + load) を撃って Range request を確実に立ち上げる。
+        // 既に load-kick で hard-reset 済みのケース (= activeAutoplayLoadKickedRef
+        // が true) でも、Phase 1 到達ということは load-kick が効かなかったので
+        // 念のためもう一度 hard-reset を試す。
+        const needHardReset =
+          shouldReload &&
+          target.readyState === 0 &&
+          (target.networkState === 0 || target.networkState === 3);
         if (isVideoTimingEnabled()) {
           // eslint-disable-next-line no-console
           console.debug(
-            `vt ${slug}: active autoplay watchdog recover reason=${reason} rs=${target.readyState} networkState=${target.networkState} reload=${shouldReload} currentTime=${target.currentTime.toFixed(2)} same-el=${target === watchdogVideo}`,
+            `vt ${slug}: active autoplay watchdog recover reason=${reason} rs=${target.readyState} networkState=${target.networkState} reload=${shouldReload} hardReset=${needHardReset} currentTime=${target.currentTime.toFixed(2)} same-el=${target === watchdogVideo}`,
           );
         }
-        if (shouldReload) {
+        if (needHardReset) {
+          hardResetActiveLoad(target, "watchdog-phase1");
+        } else if (shouldReload) {
           try { target.load(); } catch { /* ignore */ }
         }
         // load() 後は currentTime が 0 にリセットされうるので、pro-actress
@@ -1047,8 +1188,13 @@ export function useFeedPlayback({ slug, title, isActive, videoSrc, boundElement 
           // ここで先回りクリアして良い。
           if (!video.paused && video.readyState >= 3) {
             activePlayingObservedRef.current = true;
+            const hadP0 = activeAutoplayLoadKickTimerRef.current != null;
             const hadP1 = activeAutoplayWatchdogRef.current != null;
             const hadP2 = activeAutoplayStuckTimerRef.current != null;
+            if (hadP0) {
+              clearTimeout(activeAutoplayLoadKickTimerRef.current!);
+              activeAutoplayLoadKickTimerRef.current = null;
+            }
             if (hadP1) {
               clearTimeout(activeAutoplayWatchdogRef.current!);
               activeAutoplayWatchdogRef.current = null;
@@ -1057,10 +1203,10 @@ export function useFeedPlayback({ slug, title, isActive, videoSrc, boundElement 
               clearTimeout(activeAutoplayStuckTimerRef.current!);
               activeAutoplayStuckTimerRef.current = null;
             }
-            if ((hadP1 || hadP2) && isVideoTimingEnabled()) {
+            if ((hadP0 || hadP1 || hadP2) && isVideoTimingEnabled()) {
               // eslint-disable-next-line no-console
               console.debug(
-                `vt ${slug}: active autoplay watchdog cleared reason=resolved-rs-ok p1=${hadP1} p2=${hadP2}`,
+                `vt ${slug}: active autoplay watchdog cleared reason=resolved-rs-ok p0=${hadP0} p1=${hadP1} p2=${hadP2}`,
               );
             }
           }
@@ -1099,7 +1245,7 @@ export function useFeedPlayback({ slug, title, isActive, videoSrc, boundElement 
         },
       );
     },
-    [playVideo, slug, startProgressLoop, markProActressSeekInFlight],
+    [playVideo, slug, startProgressLoop, markProActressSeekInFlight, hardResetActiveLoad],
   );
 
   // force re-resolve 完了後の active 要素救済。
@@ -1164,12 +1310,17 @@ export function useFeedPlayback({ slug, title, isActive, videoSrc, boundElement 
         return;
       }
 
-      // Phase 1/2 watchdog の latch を解除して、recover 後の新 session で
+      // Phase 0/1/2 watchdog の latch を解除して、recover 後の新 session で
       // 必要なら再 arm できるようにする。playing 観測も再度ゼロから観測しなおす
       // (force-resolve 後の play() は別 attempt として扱う)。
       activeAutoplayRecoveredRef.current = false;
       activeAutoplayStuckSignaledRef.current = false;
+      activeAutoplayLoadKickedRef.current = false;
       activePlayingObservedRef.current = false;
+      if (activeAutoplayLoadKickTimerRef.current != null) {
+        clearTimeout(activeAutoplayLoadKickTimerRef.current);
+        activeAutoplayLoadKickTimerRef.current = null;
+      }
       if (activeAutoplayWatchdogRef.current != null) {
         clearTimeout(activeAutoplayWatchdogRef.current);
         activeAutoplayWatchdogRef.current = null;
@@ -1426,6 +1577,10 @@ export function useFeedPlayback({ slug, title, isActive, videoSrc, boundElement 
         clearTimeout(spinnerShowTimerRef.current);
         spinnerShowTimerRef.current = null;
       }
+      if (activeAutoplayLoadKickTimerRef.current != null) {
+        clearTimeout(activeAutoplayLoadKickTimerRef.current);
+        activeAutoplayLoadKickTimerRef.current = null;
+      }
       if (activeAutoplayWatchdogRef.current != null) {
         clearTimeout(activeAutoplayWatchdogRef.current);
         activeAutoplayWatchdogRef.current = null;
@@ -1480,6 +1635,10 @@ export function useFeedPlayback({ slug, title, isActive, videoSrc, boundElement 
     }
     // 戻りスワイプで再 active 化するときに watchdog を再武装できるよう、ここで
     // タイマーをクリアし recovered/signaled flag も false に戻す。
+    if (activeAutoplayLoadKickTimerRef.current != null) {
+      clearTimeout(activeAutoplayLoadKickTimerRef.current);
+      activeAutoplayLoadKickTimerRef.current = null;
+    }
     if (activeAutoplayWatchdogRef.current != null) {
       clearTimeout(activeAutoplayWatchdogRef.current);
       activeAutoplayWatchdogRef.current = null;
@@ -1490,6 +1649,7 @@ export function useFeedPlayback({ slug, title, isActive, videoSrc, boundElement 
     }
     activeAutoplayRecoveredRef.current = false;
     activeAutoplayStuckSignaledRef.current = false;
+    activeAutoplayLoadKickedRef.current = false;
     activePlayingObservedRef.current = false;
     // attemptId を進めて、既にクリアした timer が万一 setTimeout キューに残って
     // いた場合でも fire 時に stale-attempt として bail させる。
@@ -1945,8 +2105,13 @@ export function useFeedPlayback({ slug, title, isActive, videoSrc, boundElement 
       if (shimmer) shimmer.style.display = "none";
       setSpinnerVisible(false);
       // 再生が回り始めたら watchdog を解除する (この session では recover 不要)。
+      const hadP0 = activeAutoplayLoadKickTimerRef.current != null;
       const hadP1 = activeAutoplayWatchdogRef.current != null;
       const hadP2 = activeAutoplayStuckTimerRef.current != null;
+      if (hadP0) {
+        clearTimeout(activeAutoplayLoadKickTimerRef.current!);
+        activeAutoplayLoadKickTimerRef.current = null;
+      }
       if (hadP1) {
         clearTimeout(activeAutoplayWatchdogRef.current!);
         activeAutoplayWatchdogRef.current = null;
@@ -1955,10 +2120,10 @@ export function useFeedPlayback({ slug, title, isActive, videoSrc, boundElement 
         clearTimeout(activeAutoplayStuckTimerRef.current!);
         activeAutoplayStuckTimerRef.current = null;
       }
-      if ((hadP1 || hadP2) && isVideoTimingEnabled()) {
+      if ((hadP0 || hadP1 || hadP2) && isVideoTimingEnabled()) {
         // eslint-disable-next-line no-console
         console.debug(
-          `vt ${slugTag}: active autoplay watchdog cleared reason=playing p1=${hadP1} p2=${hadP2}`,
+          `vt ${slugTag}: active autoplay watchdog cleared reason=playing p0=${hadP0} p1=${hadP1} p2=${hadP2}`,
         );
       }
     };
@@ -2075,6 +2240,10 @@ export function useFeedPlayback({ slug, title, isActive, videoSrc, boundElement 
       }
       // ユーザー pause で保留 autoplay intent / watchdog も破棄する。
       pendingActiveAutoplayRef.current = null;
+      if (activeAutoplayLoadKickTimerRef.current != null) {
+        clearTimeout(activeAutoplayLoadKickTimerRef.current);
+        activeAutoplayLoadKickTimerRef.current = null;
+      }
       if (activeAutoplayWatchdogRef.current != null) {
         clearTimeout(activeAutoplayWatchdogRef.current);
         activeAutoplayWatchdogRef.current = null;
@@ -2137,6 +2306,10 @@ export function useFeedPlayback({ slug, title, isActive, videoSrc, boundElement 
       }
       // detail open でも保留 autoplay intent / watchdog は破棄。
       pendingActiveAutoplayRef.current = null;
+      if (activeAutoplayLoadKickTimerRef.current != null) {
+        clearTimeout(activeAutoplayLoadKickTimerRef.current);
+        activeAutoplayLoadKickTimerRef.current = null;
+      }
       if (activeAutoplayWatchdogRef.current != null) {
         clearTimeout(activeAutoplayWatchdogRef.current);
         activeAutoplayWatchdogRef.current = null;

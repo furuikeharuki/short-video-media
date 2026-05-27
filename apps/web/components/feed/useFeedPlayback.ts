@@ -439,11 +439,16 @@ export function useFeedPlayback({ slug, title, isActive, videoSrc, boundElement 
       } else if (Number.isFinite(video.duration) && video.duration > 0) {
         // duration が判明していて、かつ lower より短いケース (= 短すぎる動画)。
         // この場合スキップは無効化する (= currentTime はそのまま)。
-      } else {
-        // duration がまだ NaN (loadedmetadata 前)。
-        // 一部ブラウザは currentTime セットを silently accept してくれるので試す。
-        // ダメだった場合は handleLoadedMeta → enforceLowerBound で巻き取られる。
+      } else if (video.readyState >= 1) {
+        // duration はまだ NaN だが少なくとも metadata は読めている (rs>=HAVE_METADATA)。
+        // ブラウザによっては currentTime セットを silently accept する。失敗しても
+        // handleLoadedMeta → enforceLowerBound で巻き取られる。
         try { video.currentTime = lower; } catch { /* ignore */ }
+      } else {
+        // rs=0: seek を撃つと「pending seek」内部状態だけが立ち、直後の load() で
+        // それが暗黙 abort されて play() promise が AbortError で reject する race を
+        // 誘発する (戻りスワイプ後の promote + watchdog 再武装で観測)。ここでは
+        // 何もせず、loadedmetadata 後の enforceLowerBound に委ねる。
       }
     }
 
@@ -612,10 +617,26 @@ export function useFeedPlayback({ slug, title, isActive, videoSrc, boundElement 
       // playVideo 経由なら同様の seek が入るが、attemptActiveAutoplay は
       // resolve/reject を観測したい都合で video.play() を直接呼んでおり、
       // その直前にここで明示 seek する必要がある。
-      if (isProActressRef.current && video.currentTime + 0.05 < PRO_ACTRESS_HEAD_SKIP_SEC) {
+      //
+      // ただし readyState=0 (= HAVE_NOTHING、loadedmetadata 前) では seek を
+      // 走らせない。理由:
+      //   - duration が NaN なので seek 自体が無効ターゲット扱いになり、
+      //     ブラウザ内部に「pending seek」フラグだけが立つ。
+      //   - 直後に needForceLoad=true で video.load() を呼ぶと、その pending seek
+      //     が暗黙的に abort される。同時に直前の play() promise が
+      //     "The play() request was interrupted by a new load request" で reject
+      //     される loop に入りやすい (戻りスワイプで promote 直後のケースで観測)。
+      //   - rs>=1 になったあと handleLoadedMeta -> enforceLowerBound +
+      //     proActressPlayRetryPendingRef で巻き取られるので、ここで seek しなくても
+      //     5 秒未満から再生開始することは無い (canplay/playing は metadata 後にしか
+      //     来ない)。
+      if (
+        isProActressRef.current &&
+        video.readyState >= 1 &&
+        video.currentTime + 0.05 < PRO_ACTRESS_HEAD_SKIP_SEC
+      ) {
         const dur = video.duration;
-        // 極端に短い動画 (< MIN_DURATION) はスキップ無効。それ以外、duration 未確定でも
-        // ベストエフォートで seek する (handleLoadedMeta -> enforceLowerBound で再クランプ)。
+        // 極端に短い動画 (< MIN_DURATION) はスキップ無効。
         const tooShort = Number.isFinite(dur) && dur > 0 && dur < PRO_ACTRESS_MIN_DURATION_SEC;
         if (!tooShort) {
           if (isVideoTimingEnabled()) {
@@ -629,6 +650,21 @@ export function useFeedPlayback({ slug, title, isActive, videoSrc, boundElement 
           // 既存の seeked / canplay リトライ経路を起動しておく。enforceLowerBound() と
           // 同じ ref を立てるだけで、tryConsumePlayRetry が play retry を引き受ける。
           proActressPlayRetryPendingRef.current = true;
+        }
+      } else if (
+        isProActressRef.current &&
+        video.readyState === 0 &&
+        video.currentTime + 0.05 < PRO_ACTRESS_HEAD_SKIP_SEC
+      ) {
+        // rs=0 ケース: 自前で seek は撃たず、loadedmetadata 後の enforceLowerBound に
+        // 委ねる。enforce が走った時点で play retry も pending 化されるので、
+        // metadata 到達後に自動的に 5 秒 + play() が回る。
+        proActressPlayRetryPendingRef.current = true;
+        if (isVideoTimingEnabled()) {
+          // eslint-disable-next-line no-console
+          console.debug(
+            `vt ${slug}: pro-actress enforce deferred reason=${reason} rs=0 (wait for loadedmetadata)`,
+          );
         }
       }
       // back-swipe 起因の promote で readyState=0 のままになっているケースを
@@ -762,17 +798,31 @@ export function useFeedPlayback({ slug, title, isActive, videoSrc, boundElement 
         }
         const target = liveVideo as HTMLVideoElement;
         activeAutoplayRecoveredRef.current = true;
+        // load() を撃つかどうかは networkState で判定する。
+        // - NETWORK_LOADING(2): 既に Range request が走っている。ここで load() を
+        //   呼ぶと pending な play() promise が "interrupted by a new load request"
+        //   で必ず reject され、追って再 play() するループになる。skip して play()
+        //   だけ撃ち直す方が、現在のロードを継続できるので望ましい。
+        // - NETWORK_EMPTY(0) / NETWORK_IDLE(1) / NETWORK_NO_SOURCE(3): 進捗が完全に
+        //   止まっているので load() で Range request を発行し直す価値がある。
+        const shouldReload = target.networkState !== 2;
         if (isVideoTimingEnabled()) {
           // eslint-disable-next-line no-console
           console.debug(
-            `vt ${slug}: active autoplay watchdog recover reason=${reason} rs=${target.readyState} currentTime=${target.currentTime.toFixed(2)} same-el=${target === watchdogVideo}`,
+            `vt ${slug}: active autoplay watchdog recover reason=${reason} rs=${target.readyState} networkState=${target.networkState} reload=${shouldReload} currentTime=${target.currentTime.toFixed(2)} same-el=${target === watchdogVideo}`,
           );
         }
-        try { target.load(); } catch { /* ignore */ }
+        if (shouldReload) {
+          try { target.load(); } catch { /* ignore */ }
+        }
         // load() 後は currentTime が 0 にリセットされうるので、pro-actress
         // 先頭 5 秒 enforce を再適用してから play() を呼ぶ。
+        // 注意: rs=0 で seek すると「pending seek」だけが立って load() abort race を
+        //       誘発するため、rs>=HAVE_METADATA(1) のときだけ seek する。rs=0 のときは
+        //       metadata 到達後の handleLoadedMeta -> enforceLowerBound に委ねる。
         if (
           isProActressRef.current &&
+          target.readyState >= 1 &&
           target.currentTime + 0.05 < PRO_ACTRESS_HEAD_SKIP_SEC
         ) {
           const dur = target.duration;
@@ -1049,50 +1099,141 @@ export function useFeedPlayback({ slug, title, isActive, videoSrc, boundElement 
       // attemptId を進めて、古い session の延長で発火する setTimeout を bail させる。
       activeAutoplayAttemptIdRef.current += 1;
 
-      // active 要素の src を新 URL に強制同期。FeedItemVideo の src-sync effect は
-      // URL 文字列が同一なら no-op するため、ここでは「同じ URL でも明示 load()」
-      // を撃つことで、Range request を最初から発行させ rs=0 stuck を打開する。
-      // promotedElement / JSX <video> どちらでも video.src を上書きすると React 側
-      // の制御と一瞬不一致になるが、後者は handle-error→exhausted フローが優先で
-      // 動くため副作用は許容範囲。
+      // active 要素の src を新 URL に強制同期。
+      //
+      // 分岐:
+      //   (a) URL が変わった (CDN 期限切れ -> 新 host): src を再代入 + load()。
+      //       これは新 URL に対する新規ロードなので Range request が clean に始まる。
+      //   (b) 同一 URL (sameUrl=true) で element が stuck (rs<HAVE_CURRENT_DATA かつ
+      //       networkState が NO_SOURCE(3)/IDLE(1)/EMPTY(0)): 単純な load() では
+      //       「pending な Range request」「pending play() promise」「pending seek」
+      //       が打ち切られ、AbortError ループを誘発する事例があった (戻りスワイプ後の
+      //       promote + Phase1 watchdog + 本 recovery が連鎖した case)。ここでは
+      //       完全 detach (removeAttribute("src") + load() で element 状態をリセット)
+      //       してから src を再アタッチして load() する。これにより:
+      //         - 旧 Range request が dispose される
+      //         - pending play() promise が NotSupportedError として確定的に reject
+      //           され、後段の wait-for-load+play 経路と競合しない
+      //         - pending seek もクリア
+      //   (c) sameUrl=true だがすでに rs>=HAVE_CURRENT_DATA: element は読み込みが
+      //       進んでいるので detach せずに load() だけ (これは ID か playhead の小
+      //       リセットで十分なケース)。
       const currentSrc = video.currentSrc || video.src;
       const sameUrl = currentSrc === urlAfter;
+      const stuckLow =
+        video.readyState < 2 &&
+        (video.networkState === 0 ||
+          video.networkState === 1 ||
+          video.networkState === 3);
+      const needsHardReset = sameUrl && stuckLow;
+      try { video.pause(); } catch { /* ignore */ }
       if (!sameUrl && urlAfter) {
         try { video.src = urlAfter; } catch { /* ignore */ }
+        try { video.load(); } catch { /* ignore */ }
+      } else if (needsHardReset && urlAfter) {
+        try { video.removeAttribute("src"); } catch { /* ignore */ }
+        try { video.load(); } catch { /* ignore */ }
+        try { video.src = urlAfter; } catch { /* ignore */ }
+        try { video.load(); } catch { /* ignore */ }
+      } else {
+        try { video.load(); } catch { /* ignore */ }
       }
-      try { video.load(); } catch { /* ignore */ }
       if (isVideoTimingEnabled()) {
         // eslint-disable-next-line no-console
         console.debug(
-          `vt ${slug}: active recovery applying url sameUrl=${sameUrl} rs=${video.readyState}`,
-        );
-        // eslint-disable-next-line no-console
-        console.debug(
-          `vt ${slug}: active recovery reload rs=${video.readyState} networkState=${video.networkState}`,
+          `vt ${slug}: active recovery applying url sameUrl=${sameUrl} hardReset=${needsHardReset} rs=${video.readyState} networkState=${video.networkState}`,
         );
       }
 
-      // pro-actress minStart を再 enforce。load() で currentTime が 0 に巻き戻る
-      // ことがあるため、play() より前に必ず 5 秒に飛ばす。
-      if (
-        isProActressRef.current &&
-        video.currentTime + 0.05 < PRO_ACTRESS_HEAD_SKIP_SEC
-      ) {
-        const dur = video.duration;
-        const tooShort =
-          Number.isFinite(dur) && dur > 0 && dur < PRO_ACTRESS_MIN_DURATION_SEC;
-        if (!tooShort) {
-          try { video.currentTime = PRO_ACTRESS_HEAD_SKIP_SEC; } catch { /* ignore */ }
+      // recovery の play() は load() と直列化する。
+      //
+      // 従来は load() の直後に attemptActiveAutoplay("recovery") を呼んで video.play()
+      // を即時発火していたが、Phase1 watchdog の load()+play() と本 recovery の
+      // load()+play() が同 element 上で重なると、HTMLMediaElement 側は連続した
+      // load() ごとに「直前 play() promise を AbortError で reject」する仕様のため
+      // pending な play() が打ち切られ、リトライ → 再度 abort … の loop に入る。
+      //
+      // 解決策: load() を撃った直後の play() は撃たず、loadedmetadata / canplay /
+      // loadeddata / error / abort のいずれかが届くまで wait する。これらは「load()
+      // が新しい Range request を始めて少なくとも 1 RTT 完了した」シグナルなので、
+      // 以降の play() は前の load() と競合しない。
+      //
+      // pro-actress minStart は loadedmetadata 後の handleLoadedMeta + enforceLowerBound
+      // で必ず 5 秒に飛ばされるので、ここでは seek しない (rs=0 で seek すると
+      // pending seek が立ち、次の load() で abort されるのを誘発する)。
+      const targetEl = video;
+      const state: {
+        consumed: boolean;
+        deadlineTimer: ReturnType<typeof setTimeout> | null;
+        onReady: (() => void) | null;
+        onAbort: (() => void) | null;
+      } = { consumed: false, deadlineTimer: null, onReady: null, onAbort: null };
+      const cleanup = () => {
+        if (state.onReady) {
+          targetEl.removeEventListener("loadedmetadata", state.onReady);
+          targetEl.removeEventListener("canplay", state.onReady);
+          targetEl.removeEventListener("loadeddata", state.onReady);
         }
-      }
-
-      if (isVideoTimingEnabled()) {
-        // eslint-disable-next-line no-console
-        console.debug(
-          `vt ${slug}: active recovery play retry rs=${video.readyState} paused=${video.paused}`,
+        if (state.onAbort) {
+          targetEl.removeEventListener("error", state.onAbort);
+          targetEl.removeEventListener("abort", state.onAbort);
+        }
+        if (state.deadlineTimer != null) {
+          clearTimeout(state.deadlineTimer);
+          state.deadlineTimer = null;
+        }
+      };
+      const tryFireRecoveryPlay = (triggerLabel: string) => {
+        if (state.consumed) return;
+        state.consumed = true;
+        cleanup();
+        if (!isActiveRef.current) return;
+        if (userPausedRef.current) return;
+        if (videoRef.current !== targetEl) {
+          // rebind が起きていた場合は現要素を対象に attemptActiveAutoplay へ任せる。
+          if (isVideoTimingEnabled()) {
+            // eslint-disable-next-line no-console
+            console.debug(
+              `vt ${slug}: active recovery play deferred reason=rebind trigger=${triggerLabel}`,
+            );
+          }
+          attemptActiveAutoplay("recovery");
+          return;
+        }
+        if (isVideoTimingEnabled()) {
+          // eslint-disable-next-line no-console
+          console.debug(
+            `vt ${slug}: active recovery play retry trigger=${triggerLabel} rs=${targetEl.readyState} paused=${targetEl.paused}`,
+          );
+        }
+        attemptActiveAutoplay("recovery");
+      };
+      state.onReady = () =>
+        tryFireRecoveryPlay(
+          targetEl.readyState >= 3
+            ? "canplay"
+            : targetEl.readyState >= 2
+              ? "loadeddata"
+              : "metadata",
         );
+      state.onAbort = () => tryFireRecoveryPlay("abort-or-error");
+      targetEl.addEventListener("loadedmetadata", state.onReady, { once: true });
+      targetEl.addEventListener("canplay", state.onReady, { once: true });
+      targetEl.addEventListener("loadeddata", state.onReady, { once: true });
+      targetEl.addEventListener("error", state.onAbort, { once: true });
+      targetEl.addEventListener("abort", state.onAbort, { once: true });
+      // 既に rs>=1 なら同期で発火 (load() が同期的に成立しているケース、または
+      // sameUrl=true で hardReset しなかったケース)。
+      if (targetEl.readyState >= 1) {
+        queueMicrotask(() => tryFireRecoveryPlay("immediate"));
       }
-      attemptActiveAutoplay("recovery");
+      // 最終締切: イベントが何も来ない死 element の保険。これ以上待っても無駄なので
+      // attemptActiveAutoplay にフォールバック (= watchdog の再武装に委ねる)。
+      const RECOVERY_DEADLINE_MS = 2500;
+      state.deadlineTimer = setTimeout(() => {
+        state.deadlineTimer = null;
+        tryFireRecoveryPlay("deadline");
+      }, RECOVERY_DEADLINE_MS);
     },
     [attemptActiveAutoplay, slug],
   );

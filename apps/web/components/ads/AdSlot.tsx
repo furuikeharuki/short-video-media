@@ -3,6 +3,7 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { AD_ZONES, isAdZoneEnabled, type AdZoneKey } from "@/lib/ads/config";
 import { resetAndServeAd, serveAd } from "./AdScriptLoader";
+import { signalAdSlotMounted } from "./adReadyGate";
 
 type Props = {
   zone: AdZoneKey;
@@ -63,6 +64,11 @@ export default function AdSlot({
 
   useEffect(() => {
     if (!enabled) return;
+    // <video> が存在しないページ (ホーム / 一覧 / 検索 / 詳細など) では
+    // signalPlaying() が永久に来ないため、AdSlot 自身が gate に
+    // 「これ以上動画 signal を待たなくてよい」を通知する。
+    // /feed では動画が先に signalPlaying() を呼ぶので fallback はキャンセルされる。
+    signalAdSlotMounted();
     const t = window.setTimeout(() => {
       resetAndServeAd(cfg.provider);
     }, 80);

@@ -2,9 +2,22 @@
 
 import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
+import { usePathname } from "next/navigation";
 import { signIn, signOut, useSession } from "next-auth/react";
 import { markFeedStartUnmuted } from "@/lib/feedNav";
 import { buildFeedHrefFromSavedPref } from "@/lib/savedSearchPrefs";
+
+// /feed (フィード上モーダル経由で /movies/<slug> になっているケースも含む) から
+// ハンバーガー経由で別ルートへ遷移する瞬間、ヘッダーとボトムナビの間だけ
+// 黒+スピナーで覆って体感遅延を消す。BottomNav と同じ仕組み。
+function dispatchNavLoadingShow() {
+  if (typeof window === "undefined") return;
+  try {
+    window.dispatchEvent(new Event("nav-loading-show"));
+  } catch {
+    /* ignore */
+  }
+}
 
 const MENU_ITEMS = [
   { label: "ホーム", href: "/" },
@@ -34,6 +47,13 @@ export default function HamburgerMenu() {
   const drawerRef = useRef<HTMLDivElement>(null);
   const btnRef = useRef<HTMLButtonElement>(null);
   const { status } = useSession();
+  const pathname = usePathname();
+  // /feed および /search/feed、フィード上で開く /movies/<slug> モーダル中まで含めて
+  // 「ショート視聴中」とみなす。BottomNav の onShortFeed と揃える。
+  const onShortFeed =
+    pathname === "/feed" ||
+    pathname.startsWith("/search/feed") ||
+    pathname.startsWith("/movies/");
 
   useEffect(() => {
     if (!open) return;
@@ -137,6 +157,13 @@ export default function HamburgerMenu() {
                 key={item.href}
                 href={item.href}
                 onClick={(e) => {
+                  // /feed (ショート) からの離脱はオーバーレイを即時表示する。
+                  // SPA/フルページのどちらでもタップ直後に黒+スピナーが上下バー以外を
+                  // 覆い、「タップが効いていない」体感を消す。SPA の場合は
+                  // NavigationLoadingOverlay 側で pathname 変更を検知して自動で消える。
+                  if (onShortFeed && !goingToFeed) {
+                    dispatchNavLoadingShow();
+                  }
                   if (goingToFeed && typeof window !== "undefined") {
                     // 前回のフィードセッションを完全に破棄 (filter_sig / next_cursor 含む)。
                     // BottomNav の resetFeedSession と同じ挙動にして、ハンバーガー経由でも
@@ -163,6 +190,7 @@ export default function HamburgerMenu() {
                     ) {
                       e.preventDefault();
                       const targetHref = buildFeedHrefFromSavedPref();
+                      dispatchNavLoadingShow();
                       window.location.assign(targetHref);
                     }
                   }

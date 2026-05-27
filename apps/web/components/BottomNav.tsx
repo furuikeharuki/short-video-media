@@ -316,6 +316,15 @@ export default function BottomNav() {
             const targetHref = goingToFeed
               ? buildFeedHrefFromSavedPref()
               : item.href;
+            // ヘッダーとボトムナビの間だけ黒 + スピナーで即座に覆って、
+            // ブラウザが次ページの HTML を取得する数百ms～数秒の間も
+            // 「タップが効いた」感を返す。フルページ遷移なので明示的な
+            // hide は不要 (DOM ごと差し替わる)。
+            try {
+              window.dispatchEvent(new Event("nav-loading-show"));
+            } catch {
+              /* ignore: 古いブラウザでも本処理は致命的ではない */
+            }
             window.location.assign(targetHref);
           }
           // それ以外は <Link> のデフォルト挙動 (Next の SPA 遷移) に任せる。

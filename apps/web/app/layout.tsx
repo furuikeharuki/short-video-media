@@ -1,6 +1,7 @@
 import type { Metadata, Viewport } from "next";
 import Header from "@/components/Header";
 import BottomNav from "@/components/BottomNav";
+import NavigationLoadingOverlay from "@/components/NavigationLoadingOverlay";
 import SessionProvider from "@/components/SessionProvider";
 import SavedFilterEnforcer from "@/components/SavedFilterEnforcer";
 import FullpageInterstitial from "@/components/ads/FullpageInterstitial";
@@ -155,6 +156,11 @@ export default function RootLayout({
             {children}
             {modal}
             <BottomNav />
+            {/* /feed から / や /mypage へフルページ遷移する瞬間に、ヘッダーと
+                ボトムナビの間だけを黒+スピナーで覆って「タップが効いた」感を即返す。
+                通常は非表示で、BottomNav / HamburgerMenu から `nav-loading-show` を
+                受け取ったときだけ表示する。 */}
+            <NavigationLoadingOverlay />
             {/* Mobile Fullpage Interstitial (ExoClick). NEXT_PUBLIC_AD_FULLPAGE_INTERSTITIAL_ENABLED
                 かつ全体スイッチが ON のときだけ動く。デフォルト OFF。
                 セッション中 1 回だけ provider に serve を依頼する。 */}

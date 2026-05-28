@@ -34,7 +34,7 @@ import asyncio
 import os
 import re
 import sys
-import time
+import time  # noqa: F401  # backward-compat用 (test がモジュール属性として参照する可能性に備えて残す)
 from dataclasses import dataclass
 from datetime import date, datetime
 from pathlib import Path
@@ -49,9 +49,12 @@ _REPO_ROOT = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(_REPO_ROOT / "apps" / "api"))
 
 from app.db.models.actress import Actress  # noqa: E402
+from src.sync_catalog import _dmm_api_call  # noqa: E402
 
 
 DMM_ENDPOINT = "https://api.dmm.com/affiliate/v3/ActressSearch"
+# 互換性のため定数は残すが、現在は sync_catalog 側の AsyncLimiter (DMM_API_RPS)
+# でレートを控えるため sleep は不要。
 RATE_LIMIT_SLEEP_SEC = 1.0
 
 
@@ -129,7 +132,8 @@ async def fetch_actress(
     else:
         return None
 
-    res = await client.get(DMM_ENDPOINT, params=params, timeout=20)
+    async with _dmm_api_call():
+        res = await client.get(DMM_ENDPOINT, params=params, timeout=20)
     if res.status_code >= 400:
         body_snippet = res.text[:400]
         raise httpx.HTTPStatusError(
@@ -314,9 +318,8 @@ async def main(
                     except Exception:  # noqa: BLE001
                         pass
 
-                # レート制限
-                if i < total:
-                    time.sleep(RATE_LIMIT_SLEEP_SEC)
+                # レート制限は sync_catalog 側の AsyncLimiter が fetch_actress 内部で
+                # 付与されるため、ここで追加の sleep は不要。
 
     await engine.dispose()
     print(

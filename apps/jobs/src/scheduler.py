@@ -208,38 +208,66 @@ async def _run_bootstrap() -> None:
     actress_only_missing = (
         os.getenv("BOOTSTRAP_ACTRESS_ONLY_MISSING", "true").lower() == "true"
     )
+    # 年×フロアの並列実行数 (デフォルト 4)。
+    # DMM API 側のレート制限は sync_catalog 内部の AsyncLimiter (DMM_API_RPS) で
+    # まとめてケアするため、ここの並列度は単に "DB トランザクションを何本同時に
+    # 走らせるか" を決める。あまり大きくすると Postgres の接続数を食うので
+    # 4〜8 程度に抑えるのが安全。
+    bootstrap_concurrency = max(
+        1, int(os.getenv("BOOTSTRAP_CONCURRENCY", "4"))
+    )
 
     logger.info(
         "=" * 70 + "\n"
         "[bootstrap] start: years=%d-%d video_floors=%s goods_floors=%s "
-        "skip_actress=%s actress_only_missing=%s\n" + "=" * 70,
+        "skip_actress=%s actress_only_missing=%s concurrency=%d\n" + "=" * 70,
         start_year, end_year, video_floors, goods_floors,
-        skip_actress, actress_only_missing,
+        skip_actress, actress_only_missing, bootstrap_concurrency,
     )
 
-    # 1. sync_catalog (videoa + videoc) full 一気取得
-    # 年単位でループし、sync_catalog 内部の月スライスに任せる。
-    # ログを見やすくし、一部年だけのリトライもやりやすくするため。
-    if video_floors:
-        for year in range(start_year, end_year + 1):
-            logger.info("[bootstrap] -- sync_catalog %d (full) --", year)
-            try:
-                await sync_main(
-                    mode="full",
-                    hits_per_floor=100,  # full モードでは使われないが必須引数
-                    floors_filter=video_floors,
-                    dry_run=False,
-                    start_date=date(year, 1, 1),
-                    end_date=date(year, 12, 31),
-                )
-                logger.info("[bootstrap] sync_catalog %d done", year)
-            except Exception:
-                logger.error(
-                    "[bootstrap] sync_catalog %d FAILED, continuing\n%s",
-                    year, traceback.format_exc(),
-                )
+    async def _run_year_full(
+        *, year: int, floors: list[str], label: str
+    ) -> None:
+        """1 年分の sync_catalog (full) を走らせる単位ジョブ。"""
+        logger.info("[bootstrap] -- %s %d (full) start --", label, year)
+        try:
+            await sync_main(
+                mode="full",
+                hits_per_floor=100,  # full モードでは使われないが必須引数
+                floors_filter=floors,
+                dry_run=False,
+                start_date=date(year, 1, 1),
+                end_date=date(year, 12, 31),
+            )
+            logger.info("[bootstrap] %s %d done", label, year)
+        except Exception:
+            logger.error(
+                "[bootstrap] %s %d FAILED, continuing\n%s",
+                label, year, traceback.format_exc(),
+            )
 
-    # 2. sync_actress_profiles
+    async def _run_years_parallel(
+        *, floors: list[str], label: str
+    ) -> None:
+        """年単位の sync_catalog を Semaphore で並列実行する。"""
+        if not floors:
+            return
+        sem = asyncio.Semaphore(bootstrap_concurrency)
+
+        async def _bounded(year: int) -> None:
+            async with sem:
+                await _run_year_full(year=year, floors=floors, label=label)
+
+        await asyncio.gather(
+            *(_bounded(y) for y in range(start_year, end_year + 1))
+        )
+
+    # 1. sync_catalog (videoa + videoc) full 一気取得 (年×フロアで並列)
+    # sync_catalog 内部の月スライスはそのまま使えるため、年単位で並列に走らせる。
+    # AsyncLimiter で DMM API レートは保たれるので、並列度を上げても API 側の負荷は変わらない。
+    await _run_years_parallel(floors=video_floors, label="sync_catalog")
+
+    # 2. sync_actress_profiles (シーケンシャル、actress テーブルを使う goods より先)
     if not skip_actress:
         logger.info(
             "[bootstrap] -- sync_actress_profiles (only_missing=%s) --",
@@ -256,26 +284,9 @@ async def _run_bootstrap() -> None:
                 traceback.format_exc(),
             )
 
-    # 3. sync_catalog (goods) full 取得
-    # goods は「DB に存在する女優名」でフィルタされるため、必ず actress 取得のあとに走らせる。
-    if goods_floors:
-        for year in range(start_year, end_year + 1):
-            logger.info("[bootstrap] -- sync_catalog goods %d --", year)
-            try:
-                await sync_main(
-                    mode="full",
-                    hits_per_floor=100,
-                    floors_filter=goods_floors,
-                    dry_run=False,
-                    start_date=date(year, 1, 1),
-                    end_date=date(year, 12, 31),
-                )
-                logger.info("[bootstrap] sync_catalog goods %d done", year)
-            except Exception:
-                logger.error(
-                    "[bootstrap] sync_catalog goods %d FAILED, continuing\n%s",
-                    year, traceback.format_exc(),
-                )
+    # 3. sync_catalog (goods) full 取得 (年並列)
+    # goods は "DB に存在する女優名" でフィルタされるため、必ず actress 取得のあとに走らせる。
+    await _run_years_parallel(floors=goods_floors, label="sync_catalog goods")
 
     logger.info("=" * 70 + "\n[bootstrap] ALL DONE\n" + "=" * 70)
 

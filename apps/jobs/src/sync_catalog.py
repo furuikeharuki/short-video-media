@@ -39,15 +39,16 @@ import asyncio
 import os
 import re
 import sys
-import time
 import unicodedata
 import uuid
-from dataclasses import dataclass
+from contextlib import asynccontextmanager
+from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta
 from pathlib import Path
-from typing import Any
+from typing import Any, AsyncIterator
 
 import httpx
+from aiolimiter import AsyncLimiter
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
@@ -63,7 +64,42 @@ from app.db.models.series import Series  # noqa: E402
 
 
 DMM_ENDPOINT = "https://api.dmm.com/affiliate/v3/ItemList"
+
+# DMM API 呼び出しのグローバル rate limiter。
+# - 旧実装: ページ間で time.sleep(1.0) していた (同期 sleep のため event loop そのものが止まる)
+# - 新実装: aiolimiter のトークンバケットで "並列 floor 合計で 5 req/s" まで許可。
+#   フロア/年を asyncio.gather で並列化しても DMM 側に多重 burst を掛けないように
+#   全体で一本の limiter を共有する (module-global)。
+#   DMM_API_RPS env で微調整可 (デフォルト 5)。
+_DMM_API_RPS = float(os.getenv("DMM_API_RPS", "5") or 5)
+# event loop ごとに AsyncLimiter を保持 (loop を跨ぐ re-use で RuntimeWarning が出るため)
+_DMM_API_LIMITER: dict[asyncio.AbstractEventLoop, AsyncLimiter] = {}
+
+# 旧コード互換用 (テスト・外部参照のため "1 req/s 相当のスリープ間隔" を残しておく)。
+# 本体コードからは原則 _dmm_api_call() の limiter を使う。
 RATE_LIMIT_SLEEP_SEC = 1.0
+
+
+def _get_dmm_limiter() -> AsyncLimiter:
+    """現在の event loop ごとに AsyncLimiter を 1 個保持する。
+
+    AsyncLimiter は生成された event loop に紐づくので、
+    複数 loop を跨ぐ (特に pytest) と警告が出るため loop id をキーにキャッシュする。
+    """
+    loop = asyncio.get_event_loop()
+    limiter = _DMM_API_LIMITER.get(loop)
+    if limiter is None:
+        # max_rate トークン / 1 秒
+        limiter = AsyncLimiter(max_rate=_DMM_API_RPS, time_period=1.0)
+        _DMM_API_LIMITER[loop] = limiter
+    return limiter
+
+
+@asynccontextmanager
+async def _dmm_api_call() -> AsyncIterator[None]:
+    """DMM API コール 1 本に対して rate limit をかけるコンテキスト。"""
+    async with _get_dmm_limiter():
+        yield
 
 # (site, service, floor, key_prefix)
 # key_prefix は content_id のフォールバック識別子用
@@ -212,7 +248,11 @@ class FetchParams:
 
 
 async def fetch_items_response(client: httpx.AsyncClient, fp: FetchParams) -> dict:
-    """DMM ItemList API を叩いて result コンテナをそのまま返す。"""
+    """DMM ItemList API を叩いて result コンテナをそのまま返す。
+
+    グローバル rate limiter (_get_dmm_limiter) を介して DMM 側へのリクエスト間隔を
+    同一 event loop 上のすべての fetch で共有する。
+    """
     params: dict[str, Any] = {
         "api_id": fp.api_id,
         "affiliate_id": fp.affiliate_id,
@@ -232,7 +272,8 @@ async def fetch_items_response(client: httpx.AsyncClient, fp: FetchParams) -> di
         params["article"] = fp.article
     if fp.article_id:
         params["article_id"] = fp.article_id
-    res = await client.get(DMM_ENDPOINT, params=params, timeout=20)
+    async with _dmm_api_call():
+        res = await client.get(DMM_ENDPOINT, params=params, timeout=20)
     if res.status_code >= 400:
         # DMM は 4xx でも JSON でエラー詳細を返すので、それを見えるようにする
         body_snippet = res.text[:400]
@@ -424,6 +465,152 @@ class UpsertCounters:
     errors: int = 0
 
 
+# ────────────────────────────────────────────────────────────
+# Genre / Actress プロセス内キャッシュ (N+1 SELECT 除去用)
+# ────────────────────────────────────────────────────────────
+#
+# 旧実装では作品 1 件 upsert するたびに:
+#   - _sync_genres: SELECT Genre, SELECT MovieGenre (x ジャンル数) を毎回発行
+#   - _sync_actresses: 女優 1 件ごとに SELECT Actress (content_id), SELECT Actress (name), SELECT MovieActress
+# と N+1 が豊富に発生していた。Railway Private Network でも
+# 累計 RTT が伸びるため、ジョブ起動時に 1 回だけ SELECT して in-memory 辞書に
+# 保持し、以降は作品ごとのチェックをすべてメモリ内で済ませる。
+
+
+@dataclass
+class GenreCache:
+    """Genre.name → Genre (主キー id) の in-memory キャッシュ。"""
+
+    by_name: dict[str, Genre] = field(default_factory=dict)
+    warmed: bool = False
+
+    async def warm(self, session: AsyncSession) -> None:
+        if self.warmed:
+            return
+        rows = (await session.execute(select(Genre))).scalars().all()
+        self.by_name = {g.name: g for g in rows if g.name}
+        self.warmed = True
+
+    async def get_or_create(self, session: AsyncSession, name: str) -> Genre:
+        g = self.by_name.get(name)
+        if g is not None:
+            return g
+        g = Genre(name=name)
+        session.add(g)
+        # id を付与させるため flush。INSERT 本体はトランザクション末尾の commit でまとめて送信される。
+        await session.flush()
+        self.by_name[name] = g
+        return g
+
+
+@dataclass
+class ActressCache:
+    """Actress を content_id / name 両方で引ける in-memory キャッシュ。
+
+    content_id (DMM 側 ID) があればそちらを主キー、無ければ name をフォールバックキーにする。
+    ジョブ初期化時に一括 SELECT して保持し、以降の女優リンク付けで SELECT を走らせない。
+    """
+
+    by_content_id: dict[str, Actress] = field(default_factory=dict)
+    by_name: dict[str, Actress] = field(default_factory=dict)
+    warmed: bool = False
+
+    async def warm(self, session: AsyncSession) -> None:
+        if self.warmed:
+            return
+        rows = (await session.execute(select(Actress))).scalars().all()
+        for a in rows:
+            if a.content_id:
+                self.by_content_id[a.content_id] = a
+            if a.name:
+                # 同名異人がいるケースは content_id 側のルックアップを優先させるため、
+                # by_name は「同名で上書き」してもよい (識別可能な content_id があるときは
+                # by_content_id 側を見るため衰退見られで不具合にはならない)。
+                self.by_name[a.name] = a
+        self.warmed = True
+
+    async def get_or_create(
+        self,
+        session: AsyncSession,
+        *,
+        content_id: str | None,
+        name: str,
+        ruby: str | None = None,
+        slug: str | None = None,
+    ) -> Actress:
+        # content_id を優先、無ければ name で引く
+        actress: Actress | None = None
+        if content_id:
+            actress = self.by_content_id.get(content_id)
+        if actress is None:
+            actress = self.by_name.get(name)
+        if actress is not None:
+            # 補完 (content_id / ruby が後から判明したケース)
+            if content_id and not actress.content_id:
+                actress.content_id = content_id
+                self.by_content_id[content_id] = actress
+            if ruby and not actress.ruby:
+                actress.ruby = ruby
+            return actress
+        # 新規作成
+        actress = Actress(
+            content_id=content_id,
+            name=name,
+            slug=slug or _slugify(name, content_id or name),
+            ruby=ruby,
+        )
+        session.add(actress)
+        await session.flush()
+        if content_id:
+            self.by_content_id[content_id] = actress
+        if name:
+            self.by_name[name] = actress
+        return actress
+
+    def names(self) -> set[str]:
+        """DB 上の女優名集合を返す (goods フィルタ用)。"""
+        return set(self.by_name.keys())
+
+
+@dataclass
+class MovieLinkCache:
+    """作品 (movie_id) ごとのジャンル / 女優リンク集合をメモリ上に保持するキャッシュ。
+
+    初めてその movie_id を見たときにだけ SELECT し、以降は全てメモリで判定する。
+    同一 movie を batch 内で複数回触ることはないが、 idempotent に作っておくと
+    スキーマ変更時のリストリックも安全。
+    """
+
+    genres: dict[str, set[str]] = field(default_factory=dict)      # movie_id -> set(genre_id)
+    actresses: dict[str, set[str]] = field(default_factory=dict)  # movie_id -> set(actress_id)
+
+    async def get_genre_ids(self, session: AsyncSession, movie_id: str) -> set[str]:
+        cached = self.genres.get(movie_id)
+        if cached is not None:
+            return cached
+        rows = (
+            await session.execute(
+                select(MovieGenre.genre_id).where(MovieGenre.movie_id == movie_id)
+            )
+        ).scalars().all()
+        s = set(rows)
+        self.genres[movie_id] = s
+        return s
+
+    async def get_actress_ids(self, session: AsyncSession, movie_id: str) -> set[str]:
+        cached = self.actresses.get(movie_id)
+        if cached is not None:
+            return cached
+        rows = (
+            await session.execute(
+                select(MovieActress.actress_id).where(MovieActress.movie_id == movie_id)
+            )
+        ).scalars().all()
+        s = set(rows)
+        self.actresses[movie_id] = s
+        return s
+
+
 async def upsert_movie(
     session: AsyncSession,
     item: dict,
@@ -435,6 +622,9 @@ async def upsert_movie(
     dry_run: bool = False,
     actress_filter: set[str] | None = None,
     http_client: httpx.AsyncClient | None = None,
+    genre_cache: GenreCache | None = None,
+    actress_cache: ActressCache | None = None,
+    link_cache: MovieLinkCache | None = None,
 ) -> None:
     """DMM API の 1 件を Movie テーブルに upsert する。
 
@@ -444,6 +634,10 @@ async def upsert_movie(
     :param actress_filter:
         与えられたとき、作品に含まれる女優名がこのセットに 1 つも一致しなければ skip。
         goods フロアで DB に存在する女優に関連する商品だけ保存するために使う。
+
+    :param genre_cache: ジャンル名→id の in-memory キャッシュ。None なら逆互換パスで SELECT する。
+    :param actress_cache: 女優キャッシュ。
+    :param link_cache: movie ごとのリンク集合キャッシュ。
     """
     # goods フロアは Movie ではなく Goods テーブルに振り分ける
     if floor == "goods":
@@ -456,6 +650,7 @@ async def upsert_movie(
             dry_run=dry_run,
             actress_filter=actress_filter,
             http_client=http_client,
+            actress_cache=actress_cache,
         )
         return
 
@@ -649,12 +844,18 @@ async def upsert_movie(
     if floor_genre and floor_genre not in genre_names:
         genre_names.append(floor_genre)
     if genre_names and not dry_run:
-        await _sync_genres(session, movie.id, genre_names)
+        await _sync_genres(
+            session, movie.id, genre_names,
+            genre_cache=genre_cache, link_cache=link_cache,
+        )
 
     # 女優
     actresses_arr = iteminfo.get("actress") or []
     if isinstance(actresses_arr, list) and actresses_arr and not dry_run:
-        await _sync_actresses(session, movie.id, actresses_arr)
+        await _sync_actresses(
+            session, movie.id, actresses_arr,
+            actress_cache=actress_cache, link_cache=link_cache,
+        )
 
 
 def _floor_genre_label(floor: str) -> str | None:
@@ -669,30 +870,51 @@ def _floor_genre_label(floor: str) -> str | None:
     return None
 
 
-async def _sync_genres(session: AsyncSession, movie_id: str, names: list[str]) -> None:
+async def _sync_genres(
+    session: AsyncSession,
+    movie_id: str,
+    names: list[str],
+    *,
+    genre_cache: GenreCache | None = None,
+    link_cache: MovieLinkCache | None = None,
+) -> None:
+    """作品とジャンルのリンクを同期する。
+
+    genre_cache / link_cache が与えられたら in-memory で判定して SELECT を適用外にする。
+    両者が None のときは旧動作 (作品ごとに SELECT) にフォールバックして安全に動く。
+    """
     if not names:
         return
-    # 既存ジャンル取得
-    existing_genres = (
-        await session.execute(select(Genre).where(Genre.name.in_(names)))
-    ).scalars().all()
-    name_to_genre = {g.name: g for g in existing_genres}
 
-    # 未登録ジャンルを追加
-    for name in names:
-        if name not in name_to_genre:
-            g = Genre(name=name)
-            session.add(g)
-            await session.flush()
-            name_to_genre[name] = g
+    # ジャンルオブジェクトの解決
+    name_to_genre: dict[str, Genre]
+    if genre_cache is not None:
+        name_to_genre = {}
+        for name in names:
+            name_to_genre[name] = await genre_cache.get_or_create(session, name)
+    else:
+        existing_genres = (
+            await session.execute(select(Genre).where(Genre.name.in_(names)))
+        ).scalars().all()
+        name_to_genre = {g.name: g for g in existing_genres}
+        for name in names:
+            if name not in name_to_genre:
+                g = Genre(name=name)
+                session.add(g)
+                await session.flush()
+                name_to_genre[name] = g
 
-    # 既存リンクを取得して未登録のものだけ追加
-    existing_links = (
-        await session.execute(
-            select(MovieGenre.genre_id).where(MovieGenre.movie_id == movie_id)
-        )
-    ).scalars().all()
-    linked_ids = set(existing_links)
+    # 既存リンクの解決
+    if link_cache is not None:
+        linked_ids = await link_cache.get_genre_ids(session, movie_id)
+    else:
+        existing_links = (
+            await session.execute(
+                select(MovieGenre.genre_id).where(MovieGenre.movie_id == movie_id)
+            )
+        ).scalars().all()
+        linked_ids = set(existing_links)
+
     for name in names:
         g = name_to_genre[name]
         if g.id not in linked_ids:
@@ -714,6 +936,7 @@ async def upsert_goods(
     dry_run: bool = False,
     actress_filter: set[str] | None = None,
     http_client: httpx.AsyncClient | None = None,
+    actress_cache: ActressCache | None = None,
 ) -> None:
     """DMM goods フロアの 1 件を Goods テーブルに upsert する。
 
@@ -849,23 +1072,42 @@ async def upsert_goods(
 
     # 女優リンク (既存女優だけ): DB を見て actress_filter に一致した名前の女優を探す
     if not dry_run and matched_names:
-        await _link_goods_actresses(session, goods.id, matched_names)
+        await _link_goods_actresses(
+            session, goods.id, matched_names, actress_cache=actress_cache
+        )
 
 
 async def _link_goods_actresses(
-    session: AsyncSession, goods_id: str, actress_names: list[str]
+    session: AsyncSession,
+    goods_id: str,
+    actress_names: list[str],
+    *,
+    actress_cache: ActressCache | None = None,
 ) -> None:
-    """商品と (既存) 女優の多対多リンクを設定する。未登録女優はここでは作らない。"""
+    """商品と (既存) 女優の多対多リンクを設定する。未登録女優はここでは作らない。
+
+    actress_cache を与えれば in-memory で名前→Actress を解決して SELECT を省く。
+    """
     if not actress_names:
         return
-    actresses = (
-        await session.execute(
-            select(Actress).where(Actress.name.in_(actress_names))
-        )
-    ).scalars().all()
+
+    # Actress レコードを解決
+    if actress_cache is not None:
+        actresses = [
+            a for a in (actress_cache.by_name.get(n) for n in actress_names) if a is not None
+        ]
+    else:
+        actresses = (
+            await session.execute(
+                select(Actress).where(Actress.name.in_(actress_names))
+            )
+        ).scalars().all()
     if not actresses:
         return
 
+    # ActressGoods の既存リンクは goods 1 件ごとに見るしかないため SELECT はそのまま (1 本)。
+    # goods は "新規 insert か、同じ cid に同じ actress を link した状態" のどちらかなので
+    # リンク集合キャッシュも適用しにくいためさわらない。
     existing_links = (
         await session.execute(
             select(ActressGoods.actress_id).where(ActressGoods.goods_id == goods_id)
@@ -880,56 +1122,78 @@ async def _link_goods_actresses(
             linked_ids.add(actress.id)
 
 
-async def _sync_actresses(session: AsyncSession, movie_id: str, actress_items: list[dict]) -> None:
+async def _sync_actresses(
+    session: AsyncSession,
+    movie_id: str,
+    actress_items: list[dict],
+    *,
+    actress_cache: ActressCache | None = None,
+    link_cache: MovieLinkCache | None = None,
+) -> None:
+    """作品と女優のリンクを同期する。
+
+    actress_cache / link_cache が与えられたら in-memory ですべて解決して SELECT を省く。
+    """
     if not actress_items:
         return
-    # DMM 側 id (content_id) を優先キーに、無ければ name で探す
+
+    # 作品の既存女優リンク (movie_id -> set(actress_id))
+    if link_cache is not None:
+        linked_ids = await link_cache.get_actress_ids(session, movie_id)
+    else:
+        existing = (
+            await session.execute(
+                select(MovieActress.actress_id).where(MovieActress.movie_id == movie_id)
+            )
+        ).scalars().all()
+        linked_ids = set(existing)
+
     for pos, a in enumerate(actress_items):
         a_cid = str(a.get("id")) if a.get("id") is not None else None
         a_name = a.get("name")
         if not a_name:
             continue
 
-        actress = None
-        if a_cid:
-            actress = (
-                await session.execute(
-                    select(Actress).where(Actress.content_id == a_cid)
-                )
-            ).scalar_one_or_none()
-        if actress is None:
-            actress = (
-                await session.execute(
-                    select(Actress).where(Actress.name == a_name)
-                )
-            ).scalar_one_or_none()
-        if actress is None:
-            actress = Actress(
+        if actress_cache is not None:
+            actress = await actress_cache.get_or_create(
+                session,
                 content_id=a_cid,
                 name=a_name,
-                slug=_slugify(a_name, a_cid or a_name),
                 ruby=a.get("ruby"),
             )
-            session.add(actress)
-            await session.flush()
         else:
-            # 補完
-            if a_cid and not actress.content_id:
-                actress.content_id = a_cid
-            if a.get("ruby") and not actress.ruby:
-                actress.ruby = a.get("ruby")
-
-        # 関連
-        link = (
-            await session.execute(
-                select(MovieActress).where(
-                    MovieActress.movie_id == movie_id,
-                    MovieActress.actress_id == actress.id,
+            actress = None
+            if a_cid:
+                actress = (
+                    await session.execute(
+                        select(Actress).where(Actress.content_id == a_cid)
+                    )
+                ).scalar_one_or_none()
+            if actress is None:
+                actress = (
+                    await session.execute(
+                        select(Actress).where(Actress.name == a_name)
+                    )
+                ).scalar_one_or_none()
+            if actress is None:
+                actress = Actress(
+                    content_id=a_cid,
+                    name=a_name,
+                    slug=_slugify(a_name, a_cid or a_name),
+                    ruby=a.get("ruby"),
                 )
-            )
-        ).scalar_one_or_none()
-        if link is None:
+                session.add(actress)
+                await session.flush()
+            else:
+                if a_cid and not actress.content_id:
+                    actress.content_id = a_cid
+                if a.get("ruby") and not actress.ruby:
+                    actress.ruby = a.get("ruby")
+
+        # リンク追加 (既にあるなら noop)
+        if actress.id not in linked_ids:
             session.add(MovieActress(movie_id=movie_id, actress_id=actress.id, position=pos))
+            linked_ids.add(actress.id)
 
 
 # ────────────────────────────────────────────────────────────
@@ -976,31 +1240,83 @@ async def _process_items(
     dry_run: bool,
     actress_filter: set[str] | None,
     http_client: httpx.AsyncClient | None = None,
+    genre_cache: GenreCache | None = None,
+    actress_cache: ActressCache | None = None,
+    link_cache: MovieLinkCache | None = None,
 ) -> None:
-    """取得した items リストを 1 件ずつ upsert してコミットする。"""
-    for item in items:
-        try:
-            await upsert_movie(
-                session,
-                item,
-                prefix,
-                counters,
-                affiliate_id=affiliate_id,
-                floor=floor,
-                dry_run=dry_run,
-                actress_filter=actress_filter,
-                http_client=http_client,
-            )
-            # 1件ずつコミット: そうしないと 1 件失敗で batch 全体が巻き込まれる
-            if not dry_run:
-                await session.commit()
-        except Exception as e:  # noqa: BLE001
-            print(f"    [ERROR] upsert failed cid={item.get('content_id')}: {e}")
-            counters.errors += 1
+    """取得した items リストを batch ごとに upsert して 1 回だけコミットする。
+
+    旧実装は items ごとに `await session.commit()` を走らせていたため、
+    100 件バッチ × 年×月スライスで commit RTT が累計重かった。
+    新実装は以下の設計:
+
+      - 1 バッチ (= 1 API ページ、最大 100 件) を 1 つのトランザクションとして処理
+      - 1 件ごとに SAVEPOINT (begin_nested) を見てスコープを作るので、
+        1 件 INSERT で失敗してもその件だけ ROLLBACK され、他の件は生きる
+      - バッチ末尾で一括 commit (RTT 100 倍 → 1 倍)
+
+    キャッシュ (genre/actress/link) を受け取り、N+1 SELECT も合わせて除去した上で
+    1 バッチあたりの DB ラウンドトリップを大幅に削減する。
+    """
+    if not items:
+        return
+
+    if dry_run:
+        # dry_run は DB に書かずロジックだけ走らせる (カウンタ件数を見るため)
+        for item in items:
             try:
-                await session.rollback()
-            except Exception:  # noqa: BLE001
-                pass
+                await upsert_movie(
+                    session,
+                    item,
+                    prefix,
+                    counters,
+                    affiliate_id=affiliate_id,
+                    floor=floor,
+                    dry_run=True,
+                    actress_filter=actress_filter,
+                    http_client=http_client,
+                    genre_cache=genre_cache,
+                    actress_cache=actress_cache,
+                    link_cache=link_cache,
+                )
+            except Exception as e:  # noqa: BLE001
+                print(f"    [ERROR][dry-run] upsert failed cid={item.get('content_id')}: {e}")
+                counters.errors += 1
+        return
+
+    # 本番モード: 1 バッチ 1 トランザクション、件ごと SAVEPOINT
+    try:
+        async with session.begin():
+            for item in items:
+                try:
+                    async with session.begin_nested():  # SAVEPOINT
+                        await upsert_movie(
+                            session,
+                            item,
+                            prefix,
+                            counters,
+                            affiliate_id=affiliate_id,
+                            floor=floor,
+                            dry_run=False,
+                            actress_filter=actress_filter,
+                            http_client=http_client,
+                            genre_cache=genre_cache,
+                            actress_cache=actress_cache,
+                            link_cache=link_cache,
+                        )
+                except Exception as e:  # noqa: BLE001
+                    # SAVEPOINT ロールバックは begin_nested の __aexit__ で処理済み
+                    print(f"    [ERROR] upsert failed cid={item.get('content_id')}: {e}")
+                    counters.errors += 1
+        # ここで session.begin() の __aexit__ で commit が走る
+    except Exception as outer:  # noqa: BLE001
+        # トランザクション末尾の commit そのものが失敗 (DB 切断等)
+        print(f"    [ERROR] batch commit failed floor={floor}: {outer}")
+        counters.errors += len(items)
+        try:
+            await session.rollback()
+        except Exception:  # noqa: BLE001
+            pass
 
 
 async def _run_floor_window(
@@ -1020,11 +1336,17 @@ async def _run_floor_window(
     counters: UpsertCounters,
     dry_run: bool,
     actress_filter: set[str] | None,
+    genre_cache: GenreCache | None = None,
+    actress_cache: ActressCache | None = None,
+    link_cache: MovieLinkCache | None = None,
 ) -> None:
     """一つの (floor, 期間ウィンドウ) を offset でページングして全件取得し、upsert する。
 
     :param hits_limit:
         上限件数。未指定 (None) のときは API が返すだけ取り切る (全件モード)。
+
+    ページ間の rate limit は fetch_items_response 内部のグローバル AsyncLimiter が
+    ケアするため、ここで sleep はしない。
     """
     fetched = 0
     offset = 1
@@ -1073,12 +1395,15 @@ async def _run_floor_window(
             dry_run=dry_run,
             actress_filter=actress_filter,
             http_client=client,
+            genre_cache=genre_cache,
+            actress_cache=actress_cache,
+            link_cache=link_cache,
         )
         fetched += len(items)
         offset += len(items)
         if len(items) < batch_size:
             break
-        time.sleep(RATE_LIMIT_SLEEP_SEC)
+        # ページ間の sleep は不要 (AsyncLimiter が rate をケア)
 
 
 async def _load_db_actress_names(session: AsyncSession) -> set[str]:
@@ -1137,10 +1462,25 @@ async def main(
 
     async with httpx.AsyncClient() as client:
         async with Session() as session:
-            # goods フロアで DB の女優と関連する作品だけ保存するため、先に名前リストをロード
+            # キャッシュをセッション開始時に 1 度だけ warm して N+1 SELECT を回避
+            genre_cache = GenreCache()
+            actress_cache = ActressCache()
+            link_cache = MovieLinkCache()
+            if not dry_run:
+                await genre_cache.warm(session)
+                await actress_cache.warm(session)
+                print(
+                    f"[sync_catalog] warmed caches: genres={len(genre_cache.by_name)} "
+                    f"actresses={len(actress_cache.by_name)}"
+                )
+
+            # goods フロアで DB の女優と関連する作品だけ保存するため、女優キャッシュから直接取得
             db_actress_names: set[str] | None = None
             if any(f[2] == "goods" for f in targets):
-                db_actress_names = await _load_db_actress_names(session)
+                if not dry_run:
+                    db_actress_names = actress_cache.names()
+                else:
+                    db_actress_names = await _load_db_actress_names(session)
                 print(f"[sync_catalog] loaded {len(db_actress_names)} actress names for goods filter")
 
             for site, service, floor, prefix in targets:
@@ -1170,6 +1510,9 @@ async def main(
                             counters=counters,
                             dry_run=dry_run,
                             actress_filter=actress_filter,
+                            genre_cache=genre_cache,
+                            actress_cache=actress_cache,
+                            link_cache=link_cache,
                         )
                 else:
                     # incremental モード: 件数上限 + (任意) 期間フィルタ
@@ -1191,9 +1534,11 @@ async def main(
                         counters=counters,
                         dry_run=dry_run,
                         actress_filter=actress_filter,
+                        genre_cache=genre_cache,
+                        actress_cache=actress_cache,
+                        link_cache=link_cache,
                     )
-                # フロア切替時もちょっと休む
-                time.sleep(RATE_LIMIT_SLEEP_SEC)
+                # フロア切替時の sleep は不要 (AsyncLimiter がレート制御)
 
     await engine.dispose()
     print(

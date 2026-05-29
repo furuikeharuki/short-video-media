@@ -7,6 +7,7 @@ import SessionProvider from "@/components/SessionProvider";
 import SavedFilterEnforcer from "@/components/SavedFilterEnforcer";
 import FullpageInterstitial from "@/components/ads/FullpageInterstitial";
 import BuildIdLogger from "@/components/BuildIdLogger";
+import HydrationErrorReporter from "@/components/HydrationErrorReporter";
 import {
   SITE_NAME,
   SITE_URL,
@@ -160,6 +161,14 @@ export default function RootLayout({
               スピナーを出して "フィルター違反作品が一瞬見える" フラッシュを防ぐ。 */}
           <SavedFilterEnforcer>
             <BuildIdLogger buildId={BUILD_ID} />
+            {/*
+              本番で React error #418 (hydration mismatch) が出続けるが、minified
+              スタックでは原因要素が特定できないため、?vt=1 か
+              NEXT_PUBLIC_HYDRATION_DEBUG=1 のとき限定で発生時の DOM / <head> /
+              <html> 属性を console.error にダンプする診断モジュールを差し込む。
+              通常本番では何も走らないので影響なし。
+            */}
+            <HydrationErrorReporter />
             <Header />
             {children}
             {modal}

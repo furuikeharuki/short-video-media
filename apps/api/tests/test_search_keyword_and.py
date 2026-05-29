@@ -198,18 +198,24 @@ def test_search_movies_count_uses_count_star_not_count_distinct() -> None:
     assert "distinct" not in sql.lower()
 
 
-def test_keyword_where_uses_union_all_candidate_subquery() -> None:
-    """単一トークンの WHERE が UNION ALL ベースの movie_id 候補集合 IN になり、
-    各カラムを 1 列ずつ pg_trgm GIN index で引けるようになっていることを保証する。
+def test_keyword_where_uses_or_with_correlated_exists() -> None:
+    """単一トークンの WHERE は title / description などへの ILIKE と、女優 / ジャンル /
+    シリーズに対する相関 EXISTS の OR で構成されている。
 
-    OR の 1 本に戻すと `q=巨乳` のような高頻度 2 文字キーワードで
-    description 列が BitmapOr + heap recheck で遅くなる回帰を防ぐ。
+    PR #293 で UNION ALL ベースの IN サブクエリに切り替えたが、フィードの
+    `get_advanced_movie_ids` (LIMIT 無しの全 ID 列挙) と組み合わさると plan が
+    悪化して本番が極端に遅くなる回帰を出したため、PR #291 の EXISTS 形に戻している。
+
+    OR + EXISTS 形に戻っていることを SQL シェイプで担保する (回帰防止)。
     """
     sql = _compile(_build_keyword_where("alpha"))
-    # 1 つだけ生 ILIKE のかたまりではなく、UNION ALL で複数の SELECT が連結されている
-    assert sql.upper().count("UNION ALL") >= 7  # 8 本の SELECT を連結すると 7 個の UNION ALL
-    # 外側は movies.id IN (subquery) になっている
-    assert "movies.id IN" in sql
+    # UNION ALL は (このリポジトリ層では) 使われていない
+    assert "UNION ALL" not in sql.upper()
+    # 各 EXISTS サブクエリが含まれている
+    assert "EXISTS (SELECT" in sql or "EXISTS(SELECT" in sql or "(EXISTS" in sql
+    # ILIKE による直接カラム比較も並んでいる
+    assert "movies.title ILIKE" in sql
+    assert "movies.description ILIKE" in sql
 
 
 def test_capped_count_uses_limit_inside_subquery() -> None:

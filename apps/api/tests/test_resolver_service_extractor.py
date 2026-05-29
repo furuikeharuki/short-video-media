@@ -639,3 +639,219 @@ async def test_http_error_raises_upstream(
 
     with pytest.raises(ResolveUpstream):
         await extract_mp4_url("conn_refused", "affi-001")
+
+
+# ────────────────────────────────────────────────────────────────────
+# コンパクトサフィックス (`<cid>sm.mp4` / `<cid>mhb.mp4` 等) のランク付け
+# ────────────────────────────────────────────────────────────────────
+# 本番ログ (PR #283 後) で `basename=sone00614sm.mp4` が high として選ばれていた
+# ケースを救う。bitrate キーが無い + 候補全てが従来辞書外 (`_xxx_w.mp4` 形でない)
+# のとき、`_suffix_rank` が全部 50 を返して安定ソートの末尾 (= 入力順最後) を
+# high と誤判定していたのが原因。コンパクト形のティアを認識すれば mhb > dmb >
+# dm > sm でランク差が付き、最高ビットレートを選べる。
+
+
+@pytest.mark.asyncio
+async def test_extract_compact_suffix_picks_mhb_over_sm(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`<cid>sm.mp4` / `<cid>mhb.mp4` のコンパクト形でも mhb を high に選ぶ。
+
+    本番 sone00614 の再発防止用。bitrate キーが無く 4 候補すべてが
+    コンパクト形のケースで、high が mhb / low が sm に振り分けられることを
+    担保する。
+    """
+    raw_html = (
+        '<script>var args = {'
+        '"src": "https://cc3001.dmm.co.jp/pv/so/sone00614sm.mp4",'
+        '"bitrates": ['
+        '{"src": "//cc3001.dmm.co.jp/pv/so/sone00614sm.mp4"},'
+        '{"src": "//cc3001.dmm.co.jp/pv/so/sone00614dm.mp4"},'
+        '{"src": "//cc3001.dmm.co.jp/pv/so/sone00614dmb.mp4"},'
+        '{"src": "//cc3001.dmm.co.jp/pv/so/sone00614mhb.mp4"}'
+        ']};</script>'
+    )
+    handler = _two_stage_handler(
+        litevideo_body=_litevideo_html(),
+        player_body=raw_html,
+    )
+    _install_transport(monkeypatch, handler)
+
+    result = await extract_mp4_url("sone00614", "affi-001")
+    assert result.low_mp4_url == "https://cc3001.dmm.co.jp/pv/so/sone00614sm.mp4"
+    assert result.high_mp4_url == "https://cc3001.dmm.co.jp/pv/so/sone00614mhb.mp4"
+    # primary は args.src 優先 (既存挙動)。
+    assert result.mp4_url == "https://cc3001.dmm.co.jp/pv/so/sone00614sm.mp4"
+
+
+@pytest.mark.asyncio
+async def test_extract_compact_suffix_sm_only(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """コンパクト形 sm 単独のとき low/high が同じ URL に揃う (single-bitrate 扱い)。"""
+    raw_html = (
+        '<script>var args = {'
+        '"src": "https://cc3001.dmm.co.jp/pv/so/sone00614sm.mp4",'
+        '"bitrates": ['
+        '{"src": "//cc3001.dmm.co.jp/pv/so/sone00614sm.mp4"}'
+        ']};</script>'
+    )
+    handler = _two_stage_handler(
+        litevideo_body=_litevideo_html(),
+        player_body=raw_html,
+    )
+    _install_transport(monkeypatch, handler)
+
+    result = await extract_mp4_url("sone00614_sm_only", "affi-001")
+    assert result.low_mp4_url == "https://cc3001.dmm.co.jp/pv/so/sone00614sm.mp4"
+    assert result.high_mp4_url == "https://cc3001.dmm.co.jp/pv/so/sone00614sm.mp4"
+
+
+@pytest.mark.asyncio
+async def test_extract_mixed_compact_and_underscored_suffix(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """コンパクト形と `_xxx_w.mp4` 形が同じ bitrates 配列に混ざっていても破綻しない。
+
+    実 DMM ではほぼ起きないが、`_suffix_rank` が両形式で同一ランクを返すことを
+    担保するための保険テスト。
+    """
+    raw_html = (
+        '<script>var args = {'
+        '"src": "https://cc3001.dmm.co.jp/pv/x/y_mhb_w.mp4",'
+        '"bitrates": ['
+        '{"src": "//cc3001.dmm.co.jp/pv/x/abc123sm.mp4"},'
+        '{"src": "//cc3001.dmm.co.jp/pv/x/y_dmb_w.mp4"},'
+        '{"src": "//cc3001.dmm.co.jp/pv/x/y_mhb_w.mp4"}'
+        ']};</script>'
+    )
+    handler = _two_stage_handler(
+        litevideo_body=_litevideo_html(),
+        player_body=raw_html,
+    )
+    _install_transport(monkeypatch, handler)
+
+    result = await extract_mp4_url("mixed_forms", "affi-001")
+    # sm (コンパクト 10) が low、mhb_w (90) が high。
+    assert result.low_mp4_url == "https://cc3001.dmm.co.jp/pv/x/abc123sm.mp4"
+    assert result.high_mp4_url == "https://cc3001.dmm.co.jp/pv/x/y_mhb_w.mp4"
+
+
+@pytest.mark.asyncio
+async def test_extract_compact_suffix_descending_order(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """コンパクト形でも入力が降順 (mhb 先頭) のとき high/low が逆転しない。
+
+    本番 sone00614 の元バグは「全候補が辞書外でランクが揃い、安定ソートの末尾
+    (= 入力順最後) が high になる」だった。コンパクト形をランク認識した後は
+    入力順に依存せず最大ティアが high になることを担保する。
+    """
+    raw_html = (
+        '<script>var args = {'
+        '"src": "https://cc3001.dmm.co.jp/pv/so/sone00614mhb.mp4",'
+        '"bitrates": ['
+        '{"src": "//cc3001.dmm.co.jp/pv/so/sone00614mhb.mp4"},'
+        '{"src": "//cc3001.dmm.co.jp/pv/so/sone00614dmb.mp4"},'
+        '{"src": "//cc3001.dmm.co.jp/pv/so/sone00614dm.mp4"},'
+        '{"src": "//cc3001.dmm.co.jp/pv/so/sone00614sm.mp4"}'
+        ']};</script>'
+    )
+    handler = _two_stage_handler(
+        litevideo_body=_litevideo_html(),
+        player_body=raw_html,
+    )
+    _install_transport(monkeypatch, handler)
+
+    result = await extract_mp4_url("sone00614_desc", "affi-001")
+    assert result.high_mp4_url == "https://cc3001.dmm.co.jp/pv/so/sone00614mhb.mp4"
+    assert result.low_mp4_url == "https://cc3001.dmm.co.jp/pv/so/sone00614sm.mp4"
+
+
+@pytest.mark.asyncio
+async def test_direct_fallback_prefers_compact_mhb(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """args が壊れている場合の直リンクフォールバックでも、コンパクト mhb を primary に選ぶ。
+
+    旧実装は primary を `"mhb_w.mp4" in u` だけで選んでいたため、コンパクト形
+    (`<cid>mhb.mp4`) しか HTML に居ないケースで primary が先頭の小ファイル
+    (例: sm) に流れていた。`_suffix_rank >= 90` 判定に置き換えたことで救う。
+    """
+    # args は壊した状態にして直リンクフォールバック経路を通す
+    raw_html = (
+        '<script>var args = {</script>'
+        '<a href="https://cc3001.dmm.co.jp/pv/so/sone00614sm.mp4">low</a>'
+        '<a href="https://cc3001.dmm.co.jp/pv/so/sone00614dmb.mp4">mid</a>'
+        '<a href="https://cc3001.dmm.co.jp/pv/so/sone00614mhb.mp4">high</a>'
+    )
+    handler = _two_stage_handler(
+        litevideo_body=_litevideo_html(),
+        player_body=raw_html,
+    )
+    _install_transport(monkeypatch, handler)
+
+    result = await extract_mp4_url("sone00614_direct", "affi-001")
+    # primary は mhb を優先 (先頭の sm ではない)。
+    assert result.mp4_url == "https://cc3001.dmm.co.jp/pv/so/sone00614mhb.mp4"
+    assert result.low_mp4_url == "https://cc3001.dmm.co.jp/pv/so/sone00614sm.mp4"
+    assert result.high_mp4_url == "https://cc3001.dmm.co.jp/pv/so/sone00614mhb.mp4"
+
+
+@pytest.mark.asyncio
+async def test_extract_compact_suffix_with_query_string(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """署名クエリ付き URL でも basename 末尾だけを見て tier を判定する。"""
+    raw_html = (
+        '<script>var args = {'
+        '"src": "https://cc3001.dmm.co.jp/pv/so/sone00614sm.mp4?token=abc",'
+        '"bitrates": ['
+        '{"src": "//cc3001.dmm.co.jp/pv/so/sone00614sm.mp4?token=abc"},'
+        '{"src": "//cc3001.dmm.co.jp/pv/so/sone00614mhb.mp4?token=def"}'
+        ']};</script>'
+    )
+    handler = _two_stage_handler(
+        litevideo_body=_litevideo_html(),
+        player_body=raw_html,
+    )
+    _install_transport(monkeypatch, handler)
+
+    result = await extract_mp4_url("sone00614_query", "affi-001")
+    assert result.low_mp4_url == (
+        "https://cc3001.dmm.co.jp/pv/so/sone00614sm.mp4?token=abc"
+    )
+    assert result.high_mp4_url == (
+        "https://cc3001.dmm.co.jp/pv/so/sone00614mhb.mp4?token=def"
+    )
+
+
+def test_suffix_rank_unit_known_and_compact() -> None:
+    """`_suffix_rank` の単体テスト。既知 4 種 + コンパクト 4 種 + 偽陽性パターン。"""
+    from app.resolver.extractor import _suffix_rank
+
+    # 既存 `_xxx_w.mp4` 形 (substring match なので path 途中でも有効)。
+    assert _suffix_rank("https://cdn/pv/x/y_sm_w.mp4") == 10
+    assert _suffix_rank("https://cdn/pv/x/y_dm_w.mp4") == 30
+    assert _suffix_rank("https://cdn/pv/x/y_dmb_w.mp4") == 60
+    assert _suffix_rank("https://cdn/pv/x/y_mhb_w.mp4") == 90
+
+    # コンパクト形 (basename 末尾だけ)。
+    assert _suffix_rank("https://cdn/pv/so/sone00614sm.mp4") == 10
+    assert _suffix_rank("https://cdn/pv/so/sone00614dm.mp4") == 30
+    assert _suffix_rank("https://cdn/pv/so/sone00614dmb.mp4") == 60
+    assert _suffix_rank("https://cdn/pv/so/sone00614mhb.mp4") == 90
+
+    # クエリ付き basename も同じく判定可能。
+    assert _suffix_rank("https://cdn/pv/so/sone00614mhb.mp4?token=xxx") == 90
+
+    # 既存挙動互換チェック: `_mhb_w.mp4` の前に小文字英字 (例 `amhb_w.mp4`) が
+    # ある古 DMM 命名は、substring `_mhb_w.mp4` にも regex `(mhb)\.mp4$` にも
+    # マッチしないので 50 のまま (既存挙動を変えない)。
+    assert _suffix_rank("https://cdn/pv/abc/1sun00052amhb_w.mp4") == 50
+
+    # 完全未知のサフィックスは 50 (既存挙動)。
+    assert _suffix_rank("https://cdn/pv/x/y_w1080.mp4") == 50
+    # `smhb.mp4` のような `mhb` の直前が小文字英字のケースは偽陽性を避け 50。
+    # (DMM では発生しないが正規表現の安全性チェック)
+    assert _suffix_rank("https://cdn/pv/x/wrongsmhb.mp4") == 50

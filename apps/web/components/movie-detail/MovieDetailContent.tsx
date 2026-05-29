@@ -78,7 +78,14 @@ export default function MovieDetailContent({ movie }: Props) {
     { label: "収録時間",     value: movie.volume != null ? `${movie.volume}分` : NA },
     { label: "配信開始日",   value: formatDate(movie.delivery_date) },
     { label: "商品発売日",   value: formatDate(movie.release_date) },
-    { label: "メーカー品番", value: movie.maker_product ?? NA },
+    // メーカー品番:
+    //   DMM API は top-level に `maker_product` (メーカー品番) と `product_id` (品番)
+    //   の 2 つを返すが、実データでは `maker_product` が欠落 (null / 空文字) で
+    //   `product_id` だけが入っているケースが多い (app テスト fixture もこの形)。
+    //   ユーザー報告「メーカー品番が取得できていない / 表示されない」はこの欠落が
+    //   原因のため、`maker_product` が空のときは `product_id` にフォールバックする。
+    //   `??` ではなく `||` を使うことで空文字 `""` も空扱いにする。
+    { label: "メーカー品番", value: movie.maker_product || movie.product_id || NA },
   ];
 
   return (

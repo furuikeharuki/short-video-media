@@ -7,18 +7,20 @@
  *  - 表示は 2 段スレッド (root + 返信)。さらに深い返信は許可しない。
  *  - 投稿はログイン必須。ボタンを押すと next-auth.signIn() に流す。
  *  - 表示名はサーバ側 (User.display_name) を SoT とする。未設定なら「名無しのユーザー」。
- *  - 自分のコメントだけ削除アイコンを出す。
+ *  - 返信はコメント本体をタップして開始する。削除は右上の縦三点メニューから。
  *  - 投稿の即時反映は楽観更新 (サーバ応答が来たら ID を差し替え)。
  */
 
 import {
+  type KeyboardEvent as ReactKeyboardEvent,
+  type ReactNode,
   useCallback,
   useEffect,
   useMemo,
   useRef,
   useState,
 } from "react";
-import { signIn, useSession } from "next-auth/react";
+import { useSession } from "next-auth/react";
 
 import {
   type CommentItem,
@@ -55,9 +57,8 @@ export default function CommentsSheet({
   onClose,
   onCountChange,
 }: Props) {
-  const { data: session, status } = useSession();
+  const { data: session } = useSession();
   const myUserId = (session as { userId?: string } | null)?.userId ?? null;
-  const isAuthenticated = status === "authenticated";
 
   const [items, setItems] = useState<CommentItem[]>([]);
   const [total, setTotal] = useState(0);
@@ -116,19 +117,23 @@ export default function CommentsSheet({
   const handlePost = useCallback(async () => {
     const trimmed = body.trim();
     if (!trimmed) return;
-    if (!isAuthenticated) {
-      signIn("twitter", { callbackUrl: window.location.href });
-      return;
-    }
+    // 未ログインでも「名無しのユーザー」として投稿できる (サーバ側で snapshot を補完)。
     setPosting(true);
     const parentId = replyTo ? replyTo.id : null;
-    const created = await createComment(slug, trimmed, parentId);
+    const result = await createComment(slug, trimmed, parentId);
     setPosting(false);
-    if (!created) {
+    if (!result.ok) {
       // 失敗は素朴に alert (アプリ内 toast は未導入)。
-      alert("コメントの投稿に失敗しました");
+      const msg =
+        result.reason === "rate_limited"
+          ? "投稿の間隔が短すぎるか、同じ内容を連続で送信しています。少し時間をおいて試してください。"
+          : result.reason === "rejected"
+            ? "コメントを送信できませんでした (内容が許可されていません)。"
+            : "コメントの投稿に失敗しました";
+      alert(msg);
       return;
     }
+    const created = result.item;
     if (parentId) {
       setItems((prev) =>
         prev.map((c) =>
@@ -143,7 +148,7 @@ export default function CommentsSheet({
     }
     setBody("");
     setReplyTo(null);
-  }, [body, isAuthenticated, replyTo, slug, total, onCountChange]);
+  }, [body, replyTo, slug, total, onCountChange]);
 
   const handleDelete = useCallback(
     async (target: CommentItem) => {
@@ -320,11 +325,7 @@ export default function CommentsSheet({
               ref={textareaRef}
               value={body}
               onChange={(e) => setBody(e.target.value)}
-              placeholder={
-                isAuthenticated
-                  ? "コメントを書く..."
-                  : "ログインしてコメントしましょう"
-              }
+              placeholder="コメントを書く..."
               rows={2}
               maxLength={2000}
               style={{
@@ -343,7 +344,7 @@ export default function CommentsSheet({
             <button
               type="button"
               onClick={handlePost}
-              disabled={posting || (isAuthenticated && body.trim().length === 0)}
+              disabled={posting || body.trim().length === 0}
               style={{
                 background: "#e91e63",
                 color: "#fff",
@@ -352,13 +353,10 @@ export default function CommentsSheet({
                 padding: "0 14px",
                 fontWeight: 700,
                 cursor: "pointer",
-                opacity:
-                  posting || (isAuthenticated && body.trim().length === 0)
-                    ? 0.5
-                    : 1,
+                opacity: posting || body.trim().length === 0 ? 0.5 : 1,
               }}
             >
-              {isAuthenticated ? (posting ? "送信中" : "送信") : "ログイン"}
+              {posting ? "送信中" : "送信"}
             </button>
           </div>
         </div>
@@ -382,7 +380,7 @@ function CommentRow({
 }: CommentRowProps) {
   const isMine =
     !!myUserId && comment.author_user_id === myUserId;
-  // 返信は初期状態で折りたたみ。「返信を見る」で展開する。
+  // 返信は初期状態で折りたたみ。展開トグルは bubble の左下に置く。
   const [repliesOpen, setRepliesOpen] = useState(false);
   const replyCount = comment.replies.length;
   return (
@@ -390,44 +388,47 @@ function CommentRow({
       <CommentBubble
         comment={comment}
         isMine={isMine}
-        showReplyButton
+        canReply
         onReply={onReply}
         onDelete={onDelete}
+        footer={
+          replyCount > 0 ? (
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                setRepliesOpen((v) => !v);
+              }}
+              aria-expanded={repliesOpen}
+              style={{
+                background: "transparent",
+                color: "#7eb6ff",
+                border: "none",
+                fontSize: 12,
+                cursor: "pointer",
+                padding: "4px 0",
+              }}
+            >
+              {repliesOpen ? `返信を隠す` : `${replyCount}件の返信を表示`}
+            </button>
+          ) : null
+        }
       />
-      {replyCount > 0 && (
+      {replyCount > 0 && repliesOpen && (
         <div style={{ marginTop: 4, paddingLeft: 28 }}>
-          <button
-            type="button"
-            onClick={() => setRepliesOpen((v) => !v)}
-            aria-expanded={repliesOpen}
-            style={{
-              background: "transparent",
-              color: "#7eb6ff",
-              border: "none",
-              fontSize: 12,
-              cursor: "pointer",
-              padding: "4px 0",
-            }}
-          >
-            {repliesOpen ? `返信を隠す` : `返信を見る (${replyCount})`}
-          </button>
-          {repliesOpen && (
-            <div style={{ marginTop: 4 }}>
-              {comment.replies.map((r) => {
-                const replyIsMine =
-                  !!myUserId && r.author_user_id === myUserId;
-                return (
-                  <CommentBubble
-                    key={r.id}
-                    comment={r}
-                    isMine={replyIsMine}
-                    showReplyButton={false}
-                    onDelete={onDelete}
-                  />
-                );
-              })}
-            </div>
-          )}
+          {comment.replies.map((r) => {
+            const replyIsMine =
+              !!myUserId && r.author_user_id === myUserId;
+            return (
+              <CommentBubble
+                key={r.id}
+                comment={r}
+                isMine={replyIsMine}
+                canReply={false}
+                onDelete={onDelete}
+              />
+            );
+          })}
         </div>
       )}
     </div>
@@ -437,79 +438,171 @@ function CommentRow({
 interface CommentBubbleProps {
   comment: CommentItem;
   isMine: boolean;
-  showReplyButton: boolean;
+  /** true のとき bubble タップで返信開始。返信 (子) は false。 */
+  canReply: boolean;
   onReply?: (target: CommentItem) => void;
   onDelete: (target: CommentItem) => void;
+  /** bubble 下部に並べる補助要素 (例: 「○件の返信を表示」)。 */
+  footer?: ReactNode;
 }
 
 function CommentBubble({
   comment,
   isMine,
-  showReplyButton,
+  canReply,
   onReply,
   onDelete,
+  footer,
 }: CommentBubbleProps) {
+  const [menuOpen, setMenuOpen] = useState(false);
+  const menuRef = useRef<HTMLDivElement>(null);
+
+  // 外側タップでメニューを閉じる。
+  useEffect(() => {
+    if (!menuOpen) return;
+    const handler = (e: MouseEvent | TouchEvent) => {
+      if (menuRef.current && !menuRef.current.contains(e.target as Node)) {
+        setMenuOpen(false);
+      }
+    };
+    document.addEventListener("mousedown", handler);
+    document.addEventListener("touchstart", handler);
+    return () => {
+      document.removeEventListener("mousedown", handler);
+      document.removeEventListener("touchstart", handler);
+    };
+  }, [menuOpen]);
+
+  const handleBodyTap = () => {
+    if (canReply && onReply) onReply(comment);
+  };
+
+  const handleBodyKey = (e: ReactKeyboardEvent<HTMLDivElement>) => {
+    if (!canReply || !onReply) return;
+    if (e.key === "Enter" || e.key === " ") {
+      e.preventDefault();
+      onReply(comment);
+    }
+  };
+
   return (
-    <div style={{ padding: "6px 0" }}>
+    <div style={{ position: "relative", padding: "6px 0" }}>
       <div
+        role={canReply ? "button" : undefined}
+        tabIndex={canReply ? 0 : undefined}
+        aria-label={canReply ? "このコメントに返信" : undefined}
+        onClick={canReply ? handleBodyTap : undefined}
+        onKeyDown={canReply ? handleBodyKey : undefined}
         style={{
-          display: "flex",
-          alignItems: "baseline",
-          gap: 8,
-          marginBottom: 4,
+          cursor: canReply ? "pointer" : "default",
+          // 右上の三点メニューと重ならないよう右側に余白。
+          paddingRight: 28,
         }}
       >
-        <strong style={{ fontSize: 13 }}>
-          {comment.display_name || DEFAULT_DISPLAY_NAME}
-        </strong>
-        <span style={{ fontSize: 11, color: "#888" }}>
-          {formatDateTime(comment.created_at)}
-        </span>
+        <div
+          style={{
+            display: "flex",
+            alignItems: "baseline",
+            gap: 8,
+            marginBottom: 4,
+          }}
+        >
+          <strong style={{ fontSize: 13 }}>
+            {comment.display_name || DEFAULT_DISPLAY_NAME}
+          </strong>
+          <span style={{ fontSize: 11, color: "#888" }}>
+            {formatDateTime(comment.created_at)}
+          </span>
+        </div>
+        <div
+          style={{
+            fontSize: 14,
+            lineHeight: 1.5,
+            whiteSpace: "pre-wrap",
+            wordBreak: "break-word",
+          }}
+        >
+          {comment.body}
+        </div>
+        {footer && <div style={{ marginTop: 6 }}>{footer}</div>}
       </div>
-      <div
-        style={{
-          fontSize: 14,
-          lineHeight: 1.5,
-          whiteSpace: "pre-wrap",
-          wordBreak: "break-word",
-        }}
-      >
-        {comment.body}
-      </div>
-      <div style={{ display: "flex", gap: 12, marginTop: 6 }}>
-        {showReplyButton && onReply && (
+      {isMine && (
+        <div
+          ref={menuRef}
+          style={{ position: "absolute", top: 4, right: 0 }}
+        >
           <button
             type="button"
-            onClick={() => onReply(comment)}
+            onClick={(e) => {
+              e.stopPropagation();
+              setMenuOpen((v) => !v);
+            }}
+            aria-label="コメントメニュー"
+            aria-haspopup="menu"
+            aria-expanded={menuOpen}
             style={{
               background: "transparent",
-              color: "#bbb",
               border: "none",
-              fontSize: 12,
+              color: "#bbb",
               cursor: "pointer",
-              padding: 0,
+              padding: 4,
+              lineHeight: 0,
             }}
           >
-            返信
+            <svg
+              width="16"
+              height="16"
+              viewBox="0 0 24 24"
+              fill="currentColor"
+              aria-hidden="true"
+            >
+              <circle cx="12" cy="5" r="1.8" />
+              <circle cx="12" cy="12" r="1.8" />
+              <circle cx="12" cy="19" r="1.8" />
+            </svg>
           </button>
-        )}
-        {isMine && (
-          <button
-            type="button"
-            onClick={() => onDelete(comment)}
-            style={{
-              background: "transparent",
-              color: "#bbb",
-              border: "none",
-              fontSize: 12,
-              cursor: "pointer",
-              padding: 0,
-            }}
-          >
-            削除
-          </button>
-        )}
-      </div>
+          {menuOpen && (
+            <div
+              role="menu"
+              style={{
+                position: "absolute",
+                top: "100%",
+                right: 0,
+                marginTop: 4,
+                background: "#1a1a1a",
+                border: "1px solid rgba(255,255,255,0.1)",
+                borderRadius: 8,
+                minWidth: 120,
+                boxShadow: "0 4px 12px rgba(0,0,0,0.4)",
+                zIndex: 1,
+              }}
+            >
+              <button
+                type="button"
+                role="menuitem"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setMenuOpen(false);
+                  onDelete(comment);
+                }}
+                style={{
+                  display: "block",
+                  width: "100%",
+                  textAlign: "left",
+                  background: "transparent",
+                  color: "#ff6b6b",
+                  border: "none",
+                  cursor: "pointer",
+                  padding: "10px 14px",
+                  fontSize: 13,
+                }}
+              >
+                削除
+              </button>
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }

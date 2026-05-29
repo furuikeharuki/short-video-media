@@ -1,9 +1,9 @@
 /**
  * /api/proxy/comments/* → FastAPI への薄いプロキシ。
  *
- * 認証必須エンドポイント (POST /api/v1/movies/{slug}/comments, DELETE /api/v1/comments/{id})
- * を呼ぶときに、Auth.js セッションから apiToken を取り出して
- * Authorization: Bearer に付与する。/me proxy と同じ仕組み。
+ * Auth.js セッションがあれば apiToken を Authorization: Bearer に付与する。
+ *   - POST /api/v1/movies/{slug}/comments は匿名投稿を許可 (Authorization なしで通す)
+ *   - DELETE /api/v1/comments/{id} はログイン必須 (apiToken が無ければ 401)
  *
  * URL マッピング:
  *   POST   /api/proxy/comments/{slug}        → POST   /api/v1/movies/{slug}/comments
@@ -48,10 +48,14 @@ async function handle(request: NextRequest, context: RouteContext) {
   try {
     session = (await auth()) as Session | null;
   } catch (e) {
+    // auth() が壊れていても POST (匿名投稿) は通したい。ここでは null 扱いに倒し、
+    // DELETE 時だけ後段で 401 を返す。
     console.error("[proxy/comments] auth() threw", e);
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    session = null;
   }
-  if (!session?.apiToken) {
+  // 匿名投稿を許可するため、未ログインでも POST はそのまま転送する。
+  // 削除はオーナー判定が必要なので token が無ければここで 401。
+  if (request.method !== "POST" && !session?.apiToken) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
   if (!API_BASE_URL) {
@@ -66,9 +70,10 @@ async function handle(request: NextRequest, context: RouteContext) {
   }
   const targetUrl = `${API_BASE_URL}${subPath}${request.nextUrl.search}`;
 
-  const headers: Record<string, string> = {
-    Authorization: `Bearer ${session.apiToken}`,
-  };
+  const headers: Record<string, string> = {};
+  if (session?.apiToken) {
+    headers.Authorization = `Bearer ${session.apiToken}`;
+  }
 
   let body: BodyInit | undefined;
   if (request.method !== "GET") {

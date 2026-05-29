@@ -1,8 +1,9 @@
 """作品コメントエンドポイント。
 
 - GET  /movies/{slug}/comments    : ログイン不要。movie の slug をキーに 2 段スレッドを返す
-- POST /movies/{slug}/comments    : ログイン必須。トップレベル or 返信を投稿
-- DELETE /comments/{comment_id}   : ログイン必須。自分のコメントのみ削除可
+- POST /movies/{slug}/comments    : ログイン任意。未ログインなら「名無しのユーザー」で匿名投稿
+                                    IP レート / 同一本文連投 / NG ワード で弾く
+- DELETE /comments/{comment_id}   : ログイン必須。自分のコメントのみ削除可 (匿名コメントは削除不可)
 - GET  /me/display-name           : ログイン必須。表示名取得 (未設定なら「名無しのユーザー」)
 - PUT  /me/display-name           : ログイン必須。表示名更新 (空 / None で「名無しのユーザー」)
 
@@ -18,11 +19,22 @@ from collections import defaultdict
 from datetime import datetime, timezone
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, Path, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Path, Query, Request, status
 from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.security import require_user
+from app.core.comment_spam import (
+    DuplicateBodyGuard,
+    assert_no_ng_word,
+    get_duplicate_body_guard,
+    identity_for_request,
+    normalize_body,
+)
+from app.core.rate_limit import (
+    SlidingWindowRateLimiter,
+    get_comment_rate_limiter,
+)
+from app.core.security import get_optional_user, require_user
 from app.db.models.comment import Comment
 from app.db.models.movie import Movie
 from app.db.models.user import User
@@ -136,16 +148,34 @@ async def list_comments(
     status_code=status.HTTP_201_CREATED,
 )
 async def create_comment(
+    request: Request,
     body: CommentCreateBody,
-    user: Annotated[User, Depends(require_user)],
+    user: Annotated[User | None, Depends(get_optional_user)],
     db: Annotated[AsyncSession, Depends(get_db)],
+    rate_limiter: Annotated[
+        SlidingWindowRateLimiter, Depends(get_comment_rate_limiter)
+    ],
+    dup_guard: Annotated[DuplicateBodyGuard, Depends(get_duplicate_body_guard)],
     slug: str = Path(..., min_length=1),
 ) -> CommentOut:
     """コメント / 返信を作成する。
 
+    認証は任意。ログインしていないリクエストは `author_user_id = NULL` /
+    `display_name_snapshot = 「名無しのユーザー」` として匿名投稿する。
+    匿名コメントは author_user_id が NULL のため後から削除できない。
+
+    スパム対策 (順番に走る):
+      1. IP ベースのレートリミット (429)
+      2. 空本文チェック (400)
+      3. NG ワード判定 (400, どの単語かは漏らさない)
+      4. 同一 identity + 正規化本文の短時間連投 (429)
+
     返信の場合は body.parent_id でルートコメント (= parent_id IS NULL) を指定する。
     2 段制限のため、parent_id が「返信コメント」を指す場合は 400 を返す。
     """
+    # 1) IP レート (純粋な連打を弾く)
+    rate_limiter.check(request)
+
     movie_id = await _resolve_movie_id(db, slug)
 
     text = body.body.strip()
@@ -154,6 +184,14 @@ async def create_comment(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Comment body is empty",
         )
+
+    # 2) NG ワード判定 (正規化本文に対する substring match)。
+    assert_no_ng_word(text)
+
+    # 3) 同一 identity + 同一本文の短時間連投を防ぐ。
+    #    ログイン中はユーザー ID、匿名は IP を identity に使う。
+    identity = identity_for_request(request, user.id if user is not None else None)
+    dup_guard.check_and_record(identity, normalize_body(text))
 
     if body.parent_id is not None:
         parent_q = select(Comment).where(
@@ -175,8 +213,10 @@ async def create_comment(
     comment = Comment(
         movie_id=movie_id,
         parent_id=body.parent_id,
-        author_user_id=user.id,
-        display_name_snapshot=_resolved_display_name(user),
+        author_user_id=user.id if user is not None else None,
+        display_name_snapshot=(
+            _resolved_display_name(user) if user is not None else DEFAULT_DISPLAY_NAME
+        ),
         body=text,
         created_at=_utcnow_naive(),
     )

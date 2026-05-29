@@ -5,10 +5,11 @@ in-memory dict ストアでハンドラの分岐を検証する。
 
 確認するシナリオ:
   - movie が見つからないなら 404
-  - 未ログインで投稿しようとすると 401
+  - 未ログインでも投稿でき、snapshot は「名無しのユーザー」/ author_user_id は NULL
   - 表示名未設定ユーザーが投稿すると snapshot が「名無しのユーザー」になる
   - 表示名を更新したあとに投稿すると snapshot が新表示名になる (履歴は古いコメントごとに固定)
   - 返信 (parent_id) は 1 段だけ可。返信への返信は 400
+  - 匿名コメントは誰でも削除できない (403)。
   - 他人のコメントは削除できない (403)。自分のコメントは 204
   - GET は root → 返信を埋め込んで返す (新しい順)
 """
@@ -21,7 +22,9 @@ from typing import Any, Iterator
 import pytest
 from fastapi.testclient import TestClient
 
-from app.core.security import require_user
+from app.core.comment_spam import DuplicateBodyGuard, get_duplicate_body_guard
+from app.core.rate_limit import SlidingWindowRateLimiter, get_comment_rate_limiter
+from app.core.security import get_optional_user, require_user
 from app.db.session import get_db
 from app.main import app
 
@@ -255,8 +258,28 @@ def store() -> _FakeStore:
 
 @pytest.fixture(autouse=True)
 def _clear_overrides() -> Iterator[None]:
+    # in-memory のレートリミッタ / 重複ガードはプロセス常駐シングルトンなので、
+    # テスト相互で連投扱いにならないようテスト前後で空にする。
+    get_comment_rate_limiter()._reset_for_tests()
+    get_duplicate_body_guard()._reset_for_tests()
     yield
+    get_comment_rate_limiter()._reset_for_tests()
+    get_duplicate_body_guard()._reset_for_tests()
     app.dependency_overrides.clear()
+
+
+def _install_permissive_spam_overrides() -> None:
+    """既存のスレッド系テスト用に、レート / 重複ガードを実質無効化する。
+
+    Spam 系の専用テストは別途 _install_strict_spam_overrides を呼ぶ。
+    """
+    permissive_limiter = SlidingWindowRateLimiter(
+        per_second=10_000, per_minute=10_000, name="comments-test"
+    )
+    permissive_guard = DuplicateBodyGuard(window_sec=0)  # 即座に許可
+
+    app.dependency_overrides[get_comment_rate_limiter] = lambda: permissive_limiter
+    app.dependency_overrides[get_duplicate_body_guard] = lambda: permissive_guard
 
 
 def _make_client(
@@ -269,16 +292,29 @@ def _make_client(
         async def _user() -> _FakeUser:
             return fake_user
 
+        async def _optional_user() -> _FakeUser:
+            return fake_user
+
         app.dependency_overrides[require_user] = _user
+        app.dependency_overrides[get_optional_user] = _optional_user
 
         async def _fake_db():
             yield _FakeDB(store, fake_user)
 
     else:
+        # 匿名: require_user は上書きしない (401 が出る経路はそのまま壊さない)。
+        # get_optional_user は None を返すように差し替えて、POST が通る経路を作る。
+        async def _optional_user_none() -> None:
+            return None
+
+        app.dependency_overrides[get_optional_user] = _optional_user_none
+
         async def _fake_db():
             yield _FakeDB(store, None)
 
     app.dependency_overrides[get_db] = _fake_db
+    # 既存テストは spam 系の検証は別ファイルで行うため、ここではガードを緩める。
+    _install_permissive_spam_overrides()
     return TestClient(app)
 
 
@@ -291,14 +327,40 @@ def test_list_returns_404_for_unknown_slug(store: _FakeStore) -> None:
     assert res.status_code == 404
 
 
-def test_create_requires_auth(store: _FakeStore) -> None:
+def test_anonymous_create_uses_default_display_name(store: _FakeStore) -> None:
+    """未ログイン投稿は author_user_id=None, snapshot=「名無しのユーザー」になる。"""
     store.add_movie("movie-1")
-    app.dependency_overrides.clear()
-    client = TestClient(app)
+    client = _make_client(store, user_id=None)
     res = client.post(
-        "/api/v1/movies/movie-1/comments", json={"body": "hello"}
+        "/api/v1/movies/movie-1/comments", json={"body": "anon hi"}
     )
-    assert res.status_code == 401
+    assert res.status_code == 201
+    data = res.json()
+    assert data["display_name"] == "名無しのユーザー"
+    assert data["author_user_id"] is None
+    assert data["body"] == "anon hi"
+    # store にも author_user_id NULL で残る
+    stored = next(iter(store.comments.values()))
+    assert stored["author_user_id"] is None
+    assert stored["display_name_snapshot"] == "名無しのユーザー"
+
+
+def test_anonymous_comment_cannot_be_deleted_even_by_logged_in_user(
+    store: _FakeStore,
+) -> None:
+    """匿名コメント (author_user_id=NULL) はログインユーザーでも 403。"""
+    store.add_movie("movie-1")
+    # 1) 匿名で投稿
+    anon_client = _make_client(store, user_id=None)
+    created = anon_client.post(
+        "/api/v1/movies/movie-1/comments", json={"body": "anon"}
+    ).json()
+    # 2) 別のログインユーザーが削除を試みる → 403
+    app.dependency_overrides.clear()
+    user_client = _make_client(store, "user-Z", display_name="Z")
+    res = user_client.delete(f"/api/v1/comments/{created['id']}")
+    assert res.status_code == 403
+    assert created["id"] in store.comments
 
 
 def test_create_uses_default_display_name(store: _FakeStore) -> None:

@@ -91,6 +91,20 @@ class Settings(BaseSettings):
     # DMM への外部リクエストを伴う。
     RESOLVE_RATE_LIMIT_PER_SECOND: int = 10
     RESOLVE_RATE_LIMIT_PER_MINUTE: int = 120
+    # コメント投稿。匿名でも書けるためスパム対策として保守的に絞る。
+    # 通常会話なら 1 秒 2 件 / 1 分 10 件で十分快適。
+    COMMENT_RATE_LIMIT_PER_SECOND: int = 2
+    COMMENT_RATE_LIMIT_PER_MINUTE: int = 10
+
+    # ─────────────────────────────────────────────
+    # コメントのスパム対策
+    # ─────────────────────────────────────────────
+    # 同じ本文 (正規化後) を同一 IP / ユーザーから連投できない秒数。
+    COMMENT_DUPLICATE_WINDOW_SECONDS: int = 60
+    # NG ワード (カンマ区切り)。空ならチェックを行わない。
+    # マッチは正規化 (小文字化 + 連続空白圧縮) 後の substring 比較。
+    # 例: "spam,炎上煽り,死ね"
+    COMMENT_NG_WORDS: str = ""
 
     # ─────────────────────────────────────────────
     # DB 接続プール (asyncpg)
@@ -105,6 +119,15 @@ class Settings(BaseSettings):
     @property
     def allowed_origins_list(self) -> list[str]:
         return [origin.strip() for origin in self.ALLOWED_ORIGINS.split(",") if origin.strip()]
+
+    @property
+    def comment_ng_words_list(self) -> list[str]:
+        """COMMENT_NG_WORDS を小文字化済みリストにして返す。空文字は除外。"""
+        return [
+            w.strip().lower()
+            for w in self.COMMENT_NG_WORDS.split(",")
+            if w.strip()
+        ]
 
     @property
     def is_production(self) -> bool:

@@ -34,6 +34,7 @@ export default function HydrationDebugEarlyScript() {
     var HYDRATION_CODES = { 418: 1, 419: 1, 421: 1, 422: 1, 423: 1, 425: 1 };
     var fired = 0;
     var MAX_FIRES = 3;
+    var dumping = false;
 
     function summarize(el, depth) {
       if (!el || depth < 0) return null;
@@ -160,6 +161,7 @@ export default function HydrationDebugEarlyScript() {
 
     function onError(ev) {
       if (fired >= MAX_FIRES) return;
+      if (dumping) return;
       var msg = (ev && ev.message) || (ev && ev.error && String(ev.error)) || '';
       var m = msg.match(/react\\.dev\\/errors\\/(\\d+)/);
       if (!m) return;
@@ -167,7 +169,8 @@ export default function HydrationDebugEarlyScript() {
       if (!HYDRATION_CODES[code]) return;
       fired += 1;
       try {
-        console.error('[hydration-debug-early] React error #' + code, {
+        dumping = true;
+        var payload = {
           message: msg,
           url: location.href,
           ua: navigator.userAgent,
@@ -177,9 +180,15 @@ export default function HydrationDebugEarlyScript() {
           headChildren: dumpHeadChildren(),
           bodyTree: summarize(document.body, 4),
           suspects: suspects(),
-        });
+        };
+        console.error('[hydration-debug-early] React error #' + code, payload);
+        // DevTools は object を折りたたんで貼り付け時に {…} になりやすいので、
+        // そのままコピーできる JSON 文字列も別行で出す。
+        console.error('[hydration-debug-early-json] ' + JSON.stringify(payload));
       } catch (e) {
         try { console.error('[hydration-debug-early] dump failed', e); } catch (_) {}
+      } finally {
+        dumping = false;
       }
     }
 

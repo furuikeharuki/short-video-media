@@ -619,3 +619,101 @@ def test_q_redundant_with_series_value() -> None:
     assert "MySeries" in sql
     # q のキーワード OR は除去
     assert "movies.title ILIKE" not in sql
+
+
+# ---------------- positive 構造化フィルタは相関 EXISTS (材料化回避) ----------------
+
+
+def test_positive_genres_use_correlated_exists_not_id_in_subquery() -> None:
+    """positive な genres フィルタが `Movie.id IN (SELECT movie_id FROM movie_genres ...)`
+    の材料化形ではなく、`EXISTS (... WHERE movie_genres.movie_id = movies.id ...)`
+    の相関形で書かれていることを保証する。
+
+    本番 EXPLAIN で `id IN (... HAVING COUNT(DISTINCT)=N)` 形が positive 候補
+    movie_id を全件 HashAggregate で材料化し、movies_pkey へ Nested Loop で
+    数万回ランダムアクセス → 各候補に対し ng_words の相関 NOT EXISTS を評価して
+    から Sort+Limit するプランを誘発し、22 件しか要らないのに数万件を舐めて
+    ~5.5 秒かかっていた。相関 EXISTS なら planner は movies を primary_date 順に
+    走査して LIMIT で早期打ち切りできる。回帰防止。
+    """
+    from sqlalchemy import and_
+
+    from app.repositories.search_repository import _build_advanced_conditions
+
+    conds = _build_advanced_conditions(
+        q=None,
+        genres=["G1"],
+        actresses=[],
+        series_list=[],
+        directors=[],
+        makers=[],
+        labels=[],
+        date_from=None,
+        date_to=None,
+        ng_words=[],
+    )
+    sql = _compile(and_(*conds))
+    upper = sql.upper()
+    # positive genre は相関 EXISTS (movies.id と相関)
+    assert "EXISTS (SELECT" in upper or "EXISTS(SELECT" in upper or "(EXISTS" in upper
+    assert "movie_genres.movie_id = movies.id" in sql
+    # 候補材料化形 (`movies.id IN (SELECT movie_genres.movie_id ...)`) は使わない
+    assert "movies.id IN" not in sql
+    # HAVING COUNT(DISTINCT ...) ベースの材料化は撤去されている
+    assert "HAVING" not in upper
+    assert "G1" in sql
+
+
+def test_positive_actresses_use_correlated_exists_not_id_in_subquery() -> None:
+    """positive な actresses フィルタも相関 EXISTS で書かれ、id IN 材料化を使わない。"""
+    from sqlalchemy import and_
+
+    from app.repositories.search_repository import _build_advanced_conditions
+
+    conds = _build_advanced_conditions(
+        q=None,
+        genres=[],
+        actresses=["A1"],
+        series_list=[],
+        directors=[],
+        makers=[],
+        labels=[],
+        date_from=None,
+        date_to=None,
+        ng_words=[],
+    )
+    sql = _compile(and_(*conds))
+    assert "movie_actresses.movie_id = movies.id" in sql
+    assert "movies.id IN" not in sql
+    assert "HAVING" not in sql.upper()
+    assert "A1" in sql
+
+
+def test_multi_genre_and_produces_one_exists_per_genre() -> None:
+    """複数 genres の AND は「ジャンルごとに 1 つの相関 EXISTS」に分解される。
+
+    `genres=["G1","G2"]` で 2 つの genre EXISTS が出ること (= N 個すべて持つ作品)。
+    """
+    from sqlalchemy import and_
+
+    from app.repositories.search_repository import _build_advanced_conditions
+
+    conds = _build_advanced_conditions(
+        q=None,
+        genres=["G1", "G2"],
+        actresses=[],
+        series_list=[],
+        directors=[],
+        makers=[],
+        labels=[],
+        date_from=None,
+        date_to=None,
+        ng_words=[],
+    )
+    sql = _compile(and_(*conds))
+    # 2 ジャンル分の相関 EXISTS
+    assert sql.count("movie_genres.movie_id = movies.id") == 2
+    assert "G1" in sql
+    assert "G2" in sql
+    # 材料化形ではない
+    assert "movies.id IN" not in sql

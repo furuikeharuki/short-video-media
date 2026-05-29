@@ -421,8 +421,18 @@ export default function FeedItem({ item, isActive, isAdjacent = false, isFirst, 
 
   // host-only deadlock 監視: isActive かつ videoSrc 解決済みかつ canPromote=true で
   // promoted 要素がまだ来ていない状態が長時間続くと、pool entry が canplay に到達
-  // できない (or registry race) ことが確定的。一定時間 (4s) 経過しても解消しない
-  // なら自分宛に video-force-fallback を発火させて JSX <video> 経路に逃がす。
+  // できない (or registry race) ことが確定的。一定時間経過しても解消しないなら
+  // 自分宛に video-force-fallback を発火させて JSX <video> 経路に逃がす。
+  //
+  // タイムアウト値の使い分け:
+  //   - canplay 済みの pool entry が存在する (hasPromotableElement=true) 場合:
+  //     真の deadlock (promote 自体が何らかの理由で完了しない) なので 4 秒待つ。
+  //   - pending entry しかない (hasPendingElement=true のみ) 場合:
+  //     pool entry が canplay に到達するのを待っているが、active 化後 500ms 以内に
+  //     canplay に到達しなければ、JSX <video> をゼロから立ち上げる方が高速。
+  //     この経路で 4 秒待つと毎ページ 500ms〜1s の余計な遅延が発生する。
+  //     (観測: bound=null → stale-element → host-only-deadlock の連鎖)
+  //
   // 解消条件 (promotedElement set / 非 active / videoSrc 消失) は依存配列の変化で
   // 自動的に timer cleanup される。
   useEffect(() => {
@@ -431,7 +441,12 @@ export default function FeedItem({ item, isActive, isAdjacent = false, isFirst, 
     if (!canPromote) return;
     if (promotedElement) return;
     if (forceFallbackSlug === item.slug) return;
-    const HOST_ONLY_DEADLOCK_MS = 4000;
+    // canplay 到達済みの pool entry がある場合は真の deadlock として長めのタイムアウト。
+    // pending (canplay 未到達) のみの場合は短いタイムアウトで素早く JSX <video> に逃がす。
+    const isPendingOnly =
+      !hasPromotableElement(item.slug, videoSrc) &&
+      hasPendingElement(item.slug, videoSrc);
+    const HOST_ONLY_DEADLOCK_MS = isPendingOnly ? 500 : 4000;
     const timer = setTimeout(() => {
       try {
         window.dispatchEvent(

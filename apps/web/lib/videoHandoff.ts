@@ -241,14 +241,31 @@ function trimPoolIfNeeded() {
  * prefetch buffer 側から呼ぶ。新規 <video> 要素を作って host に append し、
  * registry へ登録する。同 slug の既存 entry がある場合は src が一致して連結中で
  * あれば再利用、それ以外は古い要素を destroy。
+ *
+ * `minStart` (秒) を渡すと、隠し <video> の loadedmetadata 後に currentTime を
+ * その値にセットする。これによりブラウザは「先頭のバッファ」だけでなく
+ * 「minStart 地点付近のバッファ」も Range request で取得しに行く。
+ *
+ * 背景: pro-actress 作品は active 側で必ず currentTime=5 にシークするが、
+ * 隠し <video> がデフォルトで先頭バイトだけしか preload しないと、active が
+ * promote した直後の seek で 5s 地点のバイトが未取得 → loadedmetadata 後の
+ * rebuffer 待ちが発生し、playback start まで 1〜数秒遅延する
+ * (`pro-actress seek deadline extend reason=loading-at-minStart` のループ)。
+ * minStart を事前に currentTime に書き込むことで、ブラウザが裏で 5s 地点付近の
+ * Range も投げてくれるので、active 化時の seek が即 canplay まで進む。
  */
 export function registerPrefetchElement(args: {
   slug: string;
   src: string;
   preload: "auto" | "metadata" | "none";
+  /**
+   * 再生開始秒数 (= 先頭スキップ秒数)。0 / undefined はノーマルケース。
+   * loadedmetadata 後に currentTime にセットされる。
+   */
+  minStart?: number;
 }): HTMLVideoElement {
   ensureCleanupTimer();
-  const { slug, src, preload } = args;
+  const { slug, src, preload, minStart = 0 } = args;
   const existing = registry.get(slug);
   if (existing) {
     // 同 src ならば、検出された preload / 接続状態に関係なく要素を再利用して
@@ -260,8 +277,12 @@ export function registerPrefetchElement(args: {
       }
       existing.detached = false;
       existing.pooledAt = Date.now();
+      // 再利用される要素にもまだ minStart 地点のバッファが入っていない可能性が
+      // あるので、currentTime が 0 のままなら遅延セットを再アーム。既に minStart
+      // 以上に進んでいる (= 既に seek 済み or 再生中) なら何もしない。
+      ensureMinStartArmed(existing.el, slug, minStart);
       vtHandoffLog(
-        `reuse slug=${slug} preload=${preload} readiness=${existing.readiness} from=${fromPool ? "pool" : "active"}`,
+        `reuse slug=${slug} preload=${preload} readiness=${existing.readiness} from=${fromPool ? "pool" : "active"}${minStart > 0 ? ` minStart=${minStart}` : ""}`,
       );
       return existing.el;
     }
@@ -285,6 +306,11 @@ export function registerPrefetchElement(args: {
   el.style.opacity = "0";
   el.style.pointerEvents = "none";
   el.style.zIndex = "-1";
+  // minStart があれば loadedmetadata で currentTime をセットして 5s 地点付近の
+  // バイト取得を browser に依頼する。`<video>.load()` の前にハンドラを仕込む
+  // (preload="none" の場合は loadedmetadata が来ないので何も起きないが、
+  // 通常の preload="auto"/"metadata" では確実にハンドラが走る)。
+  ensureMinStartArmed(el, slug, minStart);
   // iOS Safari は load() を呼ばないと preload が走らないことがある
   try {
     el.load();
@@ -301,9 +327,68 @@ export function registerPrefetchElement(args: {
     pinned: false,
     nearProtected: false,
   });
-  vtHandoffLog(`register slug=${slug} preload=${preload}`);
+  vtHandoffLog(
+    `register slug=${slug} preload=${preload}${minStart > 0 ? ` minStart=${minStart}` : ""}`,
+  );
   notify();
   return el;
+}
+
+/**
+ * 隠し <video> 要素に「loadedmetadata 後に currentTime=minStart をセットする」
+ * one-shot ハンドラを仕込む。
+ *
+ * - minStart<=0: 何もしない。
+ * - 既に loadedmetadata 済み (readyState>=1) かつ currentTime<minStart: 即セット。
+ * - readyState<1: 1 度だけ loadedmetadata を待ってセット。
+ *
+ * `currentTime` 設定後は seek が走るので、browser が Range request で seek
+ * 先付近のバイトを取りに行く。これは隠し要素の readiness ステート遷移
+ * (loadedmetadata → seeking → seeked → canplay) を経るので、prefetch の
+ * canplay 判定も seek 完了後に出るようになる (= active 化時の seek が即時化)。
+ *
+ * 再アーム時 (=同 src 再利用): 既存ハンドラを撤去してから再登録。これにより
+ * 同じ要素に重複ハンドラが残らない。
+ */
+function ensureMinStartArmed(
+  el: HTMLVideoElement,
+  slug: string,
+  minStart: number,
+) {
+  if (!Number.isFinite(minStart) || minStart <= 0) return;
+  // 既に minStart 以上に進んでいるなら何もしない (= 既に seek 済み or 再生中)。
+  if (el.currentTime + 0.05 >= minStart) return;
+  const applySeek = () => {
+    // 直前で active 側に claim されて再生に乗っていれば触らない。currentTime が
+    // 既に minStart 以上なら何もしない (= 別経路で seek 済み)。
+    if (el.currentTime + 0.05 >= minStart) return;
+    try {
+      el.currentTime = minStart;
+      vtHandoffLog(`minStart-seek slug=${slug} t=${minStart}`);
+    } catch {
+      /* ignore (まれに NotSupportedError) */
+    }
+  };
+  if (el.readyState >= 1) {
+    // 既に metadata 取得済みなら即セット。
+    applySeek();
+    return;
+  }
+  // 旧ハンドラがあれば消して、再アーム。
+  const prev = (el as HTMLVideoElement & { __minStartHandler__?: () => void })
+    .__minStartHandler__;
+  if (prev) {
+    el.removeEventListener("loadedmetadata", prev);
+  }
+  const handler = () => {
+    applySeek();
+    el.removeEventListener("loadedmetadata", handler);
+    (el as HTMLVideoElement & { __minStartHandler__?: () => void })
+      .__minStartHandler__ = undefined;
+  };
+  (el as HTMLVideoElement & { __minStartHandler__?: () => void })
+    .__minStartHandler__ = handler;
+  el.addEventListener("loadedmetadata", handler);
 }
 
 export function updateReadiness(slug: string, readiness: HandoffReadiness) {

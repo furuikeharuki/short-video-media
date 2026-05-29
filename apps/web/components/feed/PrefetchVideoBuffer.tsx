@@ -33,6 +33,14 @@ interface Props {
    * 親 (usePrefetchVideoBytes) が slot を生成した瞬間に固定したものを渡す。
    */
   offset?: number;
+  /**
+   * 再生開始秒数 (= pro-actress 作品の先頭スキップ秒数)。0 / undefined は
+   * ノーマルケース。registry に渡され、loadedmetadata 後に
+   * `<video>.currentTime` にセットされて、browser が minStart 付近の Range も
+   * 裏で取得するように誘導する。これにより active 化時の seek が即 canplay まで
+   * 進むようになり、`pro-actress seek deadline extend` ループを回避する。
+   */
+  minStart?: number;
   onError?: (slug: string) => void;
   onMetadata?: (slug: string) => void;
   onCanPlay?: (slug: string) => void;
@@ -49,6 +57,7 @@ export default function PrefetchVideoBuffer({
   src,
   preload = "auto",
   offset,
+  minStart,
   onError,
   onMetadata,
   onCanPlay,
@@ -65,7 +74,7 @@ export default function PrefetchVideoBuffer({
       return;
     }
 
-    const el = registerPrefetchElement({ slug, src, preload });
+    const el = registerPrefetchElement({ slug, src, preload, minStart });
     host.appendChild(el);
 
     const offLabel = offset != null ? `+${offset}` : "?";
@@ -109,7 +118,7 @@ export default function PrefetchVideoBuffer({
       // claim 済みの場合は releasePrefetchElement が no-op になる。
       releasePrefetchElement(slug, el);
     };
-  }, [src, preload, slug, offset, onMetadata, onCanPlay, onError]);
+  }, [src, preload, slug, offset, minStart, onMetadata, onCanPlay, onError]);
 
   // host だけ React で管理する。実 <video> 要素は registerPrefetchElement が作る。
   return (

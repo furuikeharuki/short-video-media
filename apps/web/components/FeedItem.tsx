@@ -447,7 +447,23 @@ export default function FeedItem({ item, isActive, isAdjacent = false, isFirst, 
       !hasPromotableElement(item.slug, videoSrc) &&
       hasPendingElement(item.slug, videoSrc);
     const HOST_ONLY_DEADLOCK_MS = isPendingOnly ? 1800 : 4000;
-    const timer = setTimeout(() => {
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    let unsub: (() => void) | null = null;
+    const fire = () => {
+      // タイマー満了直前に pool が canplay に到達していた場合、force-fallback を
+      // 飛ばすと既存の pending-promote 経路 (canplay 到達で claim → late-rebind)
+      // が「force-fallback による stale abort」と競合してしまう。観測ログでも
+      //   handoff pool readiness ... readiness=canplay (deadline 直後)
+      //   → handoff claim hit from=pool
+      //   → late-rebind
+      //   → active autoplay abort reason=stale-active trigger=force-fallback
+      // という無駄な往復が発��していた。タイマー満了時にもう一度 registry を
+      // sync で読み、canplay 済みなら force-fallback を発火せず subscribe 経路へ
+      // 任せる。本当に metadata で詰まったケースは subscribe で canplay が来ない
+      // ので、後段の rearm (下の subscribe 経由) で短い猶予のあと fallback する。
+      if (hasPromotableElement(item.slug, videoSrc)) {
+        return;
+      }
       try {
         window.dispatchEvent(
           new CustomEvent("video-force-fallback", {
@@ -457,8 +473,29 @@ export default function FeedItem({ item, isActive, isAdjacent = false, isFirst, 
       } catch {
         /* ignore */
       }
-    }, HOST_ONLY_DEADLOCK_MS);
-    return () => clearTimeout(timer);
+    };
+    timer = setTimeout(fire, HOST_ONLY_DEADLOCK_MS);
+    // タイマー満了「前」に pool readiness が canplay に到達した場合は force-fallback
+    // 自体を抑止する。pending-promote 経路 (上の subscribe useEffect) がそのまま
+    // claim → promote するので、JSX <video> へ remount する必要はない。
+    // subscribe コールバックは pool readiness 変化など registry の任意変更で発火
+    // するため、ここで hasPromotableElement を毎回チェックする。
+    unsub = subscribeVideoHandoff(() => {
+      if (hasPromotableElement(item.slug, videoSrc)) {
+        if (timer) {
+          clearTimeout(timer);
+          timer = null;
+        }
+        if (unsub) {
+          unsub();
+          unsub = null;
+        }
+      }
+    });
+    return () => {
+      if (timer) clearTimeout(timer);
+      if (unsub) unsub();
+    };
   }, [isActive, videoSrc, canPromote, promotedElement, forceFallbackSlug, item.slug]);
   // アンマウント / 非 active 化で残った pending pin を解除する。
   // pinned entry を解放しないと、別ユーザー操作で同 slug が active になるまで

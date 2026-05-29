@@ -447,23 +447,26 @@ export default function FeedItem({ item, isActive, isAdjacent = false, isFirst, 
       !hasPromotableElement(item.slug, videoSrc) &&
       hasPendingElement(item.slug, videoSrc);
     const HOST_ONLY_DEADLOCK_MS = isPendingOnly ? 1800 : 4000;
+    // PR #272 でタイマー満了時に hasPromotableElement を再判定するようにしたが、
+    // 観測ログでは「force-fallback engaged の数 ms〜数十 ms 後に pool readiness が
+    // canplay に到達する」レースが残っていた (例: 61mdtm00435 / suji00117)。
+    // 結果として late-rebind → active autoplay abort reason=stale-active という
+    // 無駄な往復が発生し、再生開始が遅れる。
+    //
+    // そこで deadline 到達時点でまだ promotable でない場合、即座に force-fallback
+    // を発火せず最終 grace (FINAL_GRACE_MS) を一度だけ与える:
+    //   - grace 中も subscribe は active で、canplay → claim 経路に乗ったら fire を
+    //     キャンセルして JSX <video> remount を回避する。
+    //   - grace を超えても canplay/promotable が来ないなら、本当に詰まったケース
+    //     として従来通り force-fallback を engage する。
+    // 350ms は実ログ (deadline → canplay が 12〜数十 ms) に十分なマージンで、かつ
+    // 全体のフォールバック時間 (pending 1800ms + grace 350ms = 2150ms) を実用的な
+    // 範囲に保つ。
+    const FINAL_GRACE_MS = 350;
     let timer: ReturnType<typeof setTimeout> | null = null;
+    let graceTimer: ReturnType<typeof setTimeout> | null = null;
     let unsub: (() => void) | null = null;
-    const fire = () => {
-      // タイマー満了直前に pool が canplay に到達していた場合、force-fallback を
-      // 飛ばすと既存の pending-promote 経路 (canplay 到達で claim → late-rebind)
-      // が「force-fallback による stale abort」と競合してしまう。観測ログでも
-      //   handoff pool readiness ... readiness=canplay (deadline 直後)
-      //   → handoff claim hit from=pool
-      //   → late-rebind
-      //   → active autoplay abort reason=stale-active trigger=force-fallback
-      // という無駄な往復が発��していた。タイマー満了時にもう一度 registry を
-      // sync で読み、canplay 済みなら force-fallback を発火せず subscribe 経路へ
-      // 任せる。本当に metadata で詰まったケースは subscribe で canplay が来ない
-      // ので、後段の rearm (下の subscribe 経由) で短い猶予のあと fallback する。
-      if (hasPromotableElement(item.slug, videoSrc)) {
-        return;
-      }
+    const dispatchFallback = () => {
       try {
         window.dispatchEvent(
           new CustomEvent("video-force-fallback", {
@@ -474,9 +477,52 @@ export default function FeedItem({ item, isActive, isAdjacent = false, isFirst, 
         /* ignore */
       }
     };
+    const fire = () => {
+      // タイマー満了直前に pool が canplay に到達していた場合、force-fallback を
+      // 飛ばすと既存の pending-promote 経路 (canplay 到達で claim → late-rebind)
+      // が「force-fallback による stale abort」と競合してしまう。観測ログでも
+      //   handoff pool readiness ... readiness=canplay (deadline 直後)
+      //   → handoff claim hit from=pool
+      //   → late-rebind
+      //   → active autoplay abort reason=stale-active trigger=force-fallback
+      // という無駄な往復が発生していた。タイマー満了時にもう一度 registry を
+      // sync で読み、canplay 済みなら force-fallback を発火せず subscribe 経路へ
+      // 任せる。
+      if (hasPromotableElement(item.slug, videoSrc)) {
+        return;
+      }
+      // まだ promotable でない場合、最終 grace を 1 度だけ走らせて canplay の
+      // 到達を待つ。grace 中も subscribe は生かしておき、canplay が来たら timer
+      // を解除する経路 (下の unsub コールバック) に処理を任せる。
+      if (isVideoTimingEnabled()) {
+        // eslint-disable-next-line no-console
+        console.debug(
+          `vt ${item.slug}: host-only-deadlock final-grace start ms=${FINAL_GRACE_MS}`,
+        );
+      }
+      graceTimer = setTimeout(() => {
+        graceTimer = null;
+        if (hasPromotableElement(item.slug, videoSrc)) {
+          if (isVideoTimingEnabled()) {
+            // eslint-disable-next-line no-console
+            console.debug(
+              `vt ${item.slug}: host-only-deadlock final-grace cancel reason=promotable`,
+            );
+          }
+          return;
+        }
+        if (isVideoTimingEnabled()) {
+          // eslint-disable-next-line no-console
+          console.debug(
+            `vt ${item.slug}: host-only-deadlock final-grace expired`,
+          );
+        }
+        dispatchFallback();
+      }, FINAL_GRACE_MS);
+    };
     timer = setTimeout(fire, HOST_ONLY_DEADLOCK_MS);
-    // タイマー満了「前」に pool readiness が canplay に到達した場合は force-fallback
-    // 自体を抑止する。pending-promote 経路 (上の subscribe useEffect) がそのまま
+    // タイマー満了「前」または最終 grace 中に pool readiness が canplay に到達した
+    // 場合は force-fallback 自体を抑止する。pending-promote 経路がそのまま
     // claim → promote するので、JSX <video> へ remount する必要はない。
     // subscribe コールバックは pool readiness 変化など registry の任意変更で発火
     // するため、ここで hasPromotableElement を毎回チェックする。
@@ -486,6 +532,16 @@ export default function FeedItem({ item, isActive, isAdjacent = false, isFirst, 
           clearTimeout(timer);
           timer = null;
         }
+        if (graceTimer) {
+          clearTimeout(graceTimer);
+          graceTimer = null;
+          if (isVideoTimingEnabled()) {
+            // eslint-disable-next-line no-console
+            console.debug(
+              `vt ${item.slug}: host-only-deadlock final-grace cancel reason=promotable`,
+            );
+          }
+        }
         if (unsub) {
           unsub();
           unsub = null;
@@ -494,6 +550,7 @@ export default function FeedItem({ item, isActive, isAdjacent = false, isFirst, 
     });
     return () => {
       if (timer) clearTimeout(timer);
+      if (graceTimer) clearTimeout(graceTimer);
       if (unsub) unsub();
     };
   }, [isActive, videoSrc, canPromote, promotedElement, forceFallbackSlug, item.slug]);

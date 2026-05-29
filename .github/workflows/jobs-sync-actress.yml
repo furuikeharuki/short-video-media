@@ -18,11 +18,11 @@ on:
   workflow_dispatch:
     inputs:
       only_missing:
-        description: "--only-missing を付けるか (false にすると全女優再取得)"
+        description: "--only-missing を付けるか (false で全女優再取得、空なら env→true)"
         required: false
         default: "true"
       limit:
-        description: "処理件数上限 (空なら無制限)"
+        description: "処理件数上限 (空なら env SYNC_ACTRESS_LIMIT → 無制限)"
         required: false
         default: ""
 
@@ -59,6 +59,10 @@ jobs:
           USER: ${{ secrets.XSERVER_SSH_USER }}
           PORT: ${{ secrets.XSERVER_SSH_PORT }}
           REPO_DIR: ${{ secrets.XSERVER_REPO_DIR }}
+          # workflow_dispatch 由来の値。only_missing は cron デフォルトとして
+          # "true" を維持するため空でも "true" にフォールバックする。
+          # limit が空のときは sync_actress_profiles 側で env SYNC_ACTRESS_LIMIT
+          # → 無制限の順にフォールバックする。
           ONLY_MISSING: ${{ github.event.inputs.only_missing || 'true' }}
           LIMIT: ${{ github.event.inputs.limit || '' }}
         run: |
@@ -75,11 +79,15 @@ jobs:
           if [ "${ONLY_MISSING}" = "true" ]; then
             ONLY_MISSING_ARG="--only-missing"
           fi
+          # LIMIT は CLI 値があれば渡し、空なら env (SYNC_ACTRESS_LIMIT) に委譲。
           LIMIT_ARG=""
           if [ -n "${LIMIT}" ]; then
             LIMIT_ARG="--limit ${LIMIT}"
           fi
 
+          # SYNC_ACTRESS_* は infra/xserver/.env から docker compose の
+          # env_file 経由で jobs コンテナに渡り、CLI 未指定時のフォールバックとして
+          # スクリプトに参照される。
           ssh ${PORT_OPT} -o BatchMode=yes "${USER}@${HOST}" bash -s <<EOF
           set -euo pipefail
           cd "${REPO_DIR}/infra/xserver"

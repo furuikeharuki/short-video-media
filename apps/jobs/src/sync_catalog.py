@@ -1851,84 +1851,176 @@ async def main(
 
 
 
-if __name__ == "__main__":
+def _resolve_cli_args(argv: list[str] | None = None) -> dict:
+    """CLI 引数と環境変数から `main()` 用 kwargs を解決する。
+
+    優先順位は CLI > 環境変数 > ハードコード default。
+    CLI で値が指定されたかどうかを判定するため、CLI 側のデフォルトは全て
+    sentinel (`None` / `False`) にしておく (`store_true` のみ False)。
+
+    cron 用の環境変数は「最新データを取り続ける」運用に合わせて意図的に
+    相対値だけを受け付ける (`scheduled_config.py` 参照):
+      - SYNC_CATALOG_HITS          : 1 フロアあたり取得件数 (incremental)
+      - SYNC_CATALOG_FLOORS        : カンマ区切り (videoa,videoc,goods)
+      - SYNC_CATALOG_LOOKBACK_DAYS : 起動時に「今日 - N 日」を gte_date として渡す
+      - SYNC_CATALOG_DRY_RUN       : 1/true で書き込みなし
+
+    固定日付の env (`*_GTE_DATE` / `*_LTE_DATE` / `*_START_DATE` / `*_END_DATE`) や
+    モード env はあえて受け付けない: 設定したまま放置すると cron が古い日付に
+    固定されて最新を取りこぼすため。日付指定の CLI フラグはバックフィル/手動運用
+    用途に残してあるので、必要な場合は --mode / --start-date 等を直接渡すこと。
+    """
+    from src import scheduled_config as cfg
+
     parser = argparse.ArgumentParser()
     parser.add_argument(
         "--mode",
         choices=["incremental", "full"],
         default="incremental",
         help=(
-            "incremental: フロアごとに hits 件だけ取る (デフォルト、毎時 cron 用) / "
-            "full: 期間スライスして全件取る (ブートストラップ / 月 1 用)"
+            "incremental: フロアごとに hits 件だけ取る (デフォルト、cron 用) / "
+            "full: 期間スライスして全件取る (ブートストラップ / 手動バックフィル用)。"
+            " 固定日付に縛られないよう env からは設定不可。"
         ),
     )
-    parser.add_argument("--hits", type=int, default=100, help="incremental モードでの 1 フロアあたり取得件数 (デフォルト 100)")
+    parser.add_argument(
+        "--hits", type=int, default=None,
+        help=(
+            "incremental モードでの 1 フロアあたり取得件数。"
+            " 未指定なら env SYNC_CATALOG_HITS → 100"
+        ),
+    )
     parser.add_argument(
         "--floors",
         type=str,
         default=None,
-        help="対象フロアをカンマ区切りで限定 (例: videoa,videoc,goods)",
+        help=(
+            "対象フロアをカンマ区切りで限定 (例: videoa,videoc,goods)。"
+            " 未指定なら env SYNC_CATALOG_FLOORS → sync_catalog の mode 別デフォルト"
+        ),
     )
     parser.add_argument(
         "--start-date",
         type=str,
         default="2000-01-01",
-        help="full モードで取得する期間の開始日 (YYYY-MM-DD、デフォルト 2000-01-01)",
+        help=(
+            "full モードで取得する期間の開始日 (YYYY-MM-DD、デフォルト 2000-01-01)。"
+            " 手動バックフィル用。cron からは設定しないこと。"
+        ),
     )
     parser.add_argument(
         "--end-date",
         type=str,
         default="",
-        help="full モードで取得する期間の終了日 (YYYY-MM-DD、空なら今日)",
+        help=(
+            "full モードで取得する期間の終了日 (YYYY-MM-DD、空なら今日)。"
+            " 手動バックフィル用。"
+        ),
     )
     parser.add_argument(
         "--gte-date",
         type=str,
         default="",
-        help="incremental モードで期間フィルタをかけるときの下限 (YYYY-MM-DD)",
+        help=(
+            "incremental モードの期間下限 (YYYY-MM-DD)。手動指定用。"
+            " cron で動的に下限を入れたい場合は SYNC_CATALOG_LOOKBACK_DAYS を使う。"
+        ),
     )
     parser.add_argument(
         "--lte-date",
         type=str,
         default="",
-        help="incremental モードで期間フィルタをかけるときの上限 (YYYY-MM-DD)",
+        help=(
+            "incremental モードの期間上限 (YYYY-MM-DD)。手動指定用。"
+            " cron では上限を入れず常に最新を取りに行くため env では受け付けない。"
+        ),
     )
-    parser.add_argument("--dry-run", action="store_true", help="DB に書き込まずにログだけ表示")
-    args = parser.parse_args()
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="DB に書き込まずにログだけ表示 (env SYNC_CATALOG_DRY_RUN=1 でも有効)",
+    )
+    args = parser.parse_args(argv)
 
-    floors_filter = None
-    if args.floors:
-        floors_filter = [f.strip() for f in args.floors.split(",") if f.strip()]
+    try:
+        mode = args.mode  # CLI default は "incremental" 固定
 
-    start_date: date | None = None
-    end_date: date | None = None
-    if args.mode == "full":
-        start_date = datetime.strptime(args.start_date, "%Y-%m-%d").date()
-        end_date = (
-            datetime.strptime(args.end_date, "%Y-%m-%d").date()
-            if args.end_date
-            else date.today()
-        )
+        # hits: CLI → env → 100
+        hits = args.hits
+        if hits is None:
+            hits = cfg.env_int("SYNC_CATALOG_HITS", minimum=1)
+        if hits is None:
+            hits = 100
 
-    # incremental モード用の期間フィルタ (DMM API の gte_date/lte_date は ISO 8601 なので
-    # T00:00:00 / T23:59:59 を付ける)
-    incremental_gte: str | None = None
-    incremental_lte: str | None = None
-    if args.gte_date:
-        # 検証だけ (パースして退取りしたものは使わず、文字列に戻して使う)
-        datetime.strptime(args.gte_date, "%Y-%m-%d")
-        incremental_gte = f"{args.gte_date}T00:00:00"
-    if args.lte_date:
-        datetime.strptime(args.lte_date, "%Y-%m-%d")
-        incremental_lte = f"{args.lte_date}T23:59:59"
+        # floors: CLI → env → None (sync_catalog のデフォルト挙動)
+        floors_filter: list[str] | None = None
+        if args.floors:
+            floors_filter = [f.strip().lower() for f in args.floors.split(",") if f.strip()]
+            invalid = [f for f in floors_filter if f not in {"videoa", "videoc", "goods"}]
+            if invalid:
+                raise cfg.EnvConfigError(
+                    f"--floors: 未知の floor が含まれています: {invalid}"
+                )
+        if floors_filter is None:
+            floors_filter = cfg.env_floor_list("SYNC_CATALOG_FLOORS")
 
-    asyncio.run(main(
-        mode=args.mode,
-        hits_per_floor=args.hits,
+        # dry_run: CLI flag が True なら True、それ以外は env
+        dry_run = bool(args.dry_run) or cfg.env_bool("SYNC_CATALOG_DRY_RUN", default=False)
+
+        # full モード期間 (CLI 専用)
+        start_date: date | None = None
+        end_date: date | None = None
+        if mode == "full":
+            start_date = datetime.strptime(args.start_date, "%Y-%m-%d").date()
+            end_date = (
+                datetime.strptime(args.end_date, "%Y-%m-%d").date()
+                if args.end_date
+                else date.today()
+            )
+
+        # incremental モード期間
+        # 1. CLI で --gte-date / --lte-date が指定されていれば最優先 (手動運用)。
+        # 2. CLI 未指定で SYNC_CATALOG_LOOKBACK_DAYS が設定されていれば
+        #    今日からの相対値で gte_date を計算する (cron でも常に「最新側」を取得)。
+        # 3. どちらも無ければ DMM API は無制限レンジ + sort=date desc で最新から取る
+        #    (= 既存挙動)。
+        incremental_gte: str | None = None
+        incremental_lte: str | None = None
+        lookback_days: int | None = None
+        if args.gte_date:
+            datetime.strptime(args.gte_date, "%Y-%m-%d")  # 検証
+            incremental_gte = f"{args.gte_date}T00:00:00"
+        else:
+            lookback_days = cfg.env_int("SYNC_CATALOG_LOOKBACK_DAYS", minimum=1)
+            if lookback_days is not None:
+                gte_date = date.today() - timedelta(days=lookback_days)
+                incremental_gte = f"{gte_date.isoformat()}T00:00:00"
+        if args.lte_date:
+            datetime.strptime(args.lte_date, "%Y-%m-%d")
+            incremental_lte = f"{args.lte_date}T23:59:59"
+    except cfg.EnvConfigError as e:
+        raise SystemExit(f"[sync_catalog] 設定エラー: {e}") from e
+
+    # 起動時にどの値が採用されたかログを出す (cron で env 設定の事故を見抜くため)
+    print(
+        f"[sync_catalog] resolved config: mode={mode} hits={hits} "
+        f"floors={floors_filter} dry_run={dry_run} "
+        f"start={start_date} end={end_date} "
+        f"gte={incremental_gte} lte={incremental_lte} "
+        f"lookback_days={lookback_days}"
+    )
+
+    return dict(
+        mode=mode,
+        hits_per_floor=hits,
         floors_filter=floors_filter,
-        dry_run=args.dry_run,
+        dry_run=dry_run,
         start_date=start_date,
         end_date=end_date,
         incremental_gte=incremental_gte,
         incremental_lte=incremental_lte,
-    ))
+    )
+
+
+if __name__ == "__main__":
+    asyncio.run(main(**_resolve_cli_args()))

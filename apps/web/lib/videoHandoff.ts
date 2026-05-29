@@ -69,6 +69,30 @@ interface HandoffEntry {
    * (canplay = 長 / pending = 短)。
    */
   nearProtected: boolean;
+  /**
+   * プール retain 中だけ <video> 要素に貼っておく readiness リスナ群。
+   *
+   * `PrefetchVideoBuffer` が unmount すると、buffer 側で attach されていた
+   * loadedmetadata/canplay リスナは cleanup で全て外れる。一方で要素自体は
+   * `releasePrefetchElement` でプールに retain されたまま、画面外で
+   * preload を継続する。
+   *
+   * このとき残骸 entry の readiness を最新に保たないと:
+   *   - 同 slug が再び +1/+2 に来て fire() が呼ばれても、registry の readiness が
+   *     metadata のまま固まり、active 到達時の `tryClaim` が
+   *     `not-canplay → markStaleClaim → host-only-deadlock → force-fallback` の
+   *     経路に落ちる。
+   * これを防ぐため、retain 時に pool 自身が `loadedmetadata` / `canplay` を
+   * subscribe し、registry 側で updateReadiness を呼ぶ。
+   *
+   * register/claim/destroy/evict 時には必ず detach する (二重発火防止)。
+   */
+  poolListeners: PoolListeners | null;
+}
+
+interface PoolListeners {
+  onLoadedMetadata: () => void;
+  onCanPlay: () => void;
 }
 
 type Listener = () => void;
@@ -134,8 +158,7 @@ function cleanupExpired() {
     const ttl =
       entry.readiness === "canplay" ? POOL_TTL_CANPLAY_MS : POOL_TTL_PENDING_MS;
     if (now - entry.pooledAt > ttl) {
-      destroyElement(entry.el);
-      registry.delete(slug);
+      disposeEntry(entry);
       vtHandoffLog(
         `pool evict slug=${slug} reason=ttl readiness=${entry.readiness} age=${now - entry.pooledAt}ms`,
       );
@@ -152,6 +175,68 @@ function notify() {
       /* ignore listener errors */
     }
   }
+}
+
+/**
+ * プール retain 中の <video> 要素に readiness リスナを attach する。
+ * 多重 attach はガードする。
+ */
+function attachPoolReadinessListeners(entry: HandoffEntry) {
+  if (entry.poolListeners) return;
+  const { slug, el } = entry;
+  const onLoadedMetadata = () => {
+    // entry がプールから外れていたら何もしない (claim 済み / src 切替後など)。
+    const cur = registry.get(slug);
+    if (!cur || cur.el !== el) return;
+    if (cur.readiness === "canplay") return;
+    cur.readiness = "metadata";
+    vtHandoffLog(`pool readiness slug=${slug} readiness=metadata`);
+    notify();
+  };
+  const onCanPlay = () => {
+    const cur = registry.get(slug);
+    if (!cur || cur.el !== el) return;
+    if (cur.readiness === "canplay") return;
+    cur.readiness = "canplay";
+    vtHandoffLog(`pool readiness slug=${slug} readiness=canplay`);
+    notify();
+  };
+  el.addEventListener("loadedmetadata", onLoadedMetadata);
+  el.addEventListener("canplay", onCanPlay);
+  entry.poolListeners = { onLoadedMetadata, onCanPlay };
+  // retain 直前に既に readyState が進んでいるケースを拾う (loadedmetadata は
+  // PrefetchVideoBuffer 側で観測済みかも知れないので updateReadiness 経路に
+  // 揃える)。
+  if (el.readyState >= 3 && entry.readiness !== "canplay") {
+    entry.readiness = "canplay";
+    vtHandoffLog(`pool readiness slug=${slug} readiness=canplay`);
+    notify();
+  } else if (el.readyState >= 1 && entry.readiness === "metadata") {
+    // 何もしない (既に metadata)。
+  }
+}
+
+function detachPoolReadinessListeners(entry: HandoffEntry) {
+  const ls = entry.poolListeners;
+  if (!ls) return;
+  try {
+    entry.el.removeEventListener("loadedmetadata", ls.onLoadedMetadata);
+    entry.el.removeEventListener("canplay", ls.onCanPlay);
+  } catch {
+    /* ignore */
+  }
+  entry.poolListeners = null;
+}
+
+/**
+ * registry から entry を完全に取り除くときに使う。
+ * pool readiness listener の detach、<video> の destroy、registry.delete を
+ * 必ずこの順番で行うので、リスナ漏れによる post-destroy 通知や leak を防ぐ。
+ */
+function disposeEntry(entry: HandoffEntry) {
+  detachPoolReadinessListeners(entry);
+  destroyElement(entry.el);
+  registry.delete(entry.slug);
 }
 
 function vtHandoffLog(message: string) {
@@ -193,8 +278,7 @@ function trimPoolIfNeeded() {
     });
     const overflow = sorted.slice(0, sorted.length - MAX_POOLED_NON_CANPLAY);
     for (const entry of overflow) {
-      destroyElement(entry.el);
-      registry.delete(entry.slug);
+      disposeEntry(entry);
       vtHandoffLog(
         `pool evict slug=${entry.slug} reason=cap-pending readiness=${entry.readiness} near=${entry.nearProtected}`,
       );
@@ -229,8 +313,7 @@ function trimPoolIfNeeded() {
   });
   const toRemove = remaining.slice(0, remaining.length - MAX_POOLED_ELEMENTS);
   for (const entry of toRemove) {
-    destroyElement(entry.el);
-    registry.delete(entry.slug);
+    disposeEntry(entry);
     vtHandoffLog(
       `pool evict slug=${entry.slug} reason=cap readiness=${entry.readiness} near=${entry.nearProtected}`,
     );
@@ -275,6 +358,9 @@ export function registerPrefetchElement(args: {
       if (existing.el.preload !== preload) {
         existing.el.preload = preload;
       }
+      // PrefetchVideoBuffer が新たに自前の readiness リスナを貼るので、
+      // pool 専用リスナは外して二重発火を避ける。
+      detachPoolReadinessListeners(existing);
       existing.detached = false;
       existing.pooledAt = Date.now();
       // 再利用される要素にもまだ minStart 地点のバッファが入っていない可能性が
@@ -287,8 +373,7 @@ export function registerPrefetchElement(args: {
       return existing.el;
     }
     // src が変わった (force-resolve リトライなど) → 古いノードを破棄
-    destroyElement(existing.el);
-    registry.delete(slug);
+    disposeEntry(existing);
   }
   const el = document.createElement("video");
   el.src = src;
@@ -326,6 +411,7 @@ export function registerPrefetchElement(args: {
     detached: false,
     pinned: false,
     nearProtected: false,
+    poolListeners: null,
   });
   vtHandoffLog(
     `register slug=${slug} preload=${preload}${minStart > 0 ? ` minStart=${minStart}` : ""}`,
@@ -476,6 +562,10 @@ export function claimForFeed(slug: string, src: string): HTMLVideoElement | null
     vtHandoffLog(`claim miss slug=${slug} reason=not-canplay readiness=${entry.readiness}`);
     return null;
   }
+  // pool retain 中にリスナを貼っていたら、claim 直前に外す。active 側 (FeedItem)
+  // は claim した要素に自前の loadedmetadata/canplay/playing リスナを貼るため、
+  // 二重 dispatch を避ける。
+  detachPoolReadinessListeners(entry);
   registry.delete(slug);
   justClaimed.add(slug);
   vtHandoffLog(
@@ -522,6 +612,12 @@ export function releasePrefetchElement(slug: string, el: HTMLVideoElement | null
   }
   entry.detached = true;
   entry.pooledAt = Date.now();
+  // PrefetchVideoBuffer 側の readiness リスナは cleanup で外れているため、
+  // プールが responsible 主体として loadedmetadata / canplay を subscribe する。
+  // これがないと metadata で retain された要素はその後 canplay に達しても
+  // registry の readiness が metadata で固まり、active 到達時の tryClaim が
+  // `not-canplay → host-only-deadlock → force-fallback` に落ちる。
+  attachPoolReadinessListeners(entry);
   vtHandoffLog(`pool retain slug=${slug} readiness=${entry.readiness}`);
   trimPoolIfNeeded();
   notify();
@@ -591,8 +687,7 @@ export function syncNearProtection(slugs: ReadonlyArray<string>): void {
 export function evictSlug(slug: string) {
   const entry = registry.get(slug);
   if (!entry) return;
-  destroyElement(entry.el);
-  registry.delete(slug);
+  disposeEntry(entry);
   notify();
 }
 
@@ -665,8 +760,7 @@ export function markStaleClaim(slug: string, reason: StaleClaimReason): void {
   // ほぼないが、安全側に倒す)。
   const entry = registry.get(slug);
   if (entry && !entry.pinned) {
-    destroyElement(entry.el);
-    registry.delete(slug);
+    disposeEntry(entry);
     vtHandoffLog(
       `pool evict slug=${slug} reason=stale-claim claim-reason=${reason}`,
     );

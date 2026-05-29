@@ -84,13 +84,17 @@ async def get_home(
         )
     )
 
-    # 3. 人気動画 (全期間の総視聴回数順)
+    # 3. 人気動画 (全期間の watch_count = 50% 以上再生に到達したユニーク
+    #    feed_session 数を主指標にする canonical な「人気」)。subtitle は
+    #    以前 "総視聴回数順" と書いていたが、フィード自動再生の通過 view を
+    #    含む raw view 数とは別物なので、ユーザーから見て分かりやすい
+    #    "視聴数順" に揃える。
     popular_items = await get_popular_all_time(db, limit=section_limit)
     sections.append(
         HomeSection(
             key="popular",
             title="人気動画",
-            subtitle="総視聴回数順",
+            subtitle="視聴数順",
             items=popular_items,
         )
     )
@@ -225,7 +229,7 @@ async def get_home_section(
 ) -> FeedResponse:
     """ホームセクションと同じ順番で、offset+limit の区間を SQL OFFSET/LIMIT で返す。
 
-    - key='popular'         : 総視聴回数順 (人気)
+    - key='popular'         : 視聴数順 (人気, 全期間 watch_count)
     - key='ranking_daily'   : 日間ランキング
     - key='ranking_weekly'  : 週間ランキング
     - key='ranking_monthly' : 月間ランキング

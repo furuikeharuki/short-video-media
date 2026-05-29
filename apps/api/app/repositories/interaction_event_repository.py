@@ -180,6 +180,12 @@ async def aggregate_watch_count_ranking_all_time(
 
     現在 movies テーブルに存在している可視 slug のみを集計対象にする。
     SQL レベルで OFFSET/LIMIT を適用。
+
+    HAVING c > 0 を明示しているのは防御的契約: 「watch_count ランキングに
+    返ってきた slug は必ず watch_count > 0」。watch_event WHERE フィルタを
+    通った行を GROUP BY すれば理論上 0 にはならないが、フィルタの拡張や
+    将来の DB 仕様変化で 0 件 group が混入したときに、ランキング service
+    側がそれを「見かけ 1 watch」として扱ってしまうのを防ぐ。
     """
     c = _distinct_watch_count_expr().label("c")
     stmt = (
@@ -191,6 +197,7 @@ async def aggregate_watch_count_ranking_all_time(
             Movie.is_visible.is_(True),
         )
         .group_by(InteractionEvent.slug)
+        .having(c > 0)
         .order_by(desc("c"), InteractionEvent.slug)
         .offset(offset)
         .limit(limit)
@@ -237,6 +244,9 @@ async def aggregate_watch_count_ranking(
             Movie.is_visible.is_(True),
         )
         .group_by(InteractionEvent.slug)
+        # HAVING c > 0: 全期間版と同じ防御契約。watch_count=0 の slug が
+        # フォールバックを差し置いて #1 になる事故を防ぐ。
+        .having(c > 0)
         .order_by(desc("c"), desc("last_watch"), InteractionEvent.slug)
         .offset(offset)
         .limit(limit)

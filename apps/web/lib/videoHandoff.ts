@@ -528,6 +528,97 @@ export function releasePrefetchElement(slug: string, el: HTMLVideoElement | null
 }
 
 /**
+ * active だった <video> 要素を「直前見ていた」枚として handoff pool に移管する。
+ *
+ * 背景: ユーザが上方向にスワイプして「さっき見ていた動画」に戻ったとき、
+ * prefetch は下方向 (+1/+2/+3) にしか走らず、上方向のスロットはゼロロードと
+ * なり遅延する。だが「直前まで active だった <video>」は既に canplay/再生中
+ * のバイトを保持しているので、破棄せずに pool に置いておけば、上戻り時に
+ * そのまま promote して即時再生できる。
+ *
+ * 制限:
+ *   - JSX <video> (React が所有) はそのまま移植すると reconciler と競合するため
+ *     適用不可。本関数の呼び元は「もともと pool 出身で handoff された
+ *     promoted 要素 (= React reconciler の外で生成された <video>)」のみを送ること。
+ *   - readyState>=3 (HAVE_FUTURE_DATA) のときのみ canplay として取っておく。
+ *     metadata 以下なら retain の価値が低いため、呼び元でフィルタしておくと良い。
+ *
+ * 実際の手順:
+ *   1. 同 slug の既存 entry が残っていたら破棄 (差し替え)。
+ *   2. 要素を pause + style を画面外に戻し、document.body 直下に再 attach。
+ *      (呼び元の host <div> は React がこの後 unmount するため、そこに置いていると
+ *      ブラウザに破棄されてしまう。)
+ *   3. registry に detached=true、readiness="canplay" で登録し、cap / TTL に乗せる。
+ *
+ * 戻り値: pool に retain できたか。false なら呼び元が要素を破棄してよい。
+ */
+export function retainActiveElementToPool(args: {
+  slug: string;
+  src: string;
+  el: HTMLVideoElement;
+}): boolean {
+  if (typeof window === "undefined" || typeof document === "undefined") {
+    return false;
+  }
+  const { slug, src, el } = args;
+  if (!slug || !src || !el) return false;
+  // canplay 以上の bytes を温存しているときだけ保持する。rs<3 なら
+  // browser が独自に継続ロードを止める可能性が高く、価値が低い。
+  if (el.readyState < 3) return false;
+  // src 未一致 (active 側で頻繁に force-resolve されるなど) も retain しない。
+  // promoted 要素は currentSrc が絶対 URL、src 属性も同一を期待する。
+  if (el.src !== src && el.currentSrc !== src) return false;
+  // 同 slug の entry が残っていたら古いものを破棄して上書き (force-resolve 後の
+  // ストレージや、fallback ルートで同 slug が二重登録されるケースに备える)。
+  const existing = registry.get(slug);
+  if (existing && existing.el !== el) {
+    destroyElement(existing.el);
+    registry.delete(slug);
+  }
+  try {
+    el.pause();
+  } catch {
+    /* ignore */
+  }
+  el.muted = true;
+  el.setAttribute("aria-hidden", "true");
+  el.tabIndex = -1;
+  el.style.position = "fixed";
+  el.style.top = "-9999px";
+  el.style.left = "-9999px";
+  el.style.width = "100px";
+  el.style.height = "100px";
+  el.style.opacity = "0";
+  el.style.pointerEvents = "none";
+  el.style.zIndex = "-1";
+  // コントロール付加 (active 表示で付いていたクラスを落とす)。
+  el.className = "";
+  if (el.parentNode) {
+    el.parentNode.removeChild(el);
+  }
+  try {
+    document.body.appendChild(el);
+  } catch {
+    return false;
+  }
+  ensureCleanupTimer();
+  registry.set(slug, {
+    slug,
+    src,
+    el,
+    readiness: "canplay",
+    pooledAt: Date.now(),
+    detached: true,
+    pinned: false,
+    nearProtected: false,
+  });
+  vtHandoffLog(`pool retain-active slug=${slug} rs=${el.readyState}`);
+  trimPoolIfNeeded();
+  notify();
+  return true;
+}
+
+/**
  * active 側が pending-handoff の claim 中であることを registry に伝える。
  * pin されている間は cap / TTL クリーンアップで evict されない。
  * canplay 到達による promote、または abandon を起こした active 側が

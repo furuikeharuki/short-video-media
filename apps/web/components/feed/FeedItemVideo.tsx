@@ -3,7 +3,13 @@
 import type { RefObject } from "react";
 import { useEffect, useLayoutEffect, useRef } from "react";
 
+import { retainActiveElementToPool } from "@/lib/videoHandoff";
+
 interface Props {
+  /**
+   * 作品 slug。promoted 要素を unmount 時に pool へ retain する際のキーに使う。
+   */
+  slug: string;
   src: string;
   preload: "auto" | "metadata";
   containerRef: RefObject<HTMLDivElement>;
@@ -51,6 +57,7 @@ interface Props {
 }
 
 export default function FeedItemVideo({
+  slug,
   src,
   preload,
   containerRef,
@@ -183,20 +190,35 @@ export default function FeedItemVideo({
       promotedElement.removeEventListener("playing", pl);
       promotedElement.removeEventListener("error", er);
       promotedElement.removeEventListener("contextmenu", cm);
-      // host からのデタッチと完全破棄。
-      try {
-        promotedElement.pause();
-      } catch {
-        /* ignore */
-      }
-      try {
-        promotedElement.removeAttribute("src");
-        promotedElement.load();
-      } catch {
-        /* ignore */
-      }
-      if (promotedElement.parentNode === host) {
-        host.removeChild(promotedElement);
+      // 「さっき見ていた動画」を pool に残す。retain 成功時は要素が document.body
+      // 直下に移されるので、本クリーンアップでは追加の破棄処理をしない。
+      // 条件: promote している slug と src が現在の props と一致 (途中で差し替わって
+      // いない) かつ readyState>=3 (HAVE_FUTURE_DATA) だけ。それ以外は従来通り破棄。
+      //
+      // これにより、ユーザが上方向にスワイプして同じ slug に戻ってきたとき、
+      // PrefetchVideoBuffer がその slug を +1 スロットとして registerPrefetchElement を
+      // 呼ぶと reuse ヒットし (= readyState/バッファそのままを保持)、active 化時に
+      // 即時 promote できる。
+      const retained = retainActiveElementToPool({
+        slug,
+        src,
+        el: promotedElement,
+      });
+      if (!retained) {
+        try {
+          promotedElement.pause();
+        } catch {
+          /* ignore */
+        }
+        try {
+          promotedElement.removeAttribute("src");
+          promotedElement.load();
+        } catch {
+          /* ignore */
+        }
+        if (promotedElement.parentNode === host) {
+          host.removeChild(promotedElement);
+        }
       }
       if (adoptedRef.current === promotedElement) {
         adoptedRef.current = null;
@@ -208,6 +230,8 @@ export default function FeedItemVideo({
   }, [
     promotedElement,
     preload,
+    slug,
+    src,
     onLoadStart,
     onLoadedMetadata,
     onLoadedData,

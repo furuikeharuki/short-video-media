@@ -274,7 +274,15 @@ export default function HamburgerMenu() {
           lineHeight: 1.6,
         }}>
           当サイトはアフィリエイト広告を含みます。<br />
-          &copy; {new Date().getFullYear()} AV Shorts
+          {/*
+            SSR は UTC タイムゾーンで動くため、年末の数時間 (UTC 12/31 15:00–24:00
+            = JST 1/1 00:00–09:00 等) はサーバとクライアントで getFullYear() が
+            食い違い、root layout 経由でレンダーされる本コンポーネントが
+            React error #418 (text content does not match server-rendered HTML)
+            の発生源になる。年表示自体は SEO 要件もないクライアント文言なので、
+            suppressHydrationWarning で動的部分だけ差分を許容する。
+          */}
+          &copy; <span suppressHydrationWarning>{new Date().getFullYear()}</span> AV Shorts
         </div>
       </div>
     </>

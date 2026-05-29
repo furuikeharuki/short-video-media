@@ -1,4 +1,4 @@
-"""シンプルな in-memory レートリミッタ。
+"""シンプルな in-memory レートリミッタ + 共通の client-IP 抽出ヘルパー。
 
 GitHub Actions 等で複数インスタンスが動く本番では Redis ベースに置き換えるべきだが、
 現状の Railway 1 インスタンス構成 + 軽量イベント計測の用途なら十分機能する。
@@ -32,6 +32,21 @@ from fastapi import HTTPException, Request, status
 from app.core.config import settings
 
 
+def client_ip(request: Request) -> str:
+    """リバースプロキシ越しに信頼できる client IP を返す。
+
+    Vercel / Railway / Cloudflare などの一般的なヘッダを優先し、最後に
+    request.client.host にフォールバックする。proxy が信頼できない環境では
+    ヘッダを偽装される余地はあるが、現状の Railway / Xserver 構成は
+    内部のリバースプロキシのみが付与するため許容する。
+    """
+    for header in ("x-forwarded-for", "x-real-ip", "cf-connecting-ip"):
+        v = request.headers.get(header)
+        if v:
+            return v.split(",")[0].strip()
+    return request.client.host if request.client else "unknown"
+
+
 class SlidingWindowRateLimiter:
     """IP ごとに 1 秒・1 分の sliding window でリクエスト数を制限する汎用クラス。
 
@@ -60,12 +75,7 @@ class SlidingWindowRateLimiter:
         self._check_count = 0
 
     def _client_ip(self, request: Request) -> str:
-        # Vercel / Railway などのリバースプロキシ越し
-        for header in ("x-forwarded-for", "x-real-ip", "cf-connecting-ip"):
-            v = request.headers.get(header)
-            if v:
-                return v.split(",")[0].strip()
-        return request.client.host if request.client else "unknown"
+        return client_ip(request)
 
     def _sweep_locked(self, now: float) -> None:
         """ロック内から呼ばれる。古い / 空 IP バケットを削除して memory を解放する。"""
@@ -188,3 +198,20 @@ _resolve_limiter = SlidingWindowRateLimiter(
 
 def get_resolve_rate_limiter() -> SlidingWindowRateLimiter:
     return _resolve_limiter
+
+
+# ----------------------------------------------------------------------------
+# コメント投稿用レートリミッタ
+# ----------------------------------------------------------------------------
+# 匿名 POST が通る分、スパムに晒されやすい。1 秒 2 件 / 1 分 10 件と保守的。
+# 重複本文ブロックや NG ワード判定は app/core/comment_spam.py で行い、
+# この限り はそれより前段 (純粋な連打) を防ぐ役目を持つ。
+_comment_limiter = SlidingWindowRateLimiter(
+    per_second=getattr(settings, "COMMENT_RATE_LIMIT_PER_SECOND", 2),
+    per_minute=getattr(settings, "COMMENT_RATE_LIMIT_PER_MINUTE", 10),
+    name="comments",
+)
+
+
+def get_comment_rate_limiter() -> SlidingWindowRateLimiter:
+    return _comment_limiter

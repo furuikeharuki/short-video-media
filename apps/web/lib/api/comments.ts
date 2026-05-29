@@ -51,15 +51,22 @@ export async function listComments(
   }
 }
 
+export type CreateCommentResult =
+  | { ok: true; item: CommentItem }
+  | { ok: false; status: number; reason: "rate_limited" | "rejected" | "error" };
+
 /**
  * コメント or 返信を投稿。/api/proxy/comments 経由でサーバ側 JWT を付ける。
- * 401/失敗時は null。
+ * 失敗時は理由付きで返す:
+ *   - 429: rate_limited (連投 or 同一本文の連続)
+ *   - 400: rejected    (空 / NG ワード)
+ *   - その他: error
  */
 export async function createComment(
   slug: string,
   body: string,
   parent_id: string | null = null,
-): Promise<CommentItem | null> {
+): Promise<CreateCommentResult> {
   try {
     const res = await fetch(
       `/api/proxy/comments/${encodeURIComponent(slug)}`,
@@ -69,10 +76,15 @@ export async function createComment(
         body: JSON.stringify({ body, parent_id }),
       },
     );
-    if (!res.ok) return null;
-    return (await res.json()) as CommentItem;
+    if (res.ok) {
+      const item = (await res.json()) as CommentItem;
+      return { ok: true, item };
+    }
+    if (res.status === 429) return { ok: false, status: 429, reason: "rate_limited" };
+    if (res.status === 400) return { ok: false, status: 400, reason: "rejected" };
+    return { ok: false, status: res.status, reason: "error" };
   } catch {
-    return null;
+    return { ok: false, status: 0, reason: "error" };
   }
 }
 

@@ -24,8 +24,10 @@ from dataclasses import dataclass
 from typing import Final
 
 import httpx
+from fastapi import HTTPException, Request
 
 from app.core.cache import get_redis
+from app.core.rate_limit import SlidingWindowRateLimiter, get_resolve_rate_limiter
 from app.resolver.extractor import (
     ResolveNotFound,
     ResolveTimeout,
@@ -295,23 +297,44 @@ async def _get_shared_client() -> httpx.AsyncClient:
 # ─────────────────────────────────────────────
 # 公開 API
 # ─────────────────────────────────────────────
-async def resolve_mp4(content_id: str, *, bypass_cache: bool = False) -> ResolvedMp4:
+async def resolve_mp4(
+    content_id: str,
+    *,
+    bypass_cache: bool = False,
+    request: Request | None = None,
+    limiter: SlidingWindowRateLimiter | None = None,
+) -> ResolvedMp4:
     """DMM サンプル動画 MP4 URL を解決し、low/high 候補を含む結果を返す。
 
     `resolve_mp4_url` の後継。既存呼び出し元は `.mp4_url` プロパティ経由で
     既存挙動と互換のまま使える。低画質ファースト戦略を取りたい呼び出し元
     (web フロント / endpoint) は `.low_mp4_url` / `.high_mp4_url` を併用する。
 
+    Rate limit (新設計):
+        ``request`` (+任意で ``limiter``) を渡すと、本当に DMM へ外部リクエスト
+        を投げる owner だけが IP 単位のレートリミットを消費する。
+        in-flight デデュープでタダ乗りした waiter や、短期成功キャッシュ
+        ヒットしたリクエストはリミッタを呼ばないため、フロントの prefetch +
+        warm の同時バーストが overlap した状況でも 429 になりにくい。
+
+        ``request`` を渡さなかった場合 (jobs / 内部ツール経由) はリミッタを
+        スキップする。
+
     Args:
         content_id: DMM コンテンツ ID。
         bypass_cache: True なら短期成功キャッシュをスキップ。
             in-flight デデュープは bypass_cache=True でも有効。
+        request: 呼び出し元の FastAPI Request。レート制限の IP 抽出に使う。
+            None ならレート制限は走らない。
+        limiter: 注入用フック (主にテスト)。None ならモジュール既定の
+            ``get_resolve_rate_limiter()`` を使う。
 
     Returns:
         ResolvedMp4(mp4_url, low_mp4_url, high_mp4_url)。
         low/high が同じ URL になることもある (single-bitrate / 直リンクフォールバック)。
 
     Raises:
+        HTTPException(429): owner がレート制限上限に到達。
         ResolverConfigError: DMM_AFFILIATE_ID 未設定。
         ResolverNotFound:    iframe / args が見つからない。
         ResolverUpstreamError: DMM 側のエラー。
@@ -335,7 +358,22 @@ async def resolve_mp4(content_id: str, *, bypass_cache: bool = False) -> Resolve
             owner = True
 
     if not owner:
+        # 既に別リクエストが DMM を叩いている → タダ乗り。レート制限は消費しない。
         return await future
+
+    # owner だけが実 DMM 外部リクエストを担う。ここで IP 単位レートリミットを
+    # 適用する。check() は HTTPException(429) を投げるため、その前に in-flight
+    # owner 状態を解放してから raise する。
+    if request is not None:
+        active_limiter = limiter or get_resolve_rate_limiter()
+        try:
+            active_limiter.check(request)
+        except HTTPException:
+            async with _inflight_lock:
+                _inflight.pop(content_id, None)
+            if not future.done():
+                future.cancel()
+            raise
 
     try:
         resolved = await _do_resolve(content_id)
@@ -359,6 +397,8 @@ async def resolve_mp4_url(content_id: str, *, bypass_cache: bool = False) -> str
     """既存呼び出し元向けの互換ラッパ。`resolve_mp4(...).mp4_url` を返す。
 
     新規呼び出し元は `resolve_mp4` を使うこと (low/high を取り出すため)。
+    内部ツール / jobs から呼ぶことを想定しているため、レート制限はスキップする
+    (`request` を渡さない)。
     """
     resolved = await resolve_mp4(content_id, bypass_cache=bypass_cache)
     return resolved.mp4_url

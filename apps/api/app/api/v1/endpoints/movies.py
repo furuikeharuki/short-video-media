@@ -5,10 +5,6 @@ from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.rate_limit import (
-    SlidingWindowRateLimiter,
-    get_resolve_rate_limiter,
-)
 from app.db.models.movie import Movie
 from app.db.session import get_db
 from app.schemas.movie import MovieDetail
@@ -71,17 +67,18 @@ async def resolve_mp4(
         "必ず DMM へ再アクセスする。web 側で <video> がエラーになったリトライ時に true を使う。",
     ),
     db: AsyncSession = Depends(get_db),
-    limiter: SlidingWindowRateLimiter = Depends(get_resolve_rate_limiter),
 ) -> ResolveMp4Response | Response:
     """作品スラグに対して、実際に再生可能な MP4 URL を返す。
 
     DB には MP4 URL を一切保存しない。毎回 resolver_client (in-process httpx)
     で DMM の html5_player ページから抽出する。
+
+    レート制限 (設計メモ):
+        429 は endpoint で unconditional に返さず、resolver_client 内部で
+        「実際に DMM へ叩く owner」だけに適用する。in-flight デデュープや
+        短期成功キャッシュヒットはレート制限を消費しないため、フロントの
+        prefetch (+1..+5) + warm (+6..+15) の同時バーストで 429 になりにくい。
     """
-    # DMM への外部リクエストを伴うので、過剰な連打を抑える。resolver_client
-    # 側に短期成功キャッシュと in-flight デデュープがあるため通常閲覧では
-    # 上限に当たらない。
-    limiter.check(request)
     # content_id を取得 (resolver に必要)。
     row = (
         await db.execute(
@@ -112,7 +109,7 @@ async def resolve_mp4(
 
     try:
         resolved = await resolver_client.resolve_mp4(
-            content_id, bypass_cache=effective_force
+            content_id, bypass_cache=effective_force, request=request
         )
     except resolver_client.ResolverNotFound as e:
         raise HTTPException(status_code=404, detail=str(e)) from e

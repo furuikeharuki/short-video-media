@@ -287,3 +287,155 @@ async def test_failure_propagates_to_inflight_waiters(
         await task_a
     with pytest.raises(resolver_client.ResolverNotFound):
         await task_b
+
+
+# ─────────────────────────────────────────────
+# レートリミット (owner だけ消費する設計)
+# ─────────────────────────────────────────────
+class _FakeRequest:
+    """SlidingWindowRateLimiter.check が読む最小プロトコルだけ満たす。"""
+
+    def __init__(self, ip: str = "1.2.3.4") -> None:
+        self.headers = {"x-forwarded-for": ip}
+
+        class _Client:
+            host = ip
+
+        self.client = _Client()
+
+
+def _make_strict_limiter():
+    from app.core.rate_limit import SlidingWindowRateLimiter
+
+    # per_second=1 / per_minute=10 とキツめに絞って、消費されているか判定しやすくする
+    return SlidingWindowRateLimiter(per_second=1, per_minute=10, name="test_resolve")
+
+
+@pytest.mark.asyncio
+async def test_cache_hit_does_not_consume_rate_limit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """成功キャッシュヒットならリミッタを消費しないので、何度叩いても 429 にならない。"""
+    _set_affiliate(monkeypatch)
+    limiter = _make_strict_limiter()
+    req = _FakeRequest()
+
+    call_count = 0
+
+    async def fake_extract(**kw):
+        nonlocal call_count
+        call_count += 1
+        return ResolveResult(
+            content_id=kw["content_id"], mp4_url="https://cdn.example/cached.mp4"
+        )
+
+    _patch_extract(monkeypatch, fake_extract)
+
+    # 1 回目: extract が走り、リミッタを 1 消費
+    r1 = await resolver_client.resolve_mp4("cache001", request=req, limiter=limiter)
+    assert r1.mp4_url == "https://cdn.example/cached.mp4"
+    assert call_count == 1
+
+    # 2〜5 回目: 短期キャッシュヒットなので extract 不要、かつリミッタも消費しない
+    for _ in range(4):
+        r = await resolver_client.resolve_mp4(
+            "cache001", request=req, limiter=limiter
+        )
+        assert r.mp4_url == "https://cdn.example/cached.mp4"
+    assert call_count == 1
+    # per_second=1 なのに 5 回叩いて 429 が出ていない = キャッシュヒットが消費していない
+
+
+@pytest.mark.asyncio
+async def test_inflight_waiters_do_not_consume_rate_limit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """in-flight デデュープでタダ乗りした waiter はリミッタを消費しない。
+
+    owner だけが 1 回消費。per_second=1 のリミッタでも 10 並列要求が全て成功する。
+    """
+    _set_affiliate(monkeypatch)
+    limiter = _make_strict_limiter()
+    req = _FakeRequest()
+
+    call_count = 0
+    proceed = asyncio.Event()
+    started = asyncio.Event()
+
+    async def fake_extract(**kw):
+        nonlocal call_count
+        call_count += 1
+        started.set()
+        await proceed.wait()
+        return ResolveResult(
+            content_id=kw["content_id"], mp4_url="https://cdn.example/inflight.mp4"
+        )
+
+    _patch_extract(monkeypatch, fake_extract)
+
+    # 10 並列で同じ content_id を要求 → 1 つが owner、残りは waiter
+    async def call():
+        return await resolver_client.resolve_mp4(
+            "inflight001", request=req, limiter=limiter
+        )
+
+    task_owner = asyncio.create_task(call())
+    await started.wait()
+    waiters = [asyncio.create_task(call()) for _ in range(9)]
+    await asyncio.sleep(0.05)
+    proceed.set()
+
+    results = await asyncio.gather(task_owner, *waiters)
+    assert all(r.mp4_url == "https://cdn.example/inflight.mp4" for r in results)
+    assert call_count == 1  # extract は 1 回だけ
+    # per_second=1 だが、owner 1 回しか消費していないので全 10 並列で 429 は出ていない
+
+
+@pytest.mark.asyncio
+async def test_owner_rate_limit_excess_raises_429_and_cleans_inflight(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """owner が連続して上限を超えたら HTTPException(429)。in-flight は残らない。"""
+    from fastapi import HTTPException
+
+    _set_affiliate(monkeypatch)
+    limiter = _make_strict_limiter()  # per_second=1, per_minute=10
+    req = _FakeRequest()
+
+    async def fake_extract(**kw):
+        return ResolveResult(
+            content_id=kw["content_id"], mp4_url=f"https://cdn.example/{kw['content_id']}.mp4"
+        )
+
+    _patch_extract(monkeypatch, fake_extract)
+
+    # 異なる content_id を per_second=1 を超えて連打 → 2 回目で 429
+    r1 = await resolver_client.resolve_mp4("ratelimit001", request=req, limiter=limiter)
+    assert r1.mp4_url.endswith("ratelimit001.mp4")
+
+    with pytest.raises(HTTPException) as exc:
+        await resolver_client.resolve_mp4("ratelimit002", request=req, limiter=limiter)
+    assert exc.value.status_code == 429
+
+    # in-flight テーブルに残骸が残っていないことを確認 (次の owner が立てるようにする)
+    assert "ratelimit002" not in resolver_client._inflight
+
+
+@pytest.mark.asyncio
+async def test_no_request_skips_rate_limit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """request=None (jobs / 内部ツール) ならリミッタを完全にスキップ。"""
+    _set_affiliate(monkeypatch)
+
+    async def fake_extract(**kw):
+        return ResolveResult(
+            content_id=kw["content_id"], mp4_url=f"https://cdn.example/{kw['content_id']}.mp4"
+        )
+
+    _patch_extract(monkeypatch, fake_extract)
+
+    # 異なる content_id を 5 回連続呼んでも 429 にならない
+    for i in range(5):
+        r = await resolver_client.resolve_mp4(f"job{i:03d}")
+        assert r.mp4_url.endswith(f"job{i:03d}.mp4")

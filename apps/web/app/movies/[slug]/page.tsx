@@ -103,7 +103,8 @@ export default async function MovieDetailPage({ params }: PageProps) {
       { label: "収録時間",     value: movie.volume != null ? `${movie.volume}分` : NA },
       { label: "配信開始日",   value: formatDate(movie.delivery_date) },
       { label: "商品発売日",   value: formatDate(movie.release_date) },
-      { label: "メーカー品番", value: movie.maker_product ?? NA },
+      // 配信品番: maker_product 欠落時は product_id にフォールバック (#288 と同じ)。
+      { label: "配信品番", value: movie.maker_product || movie.product_id || NA },
     ];
 
     const uploadDate = movie.delivery_date ?? movie.release_date ?? undefined;

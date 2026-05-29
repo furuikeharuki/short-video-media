@@ -886,7 +886,6 @@ export default function FeedItem({ item, isActive, isAdjacent = false, isFirst, 
               // 再 attach する。slug は同一 session 内なので変化させず、epoch だけ
               // で remount を制御する。epoch=0 (通常時) は単に "video-<slug>"。
               key={fallbackEpoch > 0 ? `video-${item.slug}-fb${fallbackEpoch}` : `video-${item.slug}`}
-              slug={item.slug}
               src={videoSrc as string}
               preload={preloadAttr}
               containerRef={containerRef}

@@ -448,6 +448,217 @@ def test_popular_all_time_falls_back_to_view_then_fallback(
     assert [c.slug for c in out] == [m_watch.slug, m_view.slug, m_fallback.slug]
 
 
+def test_get_ranking_single_watch_beats_many_high_view_unwatched(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """ユーザー報告シナリオの回帰テスト:
+
+    1 件だけ watch_count > 0 の作品があり、view イベントは別の (未視聴の)
+    作品が高数値で溜まっているとき、ランキング #1 は watch_count 由来で
+    なければならない。
+
+    旧 view 由来ランキングをそのまま流用したり、フォールバックが先頭に
+    回ってしまうと、ユーザーから見て「全く視聴していない作品が #1」と
+    いう挙動になる。それを防ぐリグレッション。
+    """
+    m_watch = _movie(1, slug="movie-watched-once")
+    m_view_top1 = _movie(2, slug="movie-not-watched-top-views-1")
+    m_view_top2 = _movie(3, slug="movie-not-watched-top-views-2")
+    m_view_top3 = _movie(4, slug="movie-not-watched-top-views-3")
+    by_slug = {
+        m_watch.slug: m_watch,
+        m_view_top1.slug: m_view_top1,
+        m_view_top2.slug: m_view_top2,
+        m_view_top3.slug: m_view_top3,
+    }
+
+    async def fake_watch(db, *, period, limit, offset=0):  # type: ignore[no-untyped-def]
+        # たった 1 件のみ watch (count=1)
+        return [(m_watch.slug, 1)]
+
+    async def fake_view(db, *, period, limit, offset=0):  # type: ignore[no-untyped-def]
+        # view は 3 件、いずれも 100/80/40 と高め
+        return [
+            (m_view_top1.slug, 100),
+            (m_view_top2.slug, 80),
+            (m_view_top3.slug, 40),
+        ]
+
+    async def fake_get_by_slugs(db, slugs):  # type: ignore[no-untyped-def]
+        return [by_slug[s] for s in slugs if s in by_slug]
+
+    async def fake_fallback(db, *, limit, window_days, offset=0):  # type: ignore[no-untyped-def]
+        return []
+
+    monkeypatch.setattr(ranking_service, "aggregate_watch_count_ranking", fake_watch)
+    monkeypatch.setattr(ranking_service, "aggregate_view_ranking", fake_view)
+    monkeypatch.setattr(
+        ranking_service, "get_movies_by_slugs_ordered", fake_get_by_slugs
+    )
+    monkeypatch.setattr(ranking_service, "get_fallback_ranking_movies", fake_fallback)
+
+    out = asyncio.run(ranking_service.get_ranking(None, period="daily", limit=4))  # type: ignore[arg-type]
+
+    assert [c.slug for c in out] == [
+        m_watch.slug,  # watch_count=1 が必ず #1
+        m_view_top1.slug,  # 残り 3 件は view 由来 (未視聴)
+        m_view_top2.slug,
+        m_view_top3.slug,
+    ]
+
+
+def test_get_ranking_view_fallback_excludes_already_watched_slugs(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """watch_count 由来として既に出した slug が、view イベント由来として
+    同じランキングに再掲されないこと。
+
+    現実には watch_count 上位は同時に view 上位でもあるので、重複除去を
+    しないと「watch ランキングなのに同じ作品が複数位置に出る」「下位の
+    順位が一段ずつ繰り下がる」ような違和感のある並びになる。
+    """
+    m_watch = _movie(1, slug="watch-and-view-overlap")
+    m_view_only = _movie(2, slug="view-only")
+    by_slug = {m_watch.slug: m_watch, m_view_only.slug: m_view_only}
+
+    async def fake_watch(db, *, period, limit, offset=0):  # type: ignore[no-untyped-def]
+        return [(m_watch.slug, 3)]
+
+    async def fake_view(db, *, period, limit, offset=0):  # type: ignore[no-untyped-def]
+        # 1 番目は watch_count に既出, 2 番目は view 限定
+        return [(m_watch.slug, 50), (m_view_only.slug, 20)]
+
+    async def fake_get_by_slugs(db, slugs):  # type: ignore[no-untyped-def]
+        # 渡された slug 順を保つ
+        return [by_slug[s] for s in slugs if s in by_slug]
+
+    async def fake_fallback(db, *, limit, window_days, offset=0):  # type: ignore[no-untyped-def]
+        return []
+
+    monkeypatch.setattr(ranking_service, "aggregate_watch_count_ranking", fake_watch)
+    monkeypatch.setattr(ranking_service, "aggregate_view_ranking", fake_view)
+    monkeypatch.setattr(
+        ranking_service, "get_movies_by_slugs_ordered", fake_get_by_slugs
+    )
+    monkeypatch.setattr(ranking_service, "get_fallback_ranking_movies", fake_fallback)
+
+    out = asyncio.run(ranking_service.get_ranking(None, period="weekly", limit=5))  # type: ignore[arg-type]
+
+    # m_watch は 1 度だけ #1 に出てくる。view 経路では除外される。
+    assert [c.slug for c in out] == [m_watch.slug, m_view_only.slug]
+
+
+def test_get_ranking_no_watch_data_falls_back_to_view(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """watch_count がまだ完全に貯まっていないときは view → 汎用フォールバック
+    の順で穴埋めし、ランキングが空にならないこと。
+
+    既存挙動の保持確認 (移行期に上位がスカスカにならないようにする)。
+    """
+    m_view = _movie(1, slug="view-1")
+    m_fallback = _movie(2, slug="fallback-1")
+
+    async def fake_watch(db, *, period, limit, offset=0):  # type: ignore[no-untyped-def]
+        return []
+
+    async def fake_view(db, *, period, limit, offset=0):  # type: ignore[no-untyped-def]
+        return [(m_view.slug, 7)]
+
+    async def fake_get_by_slugs(db, slugs):  # type: ignore[no-untyped-def]
+        return [m_view] if m_view.slug in slugs else []
+
+    async def fake_fallback(db, *, limit, window_days, offset=0):  # type: ignore[no-untyped-def]
+        return [m_fallback]
+
+    monkeypatch.setattr(ranking_service, "aggregate_watch_count_ranking", fake_watch)
+    monkeypatch.setattr(ranking_service, "aggregate_view_ranking", fake_view)
+    monkeypatch.setattr(
+        ranking_service, "get_movies_by_slugs_ordered", fake_get_by_slugs
+    )
+    monkeypatch.setattr(ranking_service, "get_fallback_ranking_movies", fake_fallback)
+
+    out = asyncio.run(ranking_service.get_ranking(None, period="daily", limit=3))  # type: ignore[arg-type]
+    assert [c.slug for c in out] == [m_view.slug, m_fallback.slug]
+
+
+def test_popular_all_time_single_watch_beats_many_high_view_unwatched(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """ホーム "人気動画" セクションでもユーザー報告シナリオを担保する。
+
+    1 件しか watch_count > 0 の作品が無くても、view 上位の未視聴作品が
+    #1 に来ないこと (= canonical な watch_count 由来が必ず先頭)。
+    """
+    m_watch = _movie(1, slug="popular-watched-once")
+    m_view1 = _movie(2, slug="popular-not-watched-view-1")
+    m_view2 = _movie(3, slug="popular-not-watched-view-2")
+    by_slug = {m_watch.slug: m_watch, m_view1.slug: m_view1, m_view2.slug: m_view2}
+
+    async def fake_watch(db, *, limit, offset=0):  # type: ignore[no-untyped-def]
+        return [(m_watch.slug, 1)]
+
+    async def fake_view(db, *, limit, offset=0):  # type: ignore[no-untyped-def]
+        return [(m_view1.slug, 999), (m_view2.slug, 500)]
+
+    async def fake_get_by_slugs(db, slugs):  # type: ignore[no-untyped-def]
+        return [by_slug[s] for s in slugs if s in by_slug]
+
+    async def fake_fallback(db, *, limit, window_days, offset=0):  # type: ignore[no-untyped-def]
+        return []
+
+    monkeypatch.setattr(
+        ranking_service, "aggregate_watch_count_ranking_all_time", fake_watch
+    )
+    monkeypatch.setattr(
+        ranking_service, "aggregate_view_ranking_all_time", fake_view
+    )
+    monkeypatch.setattr(
+        ranking_service, "get_movies_by_slugs_ordered", fake_get_by_slugs
+    )
+    monkeypatch.setattr(ranking_service, "get_fallback_ranking_movies", fake_fallback)
+
+    out = asyncio.run(ranking_service.get_popular_all_time(None, limit=3))  # type: ignore[arg-type]
+    assert [c.slug for c in out] == [m_watch.slug, m_view1.slug, m_view2.slug]
+
+
+def test_popular_all_time_view_fallback_excludes_already_watched_slugs(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """全期間人気でも、watch_count 由来の slug が view 由来として
+    重複ランクインしないこと。
+    """
+    m_watch = _movie(1, slug="watched-and-popular")
+    m_view = _movie(2, slug="view-only-popular")
+    by_slug = {m_watch.slug: m_watch, m_view.slug: m_view}
+
+    async def fake_watch(db, *, limit, offset=0):  # type: ignore[no-untyped-def]
+        return [(m_watch.slug, 5)]
+
+    async def fake_view(db, *, limit, offset=0):  # type: ignore[no-untyped-def]
+        return [(m_watch.slug, 200), (m_view.slug, 50)]
+
+    async def fake_get_by_slugs(db, slugs):  # type: ignore[no-untyped-def]
+        return [by_slug[s] for s in slugs if s in by_slug]
+
+    async def fake_fallback(db, *, limit, window_days, offset=0):  # type: ignore[no-untyped-def]
+        return []
+
+    monkeypatch.setattr(
+        ranking_service, "aggregate_watch_count_ranking_all_time", fake_watch
+    )
+    monkeypatch.setattr(
+        ranking_service, "aggregate_view_ranking_all_time", fake_view
+    )
+    monkeypatch.setattr(
+        ranking_service, "get_movies_by_slugs_ordered", fake_get_by_slugs
+    )
+    monkeypatch.setattr(ranking_service, "get_fallback_ranking_movies", fake_fallback)
+
+    out = asyncio.run(ranking_service.get_popular_all_time(None, limit=5))  # type: ignore[arg-type]
+    assert [c.slug for c in out] == [m_watch.slug, m_view.slug]
+
+
 def test_event_repository_since_distinct_per_period() -> None:
     """`_since` が daily/weekly/monthly でそれぞれ違う閾値を返すこと
     (期間 cutoff が混ざらないことの最小確認)。

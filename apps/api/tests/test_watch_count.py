@@ -629,6 +629,61 @@ def test_period_window_skips_below_50_threshold() -> None:
     asyncio.run(run())
 
 
+def test_watch_count_ranking_only_returns_positive_counts() -> None:
+    """HAVING c > 0 を強制している契約のリグレッション。
+
+    25% 止まり (watch event ではない) しか持たない作品が、ランキング集計
+    の結果として `(slug, 0)` のように返ってくると、上位ランクの service 側
+    が「watch_count > 0 として扱う」誤動作を起こしうる。
+    そもそも返さない (= ランキングに混ぜない) ことを保証する。
+    """
+
+    async def run() -> None:
+        engine, Session = await _make_engine_and_session()
+        try:
+            now = _naive_utc_now()
+            async with Session() as s:
+                await _insert_movie(s, "slug-25-only")
+                await _insert_movie(s, "slug-50")
+                # 25% 止まり (watch event ではない) → 集計対象に上がらない
+                await _insert_event(
+                    s,
+                    slug="slug-25-only",
+                    event_name="play_progress",
+                    feed_session_id="a",
+                    progress_milestone=25,
+                    created_at=now - timedelta(hours=1),
+                )
+                # 50% 到達 → watch event
+                await _insert_event(
+                    s,
+                    slug="slug-50",
+                    event_name="play_progress",
+                    feed_session_id="b",
+                    progress_milestone=50,
+                    created_at=now - timedelta(hours=1),
+                )
+                await s.commit()
+                # 全期間 / 期間付きの双方で slug-25-only は返らない
+                all_time = await iev_repo.aggregate_watch_count_ranking_all_time(
+                    s, limit=10
+                )
+                assert [slug for slug, _ in all_time] == ["slug-50"]
+                for _, c in all_time:
+                    assert c > 0
+
+                weekly = await iev_repo.aggregate_watch_count_ranking(
+                    s, period="weekly", limit=10
+                )
+                assert [slug for slug, _ in weekly] == ["slug-50"]
+                for _, c in weekly:
+                    assert c > 0
+        finally:
+            await engine.dispose()
+
+    asyncio.run(run())
+
+
 def test_period_invalid_raises() -> None:
     """未知の period は ValueError。"""
 

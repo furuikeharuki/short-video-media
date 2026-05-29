@@ -72,8 +72,15 @@ async def get_ranking(
 
     cards: list[MovieCard] = []
     seen_ids: set[str] = set()
+    # watch_count 由来で既に確保した slug。view / 汎用フォールバックが
+    # 同じ slug を再掲しないよう slug でも dedup する (id だけだと、
+    # 同 slug が違う movie 行とマッチした稀なケースを取りこぼす)。
+    seen_slugs: set[str] = set()
 
-    # 1) watch_count (期間内) を主指標として使う
+    # 1) watch_count (期間内) を主指標として使う。
+    #    aggregate_watch_count_ranking は HAVING c > 0 を強制しているので、
+    #    返ってくる slug はすべて watch_count >= 1 であることが保証される。
+    #    つまり「視聴ゼロの作品」がここに紛れ込んで #1 になることはない。
     ranked = await aggregate_watch_count_ranking(
         db, period=period, limit=limit, offset=offset
     )
@@ -85,6 +92,7 @@ async def get_ranking(
                 continue
             cards.append(_to_card(m))
             seen_ids.add(m.id)
+            seen_slugs.add(m.slug)
 
     if len(cards) >= limit:
         return cards[:limit]
@@ -102,7 +110,10 @@ async def get_ranking(
     view_ranked = await aggregate_view_ranking(
         db, period=period, limit=need * 2, offset=0 if cards else offset
     )
-    view_slugs = [s for s, _ in view_ranked if s]
+    # 既に watch_count 側で出した slug は除外。view 由来として再掲すると
+    # 「視聴済の作品が 2 度ランクインしたように見える」「順位が下にずれる」
+    # といった誤読を生むため。
+    view_slugs = [s for s, _ in view_ranked if s and s not in seen_slugs]
     if view_slugs:
         view_movies = await get_movies_by_slugs_ordered(db, view_slugs)
         for m in view_movies:
@@ -112,6 +123,7 @@ async def get_ranking(
                 continue
             cards.append(_to_card(m))
             seen_ids.add(m.id)
+            seen_slugs.add(m.slug)
 
     if len(cards) >= limit:
         return cards[:limit]
@@ -128,10 +140,11 @@ async def get_ranking(
     for m in fallback:
         if len(cards) >= limit:
             break
-        if m.id in seen_ids:
+        if m.id in seen_ids or m.slug in seen_slugs:
             continue
         cards.append(_to_card(m))
         seen_ids.add(m.id)
+        seen_slugs.add(m.slug)
     return cards[:limit]
 
 
@@ -154,12 +167,16 @@ async def get_popular_all_time(
         watch_count が貯まるまでは aggregate_view_ranking_all_time + 既存
         フォールバックで補い、ユーザー体験を維持する。
     """
+    # aggregate_watch_count_ranking_all_time は HAVING c > 0 を強制しているので、
+    # 返ってくる slug はすべて watch_count >= 1。視聴ゼロの作品が #1 として
+    # 紛れ込むことは無い。
     ranked = await aggregate_watch_count_ranking_all_time(
         db, limit=limit, offset=offset
     )
     slugs = [s for s, _ in ranked if s]
     cards: list[MovieCard] = []
     seen_ids: set[str] = set()
+    seen_slugs: set[str] = set()
 
     if slugs:
         movies = await get_movies_by_slugs_ordered(db, slugs)
@@ -168,6 +185,7 @@ async def get_popular_all_time(
                 continue
             cards.append(_to_card(m))
             seen_ids.add(m.id)
+            seen_slugs.add(m.slug)
 
     if len(cards) >= limit:
         return cards[:limit]
@@ -181,7 +199,8 @@ async def get_popular_all_time(
         limit=need * 2,
         offset=0 if cards else offset,
     )
-    view_slugs = [s for s, _ in view_ranked if s]
+    # watch_count で既に出した slug は除外して、二重ランクインを避ける。
+    view_slugs = [s for s, _ in view_ranked if s and s not in seen_slugs]
     if view_slugs:
         view_movies = await get_movies_by_slugs_ordered(db, view_slugs)
         for m in view_movies:
@@ -191,6 +210,7 @@ async def get_popular_all_time(
                 continue
             cards.append(_to_card(m))
             seen_ids.add(m.id)
+            seen_slugs.add(m.slug)
 
     if len(cards) >= limit:
         return cards[:limit]
@@ -203,10 +223,11 @@ async def get_popular_all_time(
     for m in fallback:
         if len(cards) >= limit:
             break
-        if m.id in seen_ids:
+        if m.id in seen_ids or m.slug in seen_slugs:
             continue
         cards.append(_to_card(m))
         seen_ids.add(m.id)
+        seen_slugs.add(m.slug)
     return cards[:limit]
 
 

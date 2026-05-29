@@ -11,8 +11,11 @@ interface Props {
   isBookmarked: boolean;
   onToggleMute: (e: React.MouseEvent | React.TouchEvent) => void;
   onToggleBookmark: (e: React.MouseEvent | React.TouchEvent) => void;
+  onComments: (e: React.MouseEvent | React.TouchEvent) => void;
   onShare: (e: React.MouseEvent | React.TouchEvent) => void;
   onDetail: (e: React.MouseEvent | React.TouchEvent) => void;
+  /** コメント件数。サイドアイコンの下にバッジとして表示する。0 のときは非表示。 */
+  commentCount: number;
 }
 
 // touchstart からの移動距離がこの値 (px) を超えたら「スワイプ」とみなしてタップ扱いにしない。
@@ -83,11 +86,14 @@ export default function FeedItemSideActions({
   isBookmarked,
   onToggleMute,
   onToggleBookmark,
+  onComments,
   onShare,
   onDetail,
+  commentCount,
 }: Props) {
   const muteTouch = useTapGuard(onToggleMute);
   const bookmarkTouch = useTapGuard(onToggleBookmark);
+  const commentsTouch = useTapGuard(onComments);
   const shareTouch = useTapGuard(onShare);
   const detailTouch = useTapGuard(onDetail);
   // 購入リンク用: <a> のデフォルト navigation を タップのときだけ走らせる。
@@ -168,6 +174,28 @@ export default function FeedItemSideActions({
           <path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"/>
         </svg>
         <span className="side-btn-label">保存</span>
+      </button>
+
+      <button
+        className="side-btn"
+        aria-label="コメント"
+        onTouchStart={commentsTouch.onTouchStart}
+        onTouchEnd={commentsTouch.onTouchEnd}
+        onClick={(e) => {
+          e.stopPropagation();
+          onComments(e);
+        }}
+      >
+        <svg
+          width="26" height="26" viewBox="0 0 24 24" fill="none"
+          stroke="white" strokeWidth="2"
+          strokeLinecap="round" strokeLinejoin="round"
+        >
+          <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>
+        </svg>
+        <span className="side-btn-label">
+          {commentCount > 0 ? commentCount : "コメント"}
+        </span>
       </button>
 
       <button

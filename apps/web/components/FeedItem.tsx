@@ -16,6 +16,8 @@ import FeedItemMeta from "./feed/FeedItemMeta";
 import FeedItemSideActions from "./feed/FeedItemSideActions";
 import { itemStyle } from "./feed/feedItemStyle";
 import MovieDetailModal from "./movie-detail/MovieDetailModal";
+import CommentsSheet from "./comments/CommentsSheet";
+import { listComments } from "@/lib/api/comments";
 import {
   claimForFeed,
   getReadiness,
@@ -54,7 +56,23 @@ const VIDEO_HARD_TIMEOUT_MS = 25000;
 
 export default function FeedItem({ item, isActive, isAdjacent = false, isFirst, isSecond = false, isRapidSwiping = false }: Props) {
   const [modalSlug, setModalSlug] = useState<string | null>(null);
+  const [commentsOpen, setCommentsOpen] = useState(false);
+  const [commentCount, setCommentCount] = useState(0);
   const { isAuthenticated, isBookmarked, toggle } = useBookmarks();
+
+  // active になった瞬間にコメント件数を 1 度だけ取得してバッジに表示する。
+  // ヘッダーの number だけ知りたいので limit=1 で投げて total を読む。
+  useEffect(() => {
+    if (!isActive) return;
+    let cancelled = false;
+    void (async () => {
+      const res = await listComments(item.slug, { limit: 1 });
+      if (!cancelled) setCommentCount(res.total);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [isActive, item.slug]);
 
   // 表示する動画 URL の解決。API は high_mp4_url / low_mp4_url を返し得るが、
   // 単一 <video> 戦略では `high_mp4_url || mp4_url` のみを使う。
@@ -1122,8 +1140,10 @@ export default function FeedItem({ item, isActive, isAdjacent = false, isFirst, 
             isBookmarked={isBookmarked(item.id)}
             onToggleMute={handleToggleMute}
             onToggleBookmark={handleToggleBookmark}
+            onComments={() => setCommentsOpen(true)}
             onShare={handleShare}
             onDetail={handleDetail}
+            commentCount={commentCount}
           />
         </div>
 
@@ -1136,6 +1156,13 @@ export default function FeedItem({ item, isActive, isAdjacent = false, isFirst, 
           onClose={() => setModalSlug(null)}
         />
       )}
+
+      <CommentsSheet
+        slug={item.slug}
+        open={commentsOpen}
+        onClose={() => setCommentsOpen(false)}
+        onCountChange={setCommentCount}
+      />
     </>
   );
 }

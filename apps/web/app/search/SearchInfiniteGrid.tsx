@@ -170,18 +170,42 @@ export default function SearchInfiniteGrid({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sourceKey, enforceStatus]);
 
+  // 次ページの prefetch は「ユーザが実際にスクロールを始めた後」に限定する。
+  // 初期表示直後は何もしない (= sentinel が viewport + rootMargin の範囲内に
+  // 入っていても fetch しない)。これは初回ロードと同時に offset=21 を取りに
+  // 行ってしまい、検索 API 1 リクエストの体感が "1 本分" ではなく
+  // "2 本分のスループット" になっていた回帰を防ぐためのガード。
+  // ユーザが 1 回でもスクロールしたら以降は通常通り IntersectionObserver で
+  // 自動 prefetch を続ける。
+  const [hasScrolled, setHasScrolled] = useState(false);
   useEffect(() => {
+    if (hasScrolled) return;
+    const onScroll = () => setHasScrolled(true);
+    // .search-main がスクロールコンテナ。fixed 要素なので window スクロールでは
+    // なく内部の scroll イベントで判定する。容量節約のため passive + once。
+    const root = document.querySelector(".search-main");
+    if (!root) return;
+    root.addEventListener("scroll", onScroll, { passive: true, once: true });
+    return () => root.removeEventListener("scroll", onScroll);
+  }, [hasScrolled]);
+
+  useEffect(() => {
+    if (!hasScrolled) return;
     const el = sentinelRef.current;
     if (!el) return;
     const io = new IntersectionObserver(
       (entries) => {
         if (entries.some((e) => e.isIntersecting)) void fetchMore();
       },
-      { rootMargin: "400px 0px" },
+      // 旧 400px。初回表示直後でも sentinel が viewport+400px 内に入りやすく、
+      // hasScrolled ゲートを抜けた瞬間に必ず fire する設計。実際にスクロール
+      // しないと進まないようにしたいので 100px に縮め、UX (= 末尾近くで自動
+      // 読込) は維持しつつ偶発的な早期 fire を抑える。
+      { rootMargin: "100px 0px" },
     );
     io.observe(el);
     return () => io.disconnect();
-  }, [fetchMore]);
+  }, [fetchMore, hasScrolled]);
 
   if (enforceStatus === "pending" || isInitialLoading) {
     return (

@@ -66,3 +66,28 @@ def test_read_movie_detail_not_found(client: TestClient) -> None:
     response = client.get("/api/v1/movies/does-not-exist")
     assert response.status_code == 404
     assert response.json() == {"detail": "Movie not found"}
+
+
+def test_movie_detail_default_watch_count_field() -> None:
+    """MovieDetail スキーマに watch_count フィールドが存在し、デフォルト None。"""
+    detail = MovieDetail(
+        id="00000000-0000-0000-0000-000000000099",
+        title="x",
+        slug="x",
+        affiliate_url="https://example.com/x",
+    )
+    assert detail.watch_count is None
+
+
+def test_movie_detail_watch_count_assignment() -> None:
+    """watch_count に整数を入れて (frontend へ) シリアライズできる。"""
+    detail = MovieDetail(
+        id="00000000-0000-0000-0000-000000000099",
+        title="x",
+        slug="x",
+        affiliate_url="https://example.com/x",
+        watch_count=42,
+    )
+    assert detail.watch_count == 42
+    dumped = detail.model_dump()
+    assert dumped["watch_count"] == 42

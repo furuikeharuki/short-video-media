@@ -138,12 +138,18 @@ export default async function MovieDetailPage({ params }: PageProps) {
             worstRating: 1,
           }
         : undefined,
-      // TODO(seo): MovieDetail に集計済み watch_count / play_count を載せられたら
-      //   ここで interactionStatistic を埋める。捏造値は入れない方針なので、
-      //   バックエンドが /api/v1/interaction-events 集約 → movies テーブル
-      //   (e.g. movies.view_count / movies.play_count) を持つようになるまで undefined。
+      // watch_count は「50% 以上再生に到達したユニーク feed_session 数」を
+      // canonical な視聴回数として interaction_events から集計したもの。
+      // 0 や null (= まだ集計データが無い) のときは捏造値を入れないため出力しない。
       //   参考: https://developers.google.com/search/docs/appearance/structured-data/video
-      interactionStatistic: undefined,
+      interactionStatistic:
+        movie.watch_count != null && movie.watch_count > 0
+          ? {
+              "@type": "InteractionCounter",
+              interactionType: { "@type": "WatchAction" },
+              userInteractionCount: movie.watch_count,
+            }
+          : undefined,
     };
 
     const breadcrumbJsonLd = {

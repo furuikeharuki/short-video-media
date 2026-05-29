@@ -1,12 +1,17 @@
 import json
+import logging
+
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.cache import get_redis
+from app.repositories.interaction_event_repository import get_watch_count_for_slug
 from app.repositories.movie_repository import get_movie_by_slug
 from app.schemas.movie import MovieDetail, PriceList
 
 MOVIE_DETAIL_TTL = 1800  # 30分
 MOVIE_DETAIL_KEY_PREFIX = "movie:detail:"
+
+logger = logging.getLogger(__name__)
 
 
 async def get_movie_by_slug_service(db: AsyncSession, slug: str) -> MovieDetail | None:
@@ -27,6 +32,17 @@ async def get_movie_by_slug_service(db: AsyncSession, slug: str) -> MovieDetail 
     price_list = None
     if movie.price_list:
         price_list = PriceList.model_validate(movie.price_list)
+
+    # interaction_events から watch_count (50% 以上再生に到達したユニーク feed_session 数) を集計。
+    # 失敗しても詳細表示そのものは継続したいので例外は飲み、None にしてフロント側で
+    # JSON-LD interactionStatistic を出さない判断に委ねる。
+    try:
+        watch_count: int | None = await get_watch_count_for_slug(db, movie.slug)
+    except Exception:  # noqa: BLE001
+        logger.warning(
+            "failed to aggregate watch_count for slug=%s", movie.slug, exc_info=True
+        )
+        watch_count = None
 
     detail = MovieDetail(
         id=str(movie.id),
@@ -55,6 +71,7 @@ async def get_movie_by_slug_service(db: AsyncSession, slug: str) -> MovieDetail 
         actresses=[a.name for a in movie.actresses],
         genres=[g.name for g in movie.genres],
         series_name=movie.series.name if movie.series else None,
+        watch_count=watch_count,
     )
 
     # Redisに保存

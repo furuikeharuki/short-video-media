@@ -259,6 +259,97 @@ def test_popular_products_empty_when_no_goods(monkeypatch: pytest.MonkeyPatch) -
     assert out == []
 
 
+def test_popular_all_time_uses_watch_count_first(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`get_popular_all_time` は watch_count (50% 到達) を主指標として使うこと。
+
+    watch_count の集計関数が呼ばれ、その slug 群が先頭に並ぶことを担保する。
+    """
+    movies = [_movie(i) for i in range(3)]
+    watch_calls: list[dict] = []
+    view_calls: list[dict] = []
+
+    async def fake_watch(db, *, limit, offset=0):  # type: ignore[no-untyped-def]
+        watch_calls.append({"limit": limit, "offset": offset})
+        # watch_count: 0=10watch / 1=5watch / 2=1watch (3件で limit を満たす)
+        return [(m.slug, 10 - i) for i, m in enumerate(movies)]
+
+    async def fake_get_by_slugs(db, slugs):  # type: ignore[no-untyped-def]
+        # 入力 slug の順を保つ
+        by_slug = {m.slug: m for m in movies}
+        return [by_slug[s] for s in slugs if s in by_slug]
+
+    async def fake_view(db, *, limit, offset=0):  # type: ignore[no-untyped-def]
+        view_calls.append({"limit": limit, "offset": offset})
+        return []
+
+    async def fake_fallback(db, **kwargs):  # type: ignore[no-untyped-def]
+        raise AssertionError("fallback must not run when watch_count satisfies limit")
+
+    monkeypatch.setattr(
+        ranking_service, "aggregate_watch_count_ranking_all_time", fake_watch
+    )
+    monkeypatch.setattr(
+        ranking_service, "get_movies_by_slugs_ordered", fake_get_by_slugs
+    )
+    monkeypatch.setattr(
+        ranking_service, "aggregate_view_ranking_all_time", fake_view
+    )
+    monkeypatch.setattr(ranking_service, "get_fallback_ranking_movies", fake_fallback)
+
+    out = asyncio.run(ranking_service.get_popular_all_time(None, limit=3))  # type: ignore[arg-type]
+
+    # watch_count 集計が呼ばれている
+    assert len(watch_calls) == 1
+    # limit 分は watch_count 由来で埋まり、view イベントへフォールバックしない
+    assert view_calls == []
+    # 返却順は watch_count 降順
+    assert [c.slug for c in out] == [m.slug for m in movies]
+
+
+def test_popular_all_time_falls_back_to_view_then_fallback(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """watch_count が足りないときは view → review_count フォールバックの順で穴埋め。
+
+    順番:
+      1. watch_count で取れる分
+      2. 既存 view イベント由来
+      3. review_count ベース汎用フォールバック
+    """
+    m_watch = _movie(1, slug="movie-watch")
+    m_view = _movie(2, slug="movie-view")
+    m_fallback = _movie(3, slug="movie-fallback")
+
+    async def fake_watch(db, *, limit, offset=0):  # type: ignore[no-untyped-def]
+        return [(m_watch.slug, 5)]
+
+    async def fake_get_by_slugs(db, slugs):  # type: ignore[no-untyped-def]
+        by_slug = {m_watch.slug: m_watch, m_view.slug: m_view}
+        return [by_slug[s] for s in slugs if s in by_slug]
+
+    async def fake_view(db, *, limit, offset=0):  # type: ignore[no-untyped-def]
+        return [(m_view.slug, 7)]
+
+    async def fake_fallback(db, *, limit, window_days, offset=0):  # type: ignore[no-untyped-def]
+        return [m_fallback]
+
+    monkeypatch.setattr(
+        ranking_service, "aggregate_watch_count_ranking_all_time", fake_watch
+    )
+    monkeypatch.setattr(
+        ranking_service, "get_movies_by_slugs_ordered", fake_get_by_slugs
+    )
+    monkeypatch.setattr(
+        ranking_service, "aggregate_view_ranking_all_time", fake_view
+    )
+    monkeypatch.setattr(ranking_service, "get_fallback_ranking_movies", fake_fallback)
+
+    out = asyncio.run(ranking_service.get_popular_all_time(None, limit=3))  # type: ignore[arg-type]
+    assert [c.slug for c in out] == [m_watch.slug, m_view.slug, m_fallback.slug]
+
+
 def test_event_repository_since_distinct_per_period() -> None:
     """`_since` が daily/weekly/monthly でそれぞれ違う閾値を返すこと
     (期間 cutoff が混ざらないことの最小確認)。

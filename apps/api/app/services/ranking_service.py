@@ -16,6 +16,9 @@ from app.repositories.event_repository import (
     aggregate_view_ranking_all_time,
 )
 from app.repositories.goods_repository import get_popular_goods
+from app.repositories.interaction_event_repository import (
+    aggregate_watch_count_ranking_all_time,
+)
 from app.repositories.movie_repository import (
     get_fallback_ranking_movies,
     get_movies_by_slugs_ordered,
@@ -103,22 +106,73 @@ async def get_popular_all_time(
     limit: int = 20,
     offset: int = 0,
 ) -> list[MovieCard]:
-    """「人気」セクション: 全期間の view イベント計順。
-    view イベントが不足しているときは全体の review_count 順 (windowなし) で補う。
+    """「人気」セクション: 全期間の watch_count (= 50%以上再生に到達したユニーク feed_session 数) 順。
+
+    interaction_events ベースの watch_count を主指標にし、不足分は
+    既存 view イベント / review_count フォールバックで穴埋めする。
     SQL OFFSET/LIMIT でページネーション。
+
+    互換性メモ:
+        従来は raw view イベント数を「総視聴回数」として並べていたが、
+        フィード上の単なる通過 / 自動再生でも view が積み上がるため、
+        2026-05 以降は「50% 到達ユニーク watch」を canonical な指標として採用する。
+        watch_count が貯まるまでは aggregate_view_ranking_all_time + 既存
+        フォールバックで補い、ユーザー体験を維持する。
     """
-    ranked = await aggregate_view_ranking_all_time(db, limit=limit, offset=offset)
+    ranked = await aggregate_watch_count_ranking_all_time(
+        db, limit=limit, offset=offset
+    )
     slugs = [s for s, _ in ranked if s]
+    cards: list[MovieCard] = []
+    seen_ids: set[str] = set()
 
     if slugs:
         movies = await get_movies_by_slugs_ordered(db, slugs)
-        if movies:
-            return [_to_card(m) for m in movies]
+        for m in movies:
+            if m.id in seen_ids:
+                continue
+            cards.append(_to_card(m))
+            seen_ids.add(m.id)
 
-    movies = await get_fallback_ranking_movies(
-        db, limit=limit, window_days=None, offset=offset
+    if len(cards) >= limit:
+        return cards[:limit]
+
+    # watch_count 由来で limit に届かないときは、まず view イベント由来で補う。
+    # interaction_events がまだ十分に貯まっていない初期段階で、
+    # ホームの人気セクションが空になるのを防ぐためのフォールバック。
+    need = limit - len(cards)
+    view_ranked = await aggregate_view_ranking_all_time(
+        db,
+        limit=need * 2,
+        offset=0 if cards else offset,
     )
-    return [_to_card(m) for m in movies]
+    view_slugs = [s for s, _ in view_ranked if s]
+    if view_slugs:
+        view_movies = await get_movies_by_slugs_ordered(db, view_slugs)
+        for m in view_movies:
+            if len(cards) >= limit:
+                break
+            if m.id in seen_ids:
+                continue
+            cards.append(_to_card(m))
+            seen_ids.add(m.id)
+
+    if len(cards) >= limit:
+        return cards[:limit]
+
+    # 最終フォールバック: review_count ベースの汎用ランキング。
+    need = limit - len(cards)
+    fallback = await get_fallback_ranking_movies(
+        db, limit=need * 2, window_days=None, offset=0 if cards else offset
+    )
+    for m in fallback:
+        if len(cards) >= limit:
+            break
+        if m.id in seen_ids:
+            continue
+        cards.append(_to_card(m))
+        seen_ids.add(m.id)
+    return cards[:limit]
 
 
 def _to_actress_card(actress) -> ActressCard:

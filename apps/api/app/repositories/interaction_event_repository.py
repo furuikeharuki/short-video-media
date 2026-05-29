@@ -4,9 +4,11 @@ from __future__ import annotations
 
 from typing import Any
 
+from sqlalchemy import case, desc, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.models.interaction_event import InteractionEvent
+from app.db.models.movie import Movie
 
 
 # クライアントから受け付ける event_name の語彙。schemas 側の Pydantic で
@@ -72,3 +74,102 @@ async def insert_interaction_event(
     db.add(ev)
     await db.commit()
     return ev
+
+
+# ─────────────────────────────────────────────
+# watch_count 集計
+# ─────────────────────────────────────────────
+# watch_count の定義 (canonical):
+#   「ある作品について、ユーザー (= feed_session) が 50% 以上再生に到達した」ら 1 watch。
+#   具体的には interaction_events のうち以下のいずれかを満たすレコードを「watch event」とみなす:
+#     - event_name='play_progress' AND (progress_milestone >= 50 OR progress_ratio >= 0.5)
+#     - event_name='video_complete' (100% 到達なので必ず watch に該当)
+#
+# デデュープ:
+#   同一 feed_session_id + slug で複数の 50/75/100/complete イベントが飛んでも
+#   1 watch にしか数えない (COUNT(DISTINCT feed_session_id))。
+#   feed_session_id が NULL のレコードは、互いを区別する識別子がないため
+#   現在の interaction_event 1 件をそのまま 1 watch として保守的に数える
+#   (こうすると本来 1 セッションでも複数 watch にカウントされうるが、
+#    本来 feed_session_id は常に発行される設計のため発生頻度は低い。
+#    将来 IP / ua ハッシュなど別の弱識別子を導入する場合はここを差し替える)。
+
+
+def _watch_event_filter():
+    """watch_count を構成する interaction_events 行の WHERE 句。
+
+    play_progress 系 (50% 以上) と video_complete の両方を含む。
+    """
+    return or_(
+        InteractionEvent.event_name == "video_complete",
+        (InteractionEvent.event_name == "play_progress")
+        & (
+            (InteractionEvent.progress_milestone >= 50)
+            | (InteractionEvent.progress_ratio >= 0.5)
+        ),
+    )
+
+
+def _distinct_watch_count_expr():
+    """1 watch = 1 (feed_session_id, slug) ペア。
+
+    feed_session_id が NULL の行は識別子が無いため、
+    その場合に限り interaction_event.id を識別子として使う
+    (= 該当行 1 件を 1 watch として数える)。
+    こうすると NULL 行同士が同一セッションでも区別される副作用はあるが、
+    feed_session_id が常に発行される現行設計では稀。
+    """
+    key = case(
+        (
+            InteractionEvent.feed_session_id.is_not(None),
+            InteractionEvent.feed_session_id,
+        ),
+        else_=InteractionEvent.id,
+    )
+    return func.count(func.distinct(key))
+
+
+async def get_watch_count_for_slug(db: AsyncSession, slug: str) -> int:
+    """1 作品 (slug) の watch_count を返す。
+
+    interaction_events が無ければ 0。
+    """
+    stmt = (
+        select(_distinct_watch_count_expr())
+        .where(
+            InteractionEvent.slug == slug,
+            _watch_event_filter(),
+        )
+    )
+    result = await db.execute(stmt)
+    value = result.scalar_one_or_none()
+    return int(value) if value is not None else 0
+
+
+async def aggregate_watch_count_ranking_all_time(
+    db: AsyncSession,
+    *,
+    limit: int = 20,
+    offset: int = 0,
+) -> list[tuple[str, int]]:
+    """全期間の watch_count を slug 単位で集計し、(slug, count) を降順で返す。
+
+    現在 movies テーブルに存在している可視 slug のみを集計対象にする。
+    SQL レベルで OFFSET/LIMIT を適用。
+    """
+    c = _distinct_watch_count_expr().label("c")
+    stmt = (
+        select(InteractionEvent.slug, c)
+        .join(Movie, Movie.slug == InteractionEvent.slug)
+        .where(
+            InteractionEvent.slug.is_not(None),
+            _watch_event_filter(),
+            Movie.is_visible.is_(True),
+        )
+        .group_by(InteractionEvent.slug)
+        .order_by(desc("c"), InteractionEvent.slug)
+        .offset(offset)
+        .limit(limit)
+    )
+    result = await db.execute(stmt)
+    return [(row[0], int(row[1])) for row in result.all()]

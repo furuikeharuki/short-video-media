@@ -55,6 +55,8 @@ export default function HamburgerMenu() {
   const [displayName, setDisplayName] = useState<string>("名無しのユーザー");
   const [editingName, setEditingName] = useState<string>("");
   const [nameStatus, setNameStatus] = useState<"idle" | "saving" | "saved" | "error">("idle");
+  // 「アカウント名」項目から開く編集モーダル。
+  const [nameModalOpen, setNameModalOpen] = useState(false);
 
   // ドロワーを開いた瞬間に表示名を再取得する (別タブで変更されていた場合に追従)。
   useEffect(() => {
@@ -77,6 +79,13 @@ export default function HamburgerMenu() {
     };
   }, [open, status]);
 
+  // モーダルを開く時に「現在の表示名」をプリフィルする (未設定なら「名無しのユーザー」)。
+  const openNameModal = () => {
+    setEditingName(displayName || "名無しのユーザー");
+    setNameStatus("idle");
+    setNameModalOpen(true);
+  };
+
   const saveDisplayName = async () => {
     setNameStatus("saving");
     const next = editingName.trim();
@@ -86,10 +95,13 @@ export default function HamburgerMenu() {
       return;
     }
     setDisplayName(saved);
-    setEditingName(saved === "名無しのユーザー" ? "" : saved);
+    setEditingName(saved);
     setNameStatus("saved");
-    // 2 秒で `saved` 表示を消す。
-    setTimeout(() => setNameStatus("idle"), 2000);
+    // 保存に成功したら少し待ってモーダルを閉じる。
+    setTimeout(() => {
+      setNameStatus("idle");
+      setNameModalOpen(false);
+    }, 600);
   };
   // /feed および /search/feed、フィード上で開く /movies/<slug> モーダル中まで含めて
   // 「ショート視聴中」とみなす。BottomNav の onShortFeed と揃える。
@@ -109,6 +121,10 @@ export default function HamburgerMenu() {
 
   useEffect(() => {
     if (!open) return;
+    // アカウント名モーダルが上に乗っている間は drawer の outside-close を止める
+    // (モーダルの overlay は drawer の外側に描画されるため、そのままだと
+    // モーダル背景タップで drawer も閉じてしまう)。
+    if (nameModalOpen) return;
     const close = (e: MouseEvent | TouchEvent) => {
       if (
         drawerRef.current?.contains(e.target as Node) ||
@@ -122,7 +138,7 @@ export default function HamburgerMenu() {
       document.removeEventListener("mousedown", close);
       document.removeEventListener("touchstart", close);
     };
-  }, [open]);
+  }, [open, nameModalOpen]);
 
   useEffect(() => {
     document.body.style.overflow = open ? "hidden" : "";
@@ -200,6 +216,39 @@ export default function HamburgerMenu() {
         </div>
 
         <nav style={{ padding: "8px 0" }}>
+          {/* アカウント名 (ログイン中のみ表示)。タップで編集モーダルを開く。 */}
+          {status === "authenticated" && (
+            <button
+              type="button"
+              onClick={openNameModal}
+              style={{
+                display: "block",
+                width: "100%",
+                padding: "14px 24px",
+                background: "transparent",
+                color: "#fff",
+                fontSize: "15px",
+                fontWeight: 500,
+                border: "none",
+                borderBottom: "1px solid rgba(255,255,255,0.06)",
+                cursor: "pointer",
+                textAlign: "left",
+                fontFamily: "inherit",
+              }}
+            >
+              アカウント名
+              <span
+                style={{
+                  display: "block",
+                  fontSize: "12px",
+                  color: "rgba(255,255,255,0.55)",
+                  marginTop: "2px",
+                }}
+              >
+                {displayName}
+              </span>
+            </button>
+          )}
           {MENU_ITEMS.map((item) => {
             // requireAuth のメニュー項目は未ログイン時に非表示
             if (item.requireAuth && status !== "authenticated") return null;
@@ -266,81 +315,6 @@ export default function HamburgerMenu() {
             );
           })}
 
-          {/* 表示名エディタ (ログイン中のみ表示) */}
-          {status === "authenticated" && (
-            <div
-              style={{
-                padding: "12px 24px 8px",
-                borderTop: "1px solid rgba(255,255,255,0.08)",
-                marginTop: "8px",
-              }}
-            >
-              <label
-                style={{
-                  display: "block",
-                  fontSize: "12px",
-                  color: "rgba(255,255,255,0.7)",
-                  marginBottom: "6px",
-                }}
-              >
-                コメントで使う表示名
-              </label>
-              <div style={{ display: "flex", gap: 6 }}>
-                <input
-                  type="text"
-                  value={editingName}
-                  onChange={(e) => setEditingName(e.target.value)}
-                  placeholder="名無しのユーザー"
-                  maxLength={32}
-                  style={{
-                    flex: 1,
-                    background: "#1a1a1a",
-                    color: "#fff",
-                    border: "1px solid rgba(255,255,255,0.1)",
-                    borderRadius: "8px",
-                    padding: "8px 10px",
-                    fontSize: "13px",
-                    fontFamily: "inherit",
-                  }}
-                />
-                <button
-                  type="button"
-                  onClick={saveDisplayName}
-                  disabled={nameStatus === "saving"}
-                  style={{
-                    background: "#e91e63",
-                    color: "#fff",
-                    border: "none",
-                    borderRadius: "8px",
-                    padding: "0 12px",
-                    fontSize: "13px",
-                    fontWeight: 700,
-                    cursor: "pointer",
-                    opacity: nameStatus === "saving" ? 0.5 : 1,
-                  }}
-                >
-                  保存
-                </button>
-              </div>
-              <div
-                style={{
-                  fontSize: "11px",
-                  color: "rgba(255,255,255,0.5)",
-                  marginTop: "6px",
-                  minHeight: "14px",
-                }}
-              >
-                {nameStatus === "saving"
-                  ? "保存中..."
-                  : nameStatus === "saved"
-                    ? "保存しました"
-                    : nameStatus === "error"
-                      ? "保存に失敗しました"
-                      : `現在の表示名: ${displayName}`}
-              </div>
-            </div>
-          )}
-
           {/* ログイン / ログアウト */}
           <div style={{ padding: "16px 24px 8px", borderTop: "1px solid rgba(255,255,255,0.08)", marginTop: "8px" }}>
             {status === "authenticated" ? (
@@ -402,6 +376,138 @@ export default function HamburgerMenu() {
           &copy; <span suppressHydrationWarning>{new Date().getFullYear()}</span> AV Shorts
         </div>
       </div>
+
+      {/* アカウント名 編集モーダル */}
+      {nameModalOpen && status === "authenticated" && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-label="アカウント名"
+          onClick={() => {
+            if (nameStatus !== "saving") setNameModalOpen(false);
+          }}
+          style={{
+            position: "fixed",
+            inset: 0,
+            background: "rgba(0,0,0,0.65)",
+            zIndex: 200,
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            padding: "16px",
+          }}
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            style={{
+              width: "100%",
+              maxWidth: 360,
+              background: "#1a1a1a",
+              color: "#fff",
+              borderRadius: 12,
+              padding: "20px",
+              border: "1px solid rgba(255,255,255,0.08)",
+            }}
+          >
+            <div style={{ fontSize: "16px", fontWeight: 700, marginBottom: "12px" }}>
+              アカウント名
+            </div>
+            <div
+              style={{
+                fontSize: "12px",
+                color: "rgba(255,255,255,0.6)",
+                marginBottom: "10px",
+              }}
+            >
+              コメントで使う表示名を編集できます。
+            </div>
+            <input
+              type="text"
+              value={editingName}
+              onChange={(e) => setEditingName(e.target.value)}
+              placeholder="名無しのユーザー"
+              maxLength={32}
+              autoFocus
+              style={{
+                display: "block",
+                width: "100%",
+                background: "#0c0c0c",
+                color: "#fff",
+                border: "1px solid rgba(255,255,255,0.12)",
+                borderRadius: "8px",
+                padding: "10px 12px",
+                fontSize: "14px",
+                fontFamily: "inherit",
+                boxSizing: "border-box",
+              }}
+            />
+            <div
+              style={{
+                fontSize: "11px",
+                color:
+                  nameStatus === "error"
+                    ? "#ff6b6b"
+                    : "rgba(255,255,255,0.5)",
+                marginTop: "8px",
+                minHeight: "14px",
+              }}
+            >
+              {nameStatus === "saving"
+                ? "保存中..."
+                : nameStatus === "saved"
+                  ? "保存しました"
+                  : nameStatus === "error"
+                    ? "保存に失敗しました"
+                    : "空のままにすると「名無しのユーザー」に戻ります。"}
+            </div>
+            <div
+              style={{
+                display: "flex",
+                gap: 8,
+                marginTop: "16px",
+                justifyContent: "flex-end",
+              }}
+            >
+              <button
+                type="button"
+                onClick={() => setNameModalOpen(false)}
+                disabled={nameStatus === "saving"}
+                style={{
+                  background: "transparent",
+                  color: "#fff",
+                  border: "1px solid rgba(255,255,255,0.2)",
+                  borderRadius: "8px",
+                  padding: "8px 14px",
+                  fontSize: "13px",
+                  fontWeight: 600,
+                  cursor: "pointer",
+                  opacity: nameStatus === "saving" ? 0.5 : 1,
+                }}
+              >
+                キャンセル
+              </button>
+              <button
+                type="button"
+                onClick={saveDisplayName}
+                disabled={nameStatus === "saving"}
+                style={{
+                  background: "#e91e63",
+                  color: "#fff",
+                  border: "none",
+                  borderRadius: "8px",
+                  padding: "8px 14px",
+                  fontSize: "13px",
+                  fontWeight: 700,
+                  cursor: "pointer",
+                  opacity: nameStatus === "saving" ? 0.5 : 1,
+                }}
+              >
+                保存
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </>
   );
 }

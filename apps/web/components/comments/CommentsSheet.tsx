@@ -85,13 +85,24 @@ export default function CommentsSheet({
     };
   }, [open, slug, onCountChange]);
 
-  // open 中は body スクロールを止める。
+  // open 中は body スクロールを止める。加えて modal-open / modal-close を発火して
+  // FeedViewer 側のスワイプ判定を抑止する (シート上でのタッチがフィードに伝搬しない)。
   useEffect(() => {
     if (!open) return;
     const prev = document.body.style.overflow;
     document.body.style.overflow = "hidden";
+    try {
+      window.dispatchEvent(new Event("modal-open"));
+    } catch {
+      /* ignore */
+    }
     return () => {
       document.body.style.overflow = prev;
+      try {
+        window.dispatchEvent(new Event("modal-close"));
+      } catch {
+        /* ignore */
+      }
     };
   }, [open]);
 
@@ -190,6 +201,11 @@ export default function CommentsSheet({
     >
       <div
         onClick={(e) => e.stopPropagation()}
+        onTouchStart={(e) => e.stopPropagation()}
+        onTouchMove={(e) => e.stopPropagation()}
+        onTouchEnd={(e) => e.stopPropagation()}
+        onTouchCancel={(e) => e.stopPropagation()}
+        onWheel={(e) => e.stopPropagation()}
         style={{
           width: "100%",
           maxWidth: 640,
@@ -366,6 +382,9 @@ function CommentRow({
 }: CommentRowProps) {
   const isMine =
     !!myUserId && comment.author_user_id === myUserId;
+  // 返信は初期状態で折りたたみ。「返信を見る」で展開する。
+  const [repliesOpen, setRepliesOpen] = useState(false);
+  const replyCount = comment.replies.length;
   return (
     <div style={{ padding: "10px 4px", borderBottom: "1px solid rgba(255,255,255,0.06)" }}>
       <CommentBubble
@@ -375,21 +394,40 @@ function CommentRow({
         onReply={onReply}
         onDelete={onDelete}
       />
-      {comment.replies.length > 0 && (
-        <div style={{ marginTop: 8, paddingLeft: 28 }}>
-          {comment.replies.map((r) => {
-            const replyIsMine =
-              !!myUserId && r.author_user_id === myUserId;
-            return (
-              <CommentBubble
-                key={r.id}
-                comment={r}
-                isMine={replyIsMine}
-                showReplyButton={false}
-                onDelete={onDelete}
-              />
-            );
-          })}
+      {replyCount > 0 && (
+        <div style={{ marginTop: 4, paddingLeft: 28 }}>
+          <button
+            type="button"
+            onClick={() => setRepliesOpen((v) => !v)}
+            aria-expanded={repliesOpen}
+            style={{
+              background: "transparent",
+              color: "#7eb6ff",
+              border: "none",
+              fontSize: 12,
+              cursor: "pointer",
+              padding: "4px 0",
+            }}
+          >
+            {repliesOpen ? `返信を隠す` : `返信を見る (${replyCount})`}
+          </button>
+          {repliesOpen && (
+            <div style={{ marginTop: 4 }}>
+              {comment.replies.map((r) => {
+                const replyIsMine =
+                  !!myUserId && r.author_user_id === myUserId;
+                return (
+                  <CommentBubble
+                    key={r.id}
+                    comment={r}
+                    isMine={replyIsMine}
+                    showReplyButton={false}
+                    onDelete={onDelete}
+                  />
+                );
+              })}
+            </div>
+          )}
         </div>
       )}
     </div>

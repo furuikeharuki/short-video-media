@@ -77,7 +77,14 @@ export default function PrefetchVideoBuffer({
     const el = registerPrefetchElement({ slug, src, preload, minStart });
     host.appendChild(el);
 
-    const offLabel = offset != null ? `+${offset}` : "?";
+    // offset 負数 (例: -1 = current-1 の「直前のスライド」スロット) を
+    // `+-1` のように出してしまわないため、負数はそのまま、正数だけ + を付ける。
+    const offLabel =
+      offset == null
+        ? "?"
+        : offset > 0
+          ? `+${offset}`
+          : `${offset}`;
     let canPlayNotified = false;
 
     const onLoadedMetadata = () => {

@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 
 import type { MovieCard } from "@/lib/api/feed";
 import {
+  extractBasename,
   extractHost,
   inferQualityTier,
   pickPlaybackUrl,
@@ -155,8 +156,11 @@ function logPrefetchQuality(
     res.high_mp4_url && res.high_mp4_url !== res.mp4_url
       ? "primary->high"
       : "none";
+  // `other` は辞書 4 種に該当しないファイル名。DMM の新サフィックスか SD 限定かを
+  // 切り分けるため、basename だけ (= 署名クエリは含まない短い識別子) を残す。
+  const extra = tier === "other" ? ` basename=${extractBasename(picked)}` : "";
   vtPrefetchLog(
-    `quality slug=${slug} offset=${fmtOffset(offset)} quality=${tier} host=${host} drift=${drift}`,
+    `quality slug=${slug} offset=${fmtOffset(offset)} quality=${tier} host=${host} drift=${drift}${extra}`,
   );
 }
 

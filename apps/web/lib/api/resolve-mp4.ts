@@ -85,6 +85,32 @@ export function extractHost(url: string | null | undefined): string {
 }
 
 /**
+ * URL のファイル basename だけを安全に取り出す。クエリ / hash / 親パスは含めない。
+ *
+ * 用途: `inferQualityTier` が `other` を返した URL について、DMM が出している
+ * 実サフィックスを vt ログに残し、コード側のサフィックス辞書を拡張すべきかを
+ * 観測するためのもの。
+ *
+ * セキュリティ: 署名トークン入りクエリやパスを誤って残さないため、
+ *   - URL.pathname の最後のセグメントのみを採用
+ *   - 英数 / `_` / `.` / `-` 以外を含む場合は "?" を返す (= ログ汚染防止)
+ *   - 長すぎる basename (>64 char) は "?" を返す (= 異常入力の遮断)
+ *
+ * 不正値 / null / 解析不能 URL は "?" を返す。
+ */
+export function extractBasename(url: string | null | undefined): string {
+  if (!url) return "?";
+  try {
+    const path = new URL(url).pathname;
+    const last = path.substring(path.lastIndexOf("/") + 1);
+    if (!last || last.length > 64) return "?";
+    return /^[A-Za-z0-9._-]+$/.test(last) ? last : "?";
+  } catch {
+    return "?";
+  }
+}
+
+/**
  * 優先度。
  *  - "high":   active 再生 (useResolvedVideoSrc)。waiters の先頭に割り込み、
  *              warm の低優先度上限 (activeLow) を無視して即発火。

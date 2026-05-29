@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import {
+  extractBasename,
   extractHost,
   inferQualityTier,
   pickPlaybackUrl,
@@ -102,9 +103,13 @@ function logSelectedQuality(
   const drift = res.high_mp4_url && res.high_mp4_url !== res.mp4_url
     ? "primary->high"
     : "none";
+  // `other` は extractor が拾った URL が辞書 4 種 (sm/dm/dmb/mhb) に当てはまらない
+  // ケース。DMM 側が新サフィックスを使っているのか、SD しか出していないのかを
+  // 切り分けるため、basename だけ (= 署名クエリは含めない安全な短い識別子) を残す。
+  const extra = tier === "other" ? ` basename=${extractBasename(picked)}` : "";
   // eslint-disable-next-line no-console
   console.debug(
-    `vt resolve quality slug=${slug} source=${source} scope=${scope} quality=${tier} host=${host} drift=${drift}`,
+    `vt resolve quality slug=${slug} source=${source} scope=${scope} quality=${tier} host=${host} drift=${drift}${extra}`,
   );
 }
 

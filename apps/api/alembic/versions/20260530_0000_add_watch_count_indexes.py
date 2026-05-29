@@ -1,7 +1,7 @@
 """add watch_count partial indexes on interaction_events
 
-Revision ID: b2c3d4e5f6a7
-Revises: a1b2c3d4e5f6
+Revision ID: 2b8d1e0f7a34
+Revises: 1a9c7f3e0b21
 Create Date: 2026-05-30 00:00:00.000000+00:00
 
 watch_count (50% 以上再生に到達したユニーク feed_session 数) を
@@ -29,8 +29,8 @@ from typing import Sequence, Union
 from alembic import op
 
 
-revision: str = "b2c3d4e5f6a7"
-down_revision: Union[str, None] = "a1b2c3d4e5f6"
+revision: str = "2b8d1e0f7a34"
+down_revision: Union[str, None] = "1a9c7f3e0b21"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 

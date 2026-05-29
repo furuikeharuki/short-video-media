@@ -1,6 +1,8 @@
 name: Web CI
 
 # apps/web の TypeScript 型チェック + Next.js build を回す軽量 CI。
+# ルート package.json に workspaces: ["apps/*"] が定義されているため、
+# lockfile はルートにただ 1 つだけ存在する。インストールもルートで行う。
 
 on:
   push:
@@ -27,8 +29,10 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
 
-    # ルート package.json に workspaces: ["apps/*"] が定義されているため、
-    # lockfile はルートにただ 1 つだけ存在する。インストールもルートで行う。
+    env:
+      # build が production 判定にならないように development を明示する。
+      NEXT_TELEMETRY_DISABLED: "1"
+
     steps:
       - uses: actions/checkout@v4
 
@@ -40,6 +44,17 @@ jobs:
 
       - name: Install dependencies (npm workspaces)
         run: npm ci
+
+      # Next.js は .next/cache に Webpack / SWC のキャッシュを残す。
+      # PR ブランチ間でも再利用できると build が数十秒〜数分短縮される。
+      - name: Cache Next.js build
+        uses: actions/cache@v4
+        with:
+          path: apps/web/.next/cache
+          key: nextjs-${{ runner.os }}-${{ hashFiles('package-lock.json') }}-${{ hashFiles('apps/web/**/*.ts','apps/web/**/*.tsx','apps/web/**/*.js','apps/web/**/*.jsx') }}
+          restore-keys: |
+            nextjs-${{ runner.os }}-${{ hashFiles('package-lock.json') }}-
+            nextjs-${{ runner.os }}-
 
       - name: TypeScript typecheck
         run: npm run typecheck -w apps/web

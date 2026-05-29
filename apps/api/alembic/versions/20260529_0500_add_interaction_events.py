@@ -1,6 +1,6 @@
 """add interaction_events table
 
-Revision ID: a1b2c3d4e5f6
+Revision ID: 1a9c7f3e0b21
 Revises: f6a7b8c9d0e1
 Create Date: 2026-05-29 05:00:00.000000+00:00
 
@@ -18,7 +18,7 @@ from alembic import op
 from sqlalchemy.dialects import postgresql
 
 
-revision: str = "a1b2c3d4e5f6"
+revision: str = "1a9c7f3e0b21"
 down_revision: Union[str, None] = "f6a7b8c9d0e1"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None

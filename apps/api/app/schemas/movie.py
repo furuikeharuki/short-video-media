@@ -1,4 +1,19 @@
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
+
+
+def _ensure_https(url: str | None) -> str | None:
+    """画像・メディア URL の `http://` を `https://` に揃える。
+
+    DMM 画像 CDN (pics.dmm.co.jp) は HTTPS でも 200 を返すが、
+    affiliate API のレスポンスや既存 DB レコードに `http://` が残っているケースが
+    あり、HTTPS ページから読むとブラウザが Mixed Content として upgrade or block する。
+    レスポンス境界で一律に正規化して、フロント側で再現できない不整合を出さないようにする。
+    """
+    if not url:
+        return url
+    if url.startswith("http://"):
+        return "https://" + url[len("http://") :]
+    return url
 
 
 class PriceList(BaseModel):
@@ -25,6 +40,11 @@ class MovieCard(BaseModel):
     actresses: list[str] = []
     genres: list[str] = []
     series_name: str | None = None
+
+    @field_validator("image_url_list", "image_url_large", mode="before")
+    @classmethod
+    def _upgrade_image_https(cls, v: str | None) -> str | None:
+        return _ensure_https(v)
 
 
 class MovieDetail(BaseModel):
@@ -55,3 +75,10 @@ class MovieDetail(BaseModel):
     actresses: list[str] = []
     genres: list[str] = []
     series_name: str | None = None
+
+    @field_validator(
+        "image_url_list", "image_url_large", "sample_embed_url", mode="before"
+    )
+    @classmethod
+    def _upgrade_media_https(cls, v: str | None) -> str | None:
+        return _ensure_https(v)

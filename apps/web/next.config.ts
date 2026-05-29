@@ -52,6 +52,11 @@ const cspReportOnly = [
     "frame-src 'self'",
     "https://a.magsrv.com https://a.pemsrv.com",
     "https://*.exoclick.com https://*.exosrv.com",
+    // ExoClick 経由で配信される広告のクリックスルー / 広告主クリエイティブの iframe。
+    // Report-Only 観測で頻出していた既知の third-party ホストだけを narrow に追加する
+    // (ワイルドカードでベンダー全体を許可せず、観測実績のあるサブドメインだけに絞る)。
+    "https://go.xlivrdr.com",
+    "https://creative.marzaent.com",
   ].join(" "),
   "worker-src 'self' blob:",
   "font-src 'self' data: https:",

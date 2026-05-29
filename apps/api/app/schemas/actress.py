@@ -1,6 +1,6 @@
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 
-from app.schemas.movie import MovieCard, PriceList
+from app.schemas.movie import MovieCard, PriceList, _ensure_https
 
 
 class ActressCard(BaseModel):
@@ -11,6 +11,13 @@ class ActressCard(BaseModel):
     thumbnail_url: str | None = None
     image_url_small: str | None = None
     image_url_large: str | None = None
+
+    @field_validator(
+        "thumbnail_url", "image_url_small", "image_url_large", mode="before"
+    )
+    @classmethod
+    def _upgrade_image_https(cls, v: str | None) -> str | None:
+        return _ensure_https(v)
 
 
 class GoodsCard(BaseModel):
@@ -27,6 +34,11 @@ class GoodsCard(BaseModel):
     review_count: int = 0
     review_average: float | None = None
     maker_name: str | None = None
+
+    @field_validator("image_url_list", "image_url_large", mode="before")
+    @classmethod
+    def _upgrade_image_https(cls, v: str | None) -> str | None:
+        return _ensure_https(v)
 
 
 class ActressProfile(BaseModel):
@@ -54,6 +66,13 @@ class ActressProfile(BaseModel):
 
     # 外部リンク
     dmm_list_url: str | None = None
+
+    @field_validator(
+        "thumbnail_url", "image_url_small", "image_url_large", mode="before"
+    )
+    @classmethod
+    def _upgrade_image_https(cls, v: str | None) -> str | None:
+        return _ensure_https(v)
 
 
 class ActressStats(BaseModel):

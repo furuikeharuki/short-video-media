@@ -162,7 +162,14 @@ jobs:
           # としてホスト OS の loopback にのみ bind しているため、
           # SSH して初めて db コンテナへ到達できる。
           # 外部ネットワークからは見えないので firewall 面も安全。
-          ssh ${PORT_OPT} -o BatchMode=yes -o ExitOnForwardFailure=yes \
+          # ServerAlive 系で NAT/firewall の idle 切断を防ぐ。年単位の full sync は
+          # トンネルを生かしておく時間が長いため keepalive 必須。
+          ssh ${PORT_OPT} \
+            -o BatchMode=yes \
+            -o ExitOnForwardFailure=yes \
+            -o ServerAliveInterval=30 \
+            -o ServerAliveCountMax=10 \
+            -o TCPKeepAlive=yes \
             -L 15432:127.0.0.1:5432 -fN "${USER}@${HOST}"
           # tunnel が立ち上がるまで少し待つ
           for i in 1 2 3 4 5 6 7 8 9 10; do
@@ -245,12 +252,28 @@ jobs:
           fi
           # actress は 1 ジョブ = 1 プロセスで完結し、メモリも軽いので
           # VPS 上で docker compose run --rm jobs で十分。
-          ssh ${PORT_OPT} -o BatchMode=yes "${USER}@${HOST}" bash -s <<EOF
+          # SSH keepalive / PYTHONUNBUFFERED / 進捗 echo は jobs-sync-catalog.yml と同様
+          # (NAT/firewall idle 切断と Python の block buffer による無出力期間で
+          #  GitHub Actions runner 側から SSH が切れる事故を防ぐ)。
+          ssh ${PORT_OPT} \
+            -o BatchMode=yes \
+            -o ServerAliveInterval=30 \
+            -o ServerAliveCountMax=10 \
+            -o TCPKeepAlive=yes \
+            "${USER}@${HOST}" bash -s <<EOF
           set -euo pipefail
+          trap 'echo "[remote] exit_status=\$?" >&2' EXIT
+          echo "[remote] start \$(date -u +%FT%TZ)"
           cd "${REPO_DIR}/infra/xserver"
+          echo "[remote] docker compose build start \$(date -u +%FT%TZ)"
           docker compose --profile cli build jobs
-          docker compose --profile cli run --rm jobs \
+          echo "[remote] docker compose build done \$(date -u +%FT%TZ)"
+          echo "[remote] sync_actress_profiles run start \$(date -u +%FT%TZ)"
+          docker compose --profile cli run --rm -T \
+            -e PYTHONUNBUFFERED=1 \
+            jobs \
             python -m src.sync_actress_profiles
+          echo "[remote] sync_actress_profiles run done \$(date -u +%FT%TZ)"
           EOF
 
       - name: Tear down ssh-agent
@@ -324,7 +347,14 @@ jobs:
           if [ -n "${PORT}" ]; then
             PORT_OPT="-p ${PORT}"
           fi
-          ssh ${PORT_OPT} -o BatchMode=yes -o ExitOnForwardFailure=yes \
+          # ServerAlive 系で NAT/firewall の idle 切断を防ぐ。年単位の full sync は
+          # トンネルを生かしておく時間が長いため keepalive 必須。
+          ssh ${PORT_OPT} \
+            -o BatchMode=yes \
+            -o ExitOnForwardFailure=yes \
+            -o ServerAliveInterval=30 \
+            -o ServerAliveCountMax=10 \
+            -o TCPKeepAlive=yes \
             -L 15432:127.0.0.1:5432 -fN "${USER}@${HOST}"
           for i in 1 2 3 4 5 6 7 8 9 10; do
             if (echo > /dev/tcp/127.0.0.1/15432) >/dev/null 2>&1; then

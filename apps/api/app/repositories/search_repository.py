@@ -4,7 +4,7 @@ import re
 from datetime import date
 from typing import Literal
 
-from sqlalchemy import and_, func, or_, select, union_all
+from sqlalchemy import and_, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.models.actress import Actress
@@ -83,64 +83,52 @@ def _split_keyword_tokens(query: str) -> list[str]:
 
 
 def _build_token_where(token: str):
-    """単一トークンに対する WHERE 条件 (title / description / director / maker / label /
+    """単一トークンに対する OR 条件 (title / description / director / maker / label /
     女優名 / ジャンル名 / シリーズ名 の部分一致いずれか) を返す。
 
-    実装は **「マッチする movie_id を 8 本の SELECT で UNION ALL したサブクエリへの IN」** に
-    なっている。OR (or_) を直接書くと PostgreSQL の planner は 1 つのスキャン上で
-    8 列ぶんの ILIKE 条件をまとめて評価しようとして BitmapOr or Seq Scan に
-    倒れがちで、`q=巨乳` のような高頻度 2 文字キーワードでは:
+    女優 / ジャンル / シリーズは IN (...) の代わりに EXISTS を使う。
+    pg_trgm GIN index と組み合わせた時に planner が選択しやすく、
+    行数が多くなっても IN マテリアライズを避けられる。
 
-      - description (長文 Text) ILIKE がほぼ全行ヒットしてしまい索引が役に立たない
-      - bitmap heap recheck で結局全マッチ行を再フェッチして遅い
-      - actress/genre/series 側の相関 EXISTS が OR の中に入ると semi-join 化されず
-        movie 行ごとに評価される
-
-    UNION ALL でまず候補 movie_id 集合だけを作っておくと:
-      - 各 SELECT は 1 列の pg_trgm GIN index を直接使った Bitmap Index Scan で済む
-      - actress/genre/series は子テーブル側 (行数が小さい) を先に絞り込んでから
-        movie_id を引くので、相関サブクエリと違い対象 movie 行数に依存しない
-      - 重複は外側 IN が暗黙に除去する (UNION ALL でいいので集約コスト不要)
+    注: PR #293 で UNION ALL ベースの候補 movie_id 集合 + Movie.id IN (...)
+    に置き換えていたが、フィード経路 (`get_advanced_movie_ids` → LIMIT 無しで
+    全 ID を取得) と組み合わさるとプランナが巨大な IN セットを材料化して
+    本番が極端に遅くなる回帰を出したため、PR #291 の EXISTS 形に戻している。
+    高頻度 2 文字キーワードの遅さは `_capped_count` (cap 1000) 側で吸収する。
     """
     pat = f"%{token}%"
 
-    # フリーワードがどの movie_id にマッチするかを 8 本の SELECT で UNION ALL する。
-    # 各 SELECT は 1 列の pg_trgm GIN index を独立に使える。
-    # UNION ALL の列名は最初の SELECT のものに揃うため、actress/genre 側は
-    # `MovieActress.movie_id.label("id")` のように明示的にラベルを揃える。
-    cand_title = select(Movie.id.label("id")).where(Movie.title.ilike(pat))
-    cand_desc = select(Movie.id.label("id")).where(Movie.description.ilike(pat))
-    cand_director = select(Movie.id.label("id")).where(Movie.director_name.ilike(pat))
-    cand_maker = select(Movie.id.label("id")).where(Movie.maker_name.ilike(pat))
-    cand_label = select(Movie.id.label("id")).where(Movie.label_name.ilike(pat))
-    cand_actress = (
-        select(MovieActress.movie_id.label("id"))
+    actress_exists = (
+        select(1)
+        .select_from(MovieActress)
         .join(Actress, Actress.id == MovieActress.actress_id)
-        .where(Actress.name.ilike(pat))
+        .where(MovieActress.movie_id == Movie.id, Actress.name.ilike(pat))
+        .exists()
     )
-    cand_genre = (
-        select(MovieGenre.movie_id.label("id"))
+    genre_exists = (
+        select(1)
+        .select_from(MovieGenre)
         .join(Genre, Genre.id == MovieGenre.genre_id)
-        .where(Genre.name.ilike(pat))
+        .where(MovieGenre.movie_id == Movie.id, Genre.name.ilike(pat))
+        .exists()
     )
-    cand_series = (
-        select(Movie.id.label("id"))
-        .join(Series, Series.id == Movie.series_id)
-        .where(Series.name.ilike(pat))
+    series_exists = (
+        select(1)
+        .select_from(Series)
+        .where(Series.id == Movie.series_id, Series.name.ilike(pat))
+        .exists()
     )
 
-    candidates = union_all(
-        cand_title,
-        cand_desc,
-        cand_director,
-        cand_maker,
-        cand_label,
-        cand_actress,
-        cand_genre,
-        cand_series,
-    ).subquery()
-
-    return Movie.id.in_(select(candidates.c.id))
+    return or_(
+        Movie.title.ilike(pat),
+        Movie.description.ilike(pat),
+        Movie.director_name.ilike(pat),
+        Movie.maker_name.ilike(pat),
+        Movie.label_name.ilike(pat),
+        actress_exists,
+        genre_exists,
+        series_exists,
+    )
 
 
 def _build_keyword_where(query: str):

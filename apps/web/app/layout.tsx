@@ -7,7 +7,7 @@ import SessionProvider from "@/components/SessionProvider";
 import SavedFilterEnforcer from "@/components/SavedFilterEnforcer";
 import FullpageInterstitial from "@/components/ads/FullpageInterstitial";
 import BuildIdLogger from "@/components/BuildIdLogger";
-import HydrationErrorReporter from "@/components/HydrationErrorReporter";
+import HydrationDebugEarlyScript from "@/components/HydrationDebugEarlyScript";
 import {
   SITE_NAME,
   SITE_URL,
@@ -120,6 +120,14 @@ export default function RootLayout({
       <head>
         <meta name="x-build-id" content={BUILD_ID} />
         {/*
+         * React #418 (hydration mismatch) を「listener が走り始める前」に
+         * 取り逃がさないための同期 <script>。useEffect 版は hydration 完了後に
+         * しか listener を貼れず本番で空振りしたため、<head> 内 inline に移動。
+         * ?vt=1 か NEXT_PUBLIC_HYDRATION_DEBUG=1 のときだけ実装が走る。
+         * 詳細は components/HydrationDebugEarlyScript.tsx。
+         */}
+        <HydrationDebugEarlyScript />
+        {/*
          * BottomNav の Chrome 限定フルページ遷移チラつき対策。
          * 同期スクリプトとして <head> に置き、ハイドレーション以前 / first paint
          * 直前に sessionStorage を読んで <html> へ data-nav-freeze-active-href
@@ -161,14 +169,6 @@ export default function RootLayout({
               スピナーを出して "フィルター違反作品が一瞬見える" フラッシュを防ぐ。 */}
           <SavedFilterEnforcer>
             <BuildIdLogger buildId={BUILD_ID} />
-            {/*
-              本番で React error #418 (hydration mismatch) が出続けるが、minified
-              スタックでは原因要素が特定できないため、?vt=1 か
-              NEXT_PUBLIC_HYDRATION_DEBUG=1 のとき限定で発生時の DOM / <head> /
-              <html> 属性を console.error にダンプする診断モジュールを差し込む。
-              通常本番では何も走らないので影響なし。
-            */}
-            <HydrationErrorReporter />
             <Header />
             {children}
             {modal}

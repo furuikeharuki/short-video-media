@@ -114,13 +114,32 @@ export default function HydrationDebugEarlyScript() {
     function suspects() {
       var body = document.body;
       var html = document.documentElement;
+      var head = document.head;
       var result = {
         gramm: false,
         cz: false,
         translateGoogle: false,
         bodyExtensionAttrs: [],
         htmlExtensionAttrs: [],
+        // Vercel Preview Toolbar / Comments (vercel.live/_next-live/feedback/...)
+        // が <head> に注入する script は server SSR HTML には無く、edge HTML
+        // transformer によって挿入されるため、React の RSC ペイロード期待値と
+        // 実 DOM がずれて #418 を引き起こすことがある。preview だけで再現する
+        // hydration mismatch の主犯候補なのでフラグ化して切り分けやすくする。
+        vercelLive: false,
+        vercelLiveScripts: [],
       };
+      if (head) {
+        var hcs = head.children;
+        for (var hi = 0; hi < hcs.length; hi++) {
+          var hc = hcs[hi];
+          var hsrc = hc.getAttribute && hc.getAttribute('src');
+          if (hsrc && hsrc.indexOf('vercel.live') !== -1) {
+            result.vercelLive = true;
+            result.vercelLiveScripts.push(hsrc);
+          }
+        }
+      }
       if (body) {
         result.gramm =
           !!body.getAttribute('data-gramm') ||

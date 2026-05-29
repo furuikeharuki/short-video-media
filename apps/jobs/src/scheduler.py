@@ -208,13 +208,19 @@ async def _run_bootstrap() -> None:
     actress_only_missing = (
         os.getenv("BOOTSTRAP_ACTRESS_ONLY_MISSING", "true").lower() == "true"
     )
-    # 年×フロアの並列実行数 (デフォルト 4)。
-    # DMM API 側のレート制限は sync_catalog 内部の AsyncLimiter (DMM_API_RPS) で
-    # まとめてケアするため、ここの並列度は単に "DB トランザクションを何本同時に
-    # 走らせるか" を決める。あまり大きくすると Postgres の接続数を食うので
-    # 4〜8 程度に抑えるのが安全。
+    # 年×フロアの並列実行数 (デフォルト 1 = 直列)。
+    #
+    # デフォルトを 1 にしている理由:
+    #   - 本番 Xserver VPS (RAM 1.9GB) で concurrency=4 だと OOM kill されるため。
+    #   - 1 ジョブ (1 年×フロア) の python プロセスが 約 700-750MB 使うため、
+    #     RAM 4GB 未満のホストでは 1 以上にしない方が安全。
+    #
+    # メモリに余裕があるホスト (目安: RAM ≥ 4GB) では .env で BOOTSTRAP_CONCURRENCY=2~4 に
+    # 上げると bootstrap 全体の所要時間をその倍率だけ短縮できる。
+    # DMM API レートは sync_catalog 内部の AsyncLimiter (DMM_API_RPS) が全体で保つので
+    # 並列度を上げても DMM 側に burst は掛からない。
     bootstrap_concurrency = max(
-        1, int(os.getenv("BOOTSTRAP_CONCURRENCY", "4"))
+        1, int(os.getenv("BOOTSTRAP_CONCURRENCY", "1"))
     )
 
     logger.info(

@@ -329,24 +329,63 @@ async def main(
     )
 
 
-if __name__ == "__main__":
+def _resolve_cli_args(argv: list[str] | None = None) -> dict:
+    """CLI 引数と環境変数から `main()` 用 kwargs を解決する。
+
+    優先順位は CLI > 環境変数 > ハードコード default。
+    `--only-missing` / `--dry-run` は `store_true` のため未指定で False になる。
+    CLI で False の場合のみ env を見にいく (CLI が True なら CLI を優先)。
+
+    sync_actress_profiles 系の環境変数:
+      - SYNC_ACTRESS_LIMIT         : 処理上限件数 (未指定なら全件)
+      - SYNC_ACTRESS_ONLY_MISSING  : 1/true で --only-missing 相当
+      - SYNC_ACTRESS_DRY_RUN       : 1/true で書き込みなし
+    """
+    from src import scheduled_config as cfg
+
     parser = argparse.ArgumentParser()
     parser.add_argument(
         "--limit", type=int, default=None,
-        help="処理する女優の最大件数 (デフォルト: 全件)",
+        help=(
+            "処理する女優の最大件数。"
+            " 未指定なら env SYNC_ACTRESS_LIMIT → 全件"
+        ),
     )
     parser.add_argument(
         "--only-missing", action="store_true",
-        help="ruby / birthday / image_url_large のいずれかが空の女優だけを対象にする",
+        help=(
+            "ruby / birthday / image_url_large のいずれかが空の女優だけを対象にする"
+            " (env SYNC_ACTRESS_ONLY_MISSING=1 でも有効)"
+        ),
     )
     parser.add_argument(
         "--dry-run", action="store_true",
-        help="DB に書き込まずにログだけ表示",
+        help="DB に書き込まずにログだけ表示 (env SYNC_ACTRESS_DRY_RUN=1 でも有効)",
     )
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
 
-    asyncio.run(main(
-        limit=args.limit,
-        only_missing=args.only_missing,
-        dry_run=args.dry_run,
-    ))
+    try:
+        # limit: CLI → env → None
+        limit = args.limit
+        if limit is None:
+            limit = cfg.env_int("SYNC_ACTRESS_LIMIT", minimum=1)
+
+        # CLI で True なら True 確定、False なら env を見る
+        only_missing = bool(args.only_missing) or cfg.env_bool(
+            "SYNC_ACTRESS_ONLY_MISSING", default=False
+        )
+        dry_run = bool(args.dry_run) or cfg.env_bool(
+            "SYNC_ACTRESS_DRY_RUN", default=False
+        )
+    except cfg.EnvConfigError as e:
+        raise SystemExit(f"[sync_actress_profiles] 設定エラー: {e}") from e
+
+    print(
+        f"[sync_actress_profiles] resolved config: limit={limit} "
+        f"only_missing={only_missing} dry_run={dry_run}"
+    )
+    return dict(limit=limit, only_missing=only_missing, dry_run=dry_run)
+
+
+if __name__ == "__main__":
+    asyncio.run(main(**_resolve_cli_args()))

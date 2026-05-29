@@ -36,11 +36,11 @@ on:
   workflow_dispatch:
     inputs:
       hits:
-        description: "1 フロアあたり取得件数 (デフォルト 100)"
+        description: "1 フロアあたり取得件数 (空なら env SYNC_CATALOG_HITS → 100)"
         required: false
-        default: "100"
+        default: ""
       floors:
-        description: "対象フロア (カンマ区切り, 空なら sync_catalog のデフォルト)"
+        description: "対象フロア (カンマ区切り, 空なら env SYNC_CATALOG_FLOORS → 既定)"
         required: false
         default: ""
 
@@ -80,7 +80,12 @@ jobs:
           USER: ${{ secrets.XSERVER_SSH_USER }}
           PORT: ${{ secrets.XSERVER_SSH_PORT }}
           REPO_DIR: ${{ secrets.XSERVER_REPO_DIR }}
-          HITS: ${{ github.event.inputs.hits || '100' }}
+          # workflow_dispatch 由来の値。空ならスクリプト側で
+          # VPS 上 .env / docker compose 環境変数 (SYNC_CATALOG_*) → ハードコード
+          # default の順にフォールバックする。
+          # mode は cron では常に incremental (最新追跡) を使うため env / dispatch
+          # からは設定不可。--mode full は手動 CLI でのみ使う。
+          HITS: ${{ github.event.inputs.hits || '' }}
           FLOORS: ${{ github.event.inputs.floors || '' }}
         run: |
           set -euo pipefail
@@ -92,7 +97,12 @@ jobs:
             PORT_OPT="-p ${PORT}"
           fi
 
-          # --floors を空なら付けない (sync_catalog のデフォルト挙動を使うため)。
+          # CLI フラグは値が指定された時だけ付ける。
+          # 空のときは sync_catalog 側が env (SYNC_CATALOG_*) を見にいく。
+          HITS_ARG=""
+          if [ -n "${HITS}" ]; then
+            HITS_ARG="--hits ${HITS}"
+          fi
           FLOORS_ARG=""
           if [ -n "${FLOORS}" ]; then
             FLOORS_ARG="--floors ${FLOORS}"
@@ -101,6 +111,11 @@ jobs:
           # VPS 上で docker compose run --rm jobs を叩く。
           # jobs サービスは profiles: ["cli"] なので "docker compose up" には含まれず、
           # ここで明示的に呼ぶことでだけ起動する。完了後はそのまま破棄される (--rm)。
+          # SYNC_CATALOG_* は infra/xserver/.env から docker compose の
+          # env_file 経由で jobs コンテナに渡り、CLI 未指定時のフォールバックとして
+          # スクリプトに参照される。
+          # --mode incremental を明示することで、env で偶発的に full モードに
+          # 切り替わるリスクを workflow レベルで排除する。
           ssh ${PORT_OPT} -o BatchMode=yes "${USER}@${HOST}" bash -s <<EOF
           set -euo pipefail
           cd "${REPO_DIR}/infra/xserver"
@@ -110,7 +125,7 @@ jobs:
           docker compose --profile cli run --rm jobs \
             python -m src.sync_catalog \
               --mode incremental \
-              --hits ${HITS} \
+              ${HITS_ARG} \
               ${FLOORS_ARG}
           EOF
 

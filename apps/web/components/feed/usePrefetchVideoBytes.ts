@@ -78,8 +78,20 @@ import {
 const PREFETCH_START_OFFSET = 1;
 
 /**
- * handoff pool の near-protection に出す「近距離未来枠」の最大 offset。
- * current (0) + 1/2/3 までを cap-eviction から守る。
+ * ユーザが上方向にスワイプして「直前まで見ていた」スライドへ戻ったときに、
+ * ゼロロードからやり直さないために `current-1` のスライドも軽量に温めておく。
+ * preload="metadata" 固定 (= container/codec/長さだけで bytes は取らない) で、
+ * +1/+2 の bytes prefetch に帯域を譲りつつ、active 到達時の resolveMp4Url が
+ * resolveCache にヒットして「resolve 1 往復+ <video> 初期化」分は短縮できる。
+ *
+ * 有効化条件: policy.aheadCount >= 1 (= 通常モードの回線/ブラウザ) かつ
+ * rapid swipe 中でないこと。Save-Data / 2g (aheadCount=0) では実施しない。
+ */
+const PREV_PREFETCH_OFFSET = -1;
+
+/**
+ * handoff pool の near-protection に出す「近距離枠」の offset 範囲。
+ * `current-1 .. current+3` を cap-eviction から守る。
  *
  * 注意: ここで保護する slug は実際に prefetch slot を持っているとは限らない。
  * Safari (aheadCount=1) や rapid swipe (+1 のみ allow) のように +2/+3 の slot を
@@ -88,9 +100,20 @@ const PREFETCH_START_OFFSET = 1;
  * 直後など)。そのため offset window は policy 非依存にして広めに取る。
  *
  * canplay 未到達 entry の枠 (MAX_POOLED_NON_CANPLAY=4) を圧迫しすぎないため
- * 上限は控えめ。
+ * 上限は控えめ。`-1` 側は 1 枚だけ。
  */
+const NEAR_PROTECT_MIN_OFFSET = -1;
 const NEAR_PROTECT_MAX_OFFSET = 3;
+
+/**
+ * offset を `+1` / `-1` / `0` 形式の文字列に整形する。ログの "+" prefix を
+ * 単純な ``+${offset}`` で組み立てると負数で `+-1` になるので分岐させる。
+ */
+function fmtOffset(offset: number): string {
+  if (offset > 0) return `+${offset}`;
+  if (offset === 0) return "0";
+  return `${offset}`;
+}
 
 // current+1 は debounce なしで即時発火する。React のレンダー直後に走らせるため
 // microtask (queueMicrotask 相当の Promise.resolve().then) でキックする。
@@ -133,7 +156,7 @@ function logPrefetchQuality(
       ? "primary->high"
       : "none";
   vtPrefetchLog(
-    `quality slug=${slug} offset=+${offset} quality=${tier} host=${host} drift=${drift}`,
+    `quality slug=${slug} offset=${fmtOffset(offset)} quality=${tier} host=${host} drift=${drift}`,
   );
 }
 
@@ -261,6 +284,31 @@ export function usePrefetchVideoBytes(
       }
     }
   }
+  // current-1 の軽量ウォーミング。ユーザが上方向スワイプで「直前見ていた
+  // スライド」に戻ったときに、resolveCache + <video> container だけでも
+  // 温めておいて、ゼロロードからの force-load 動作を避ける。bytes
+  // 負荷を上げたくないので preload="metadata" 固定。rapid swipe 中は
+  // activeTargets フィルタで除外される。
+  if (policy.aheadCount > 0) {
+    const offset = PREV_PREFETCH_OFFSET;
+    const idx = currentIndex + offset;
+    if (idx >= 0 && idx < items.length) {
+      const it = items[idx];
+      if (it && it.slug) {
+        targets.push({
+          id: it.id,
+          slug: it.slug,
+          offset,
+          targetIndex: idx,
+          // 反復見返しはそこまで頻度が高くないため bytes は取らない。
+          // resolveCache ヒット + <video> container 事前初期化 + browser の
+          // metadata Range 取得までをゴールにする。
+          preload: "metadata",
+          minStart: getMinStartTime(it.genres),
+        });
+      }
+    }
+  }
   // deps 用に安定キーを生成 (id + preload + minStart の join)。
   // preload や minStart が変わると slot を作り直す (genres が遅れて送られてから minStart
   // が 0 → 5 になったケースも拾う)。
@@ -310,15 +358,16 @@ export function usePrefetchVideoBytes(
     vtPrefetchLog(
       `active index=${currentIndex} slug=${activeItem.slug} byte-prefetched=${activeLabel}`,
     );
-    // readiness window: current..+3。各セルとも registry を直接読む。
+    // readiness window: current-1..+3。各セルとも registry を直接読む。
     // window セルでも stale-claim signal を peek (consume せず) して、立っている
     // 間は false 表示する。consume は当該 slug が active に来たときに行う。
     const cells: string[] = [];
-    for (let d = 0; d <= NEAR_PROTECT_MAX_OFFSET; d += 1) {
+    for (let d = NEAR_PROTECT_MIN_OFFSET; d <= NEAR_PROTECT_MAX_OFFSET; d += 1) {
       const idx = currentIndex + d;
       const it = idx >= 0 && idx < items.length ? items[idx] : null;
+      const cellKey = d === 0 ? "current" : fmtOffset(d);
       if (!it || !it.slug) {
-        cells.push(d === 0 ? "current=oob" : `+${d}=oob`);
+        cells.push(`${cellKey}=oob`);
         continue;
       }
       let label: string;
@@ -329,7 +378,7 @@ export function usePrefetchVideoBytes(
       } else {
         label = registryLabel(it.slug);
       }
-      cells.push(d === 0 ? `current=${label}` : `+${d}=${label}`);
+      cells.push(`${cellKey}=${label}`);
     }
     vtPrefetchLog(`readiness window ${cells.join(" ")}`);
     if (activeLabel !== "canplay") {
@@ -384,7 +433,7 @@ export function usePrefetchVideoBytes(
   // という事故が起きにくくなる。policy / rapid swipe とは独立して常に同期。
   useEffect(() => {
     const slugs: string[] = [];
-    for (let d = 0; d <= NEAR_PROTECT_MAX_OFFSET; d += 1) {
+    for (let d = NEAR_PROTECT_MIN_OFFSET; d <= NEAR_PROTECT_MAX_OFFSET; d += 1) {
       const idx = currentIndex + d;
       if (idx < 0 || idx >= items.length) continue;
       const it = items[idx];
@@ -414,7 +463,7 @@ export function usePrefetchVideoBytes(
 
     // スクロール中 / Save-Data 等で targets が空のとき: slots と進行中 resolve をクリアして
     // 隠し <video> をアンマウントし、中央の <video> への帯域集中を保つ。
-    // rapid swipe 中で +1 のみ許可の場合は、+2/+3 の slot を evict して +1 用に空ける。
+    // rapid swipe 中で +1 のみ許可の場合は、それ以外の slot (-1/+2/+3) を evict して +1 用に空ける。
     setSlots((prev) => {
       if (activeTargets.length === 0) {
         return prev.length === 0 ? prev : [];
@@ -422,9 +471,9 @@ export function usePrefetchVideoBytes(
       const wanted = new Set(activeTargets.map((t) => t.id));
       const filtered = prev.filter((s) => {
         const keep = wanted.has(s.id);
-        if (!keep && isRapidSwiping && s.offset > PREFETCH_START_OFFSET) {
+        if (!keep && isRapidSwiping && s.offset !== PREFETCH_START_OFFSET) {
           vtPrefetchLog(
-            `evict offset=+${s.offset} slug=${s.slug} for +${PREFETCH_START_OFFSET} (rapid)`,
+            `evict offset=${fmtOffset(s.offset)} slug=${s.slug} for ${fmtOffset(PREFETCH_START_OFFSET)} (rapid)`,
           );
         }
         return keep;
@@ -452,7 +501,9 @@ export function usePrefetchVideoBytes(
     //     それ以外は UPCOMING_PREFETCH_DEBOUNCE_MS だけ遅延。
     //     rapid 中は activeTargets から +2/+3 が除外されているので発火しない。
     const nextTarget = activeTargets.find((t) => t.offset === PREFETCH_START_OFFSET);
-    const upcomingTargets = activeTargets.filter((t) => t.offset > PREFETCH_START_OFFSET);
+    // +1 以外 (つまり +2/+3 / -1) は「中央以外の軽量ターゲット」。
+    // policy.immediateUpcoming に合わせて 即時 / debounce で発火する。
+    const upcomingTargets = activeTargets.filter((t) => t.offset !== PREFETCH_START_OFFSET);
 
     const fire = (target: Target, immediate: boolean) => {
       // 既に同 id/slug/preload の slot がある (= 既に preload 中の <video> 要素が
@@ -475,7 +526,7 @@ export function usePrefetchVideoBytes(
           // しに来た時に readiness window で「+1 はあるが既存 entry を再利用」
           // と読めるようにする。
           vtPrefetchLog(
-            `slot promote-offset slug=${target.slug} from=+${existingSlot.offset} to=+${target.offset} index=${target.targetIndex}`,
+            `slot promote-offset slug=${target.slug} from=${fmtOffset(existingSlot.offset)} to=${fmtOffset(target.offset)} index=${target.targetIndex}`,
           );
           setSlots((prev) => {
             const idx = prev.findIndex((s) => s.id === target.id);
@@ -497,7 +548,7 @@ export function usePrefetchVideoBytes(
           });
         } else {
           vtPrefetchLog(
-            `slot reuse index=${target.targetIndex} slug=${target.slug} offset=+${target.offset}`,
+            `slot reuse index=${target.targetIndex} slug=${target.slug} offset=${fmtOffset(target.offset)}`,
           );
         }
         return;
@@ -507,7 +558,7 @@ export function usePrefetchVideoBytes(
         // (resolve 完了前 / 隠し <video> 要素も未登録)。+1 がここに来ると active
         // 到達時に readiness=false で待たされる。発生を観測するための診断ログ。
         vtPrefetchLog(
-          `slot pending offset=+${target.offset} slug=${target.slug} index=${target.targetIndex} reason=resolve-in-flight`,
+          `slot pending offset=${fmtOffset(target.offset)} slug=${target.slug} index=${target.targetIndex} reason=resolve-in-flight`,
         );
         return;
       }
@@ -515,11 +566,11 @@ export function usePrefetchVideoBytes(
       inFlight.set(target.slug, controller);
       if (isRapidSwiping && target.offset === PREFETCH_START_OFFSET) {
         vtPrefetchLog(
-          `rapid allow +${target.offset} slug=${target.slug} index=${target.targetIndex}`,
+          `rapid allow ${fmtOffset(target.offset)} slug=${target.slug} index=${target.targetIndex}`,
         );
       }
       vtPrefetchLog(
-        `slot index=${target.targetIndex} slug=${target.slug} offset=+${target.offset} mode=${target.preload} immediate=${immediate}`,
+        `slot index=${target.targetIndex} slug=${target.slug} offset=${fmtOffset(target.offset)} mode=${target.preload} immediate=${immediate}`,
       );
       void resolveMp4Url(target.slug, {
         signal: controller.signal,

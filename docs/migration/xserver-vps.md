@@ -1,7 +1,16 @@
 # Xserver VPS への移行手順
 
-Railway 上で稼働している `apps/api` と `apps/jobs` (worker) を Xserver VPS へ
-移すための手順書。`apps/resolver` はすでに同じ VPS で動いている前提。
+> ⚠️ **現状 (2026-05 以降)**: `apps/jobs` はもう VPS 上の常駐コンテナ
+> (`jobs-worker` + APScheduler) としては動作しない。cron は GitHub Actions 側で
+> 回し、ジョブ本体は「Actions から SSH して `docker compose run --rm jobs ...`」
+> というハイブリッド構成だ。bootstrap だけ SSH トンネル経由で Actions runner で
+> matrix 並列実行される。詳細は `.github/workflows/jobs-sync-*.yml` /
+> `jobs-bootstrap.yml` を参照。以下本文中に出てくる `SCHEDULER_BOOTSTRAP` /
+> `SCHEDULE_*` / `jobs-worker` 起動手順は廃止済みで、歴史的記述として
+> 残してある。
+
+Railway 上で稼働していた `apps/api` と `apps/jobs` (worker) を Xserver VPS へ
+移した手順書。`apps/resolver` はすでに同じ VPS で動いている前提。
 `apps/web` (Next.js) は Vercel 上のまま変更しない。
 
 > 関連ファイル

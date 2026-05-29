@@ -1,0 +1,123 @@
+# ============================================================================
+# .github/workflows/jobs-sync-catalog.yml
+# ----------------------------------------------------------------------------
+# Xserver VPS 上で sync_catalog (incremental) を 1 日 3 回実行する。
+#
+# 設計方針 (ハイブリッド構成):
+#   - cron スケジューラ自体は GitHub Actions に置く (常駐ワーカー廃止)
+#   - 実際のジョブ実行は VPS 上の docker compose run --rm jobs で行う
+#       → DB へは VPS 内 docker network 経由 (ローカル socket 相当) で書ける
+#       → 日本 IP から DMM API を叩ける
+#       → Actions runner (US) からの大量 INSERT による遅延を避けられる
+#
+# 必要な GitHub Secrets (deploy-xserver.yml と共通のものを再利用):
+#   XSERVER_SSH_HOST       : VPS の IP / ホスト名
+#   XSERVER_SSH_USER       : SSH ユーザー (docker グループ所属)
+#   XSERVER_SSH_PORT       : SSH ポート (任意, デフォルト 22)
+#   XSERVER_SSH_KEY        : Ed25519 秘密鍵 (BEGIN OPENSSH PRIVATE KEY... 全文)
+#   XSERVER_KNOWN_HOSTS    : ssh-keyscan の出力
+#   XSERVER_REPO_DIR       : VPS 上のリポジトリパス (例: /opt/short-video-media)
+#
+# スケジュール:
+#   - 08:00 JST = 23:00 UTC (前日)
+#   - 14:00 JST = 05:00 UTC
+#   - 20:00 JST = 11:00 UTC
+#
+# 手動実行: Actions → "Jobs: sync_catalog (incremental)" → Run workflow
+# ============================================================================
+name: Jobs - sync_catalog (incremental)
+
+on:
+  schedule:
+    # cron は UTC 固定。JST に揃えるため UTC へ変換した値を入れる。
+    - cron: "0 23 * * *"  # 08:00 JST (前日 23:00 UTC)
+    - cron: "0 5 * * *"   # 14:00 JST
+    - cron: "0 11 * * *"  # 20:00 JST
+  workflow_dispatch:
+    inputs:
+      hits:
+        description: "1 フロアあたり取得件数 (デフォルト 100)"
+        required: false
+        default: "100"
+      floors:
+        description: "対象フロア (カンマ区切り, 空なら sync_catalog のデフォルト)"
+        required: false
+        default: ""
+
+# 同じジョブが重ならないようにする (前回 sync が長引いた時の二重起動防止)。
+# cancel-in-progress=false にしておくのは、進行中の sync を kill すると中途半端に
+# なるため。
+concurrency:
+  group: jobs-sync-catalog
+  cancel-in-progress: false
+
+jobs:
+  sync-catalog:
+    name: sync_catalog on Xserver VPS
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    environment: production
+
+    steps:
+      - name: Set up SSH
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.XSERVER_SSH_KEY }}
+          KNOWN_HOSTS: ${{ secrets.XSERVER_KNOWN_HOSTS }}
+        run: |
+          set -euo pipefail
+          mkdir -p ~/.ssh
+          chmod 700 ~/.ssh
+          eval "$(ssh-agent -s)"
+          printenv SSH_PRIVATE_KEY | ssh-add - >/dev/null
+          echo "SSH_AUTH_SOCK=$SSH_AUTH_SOCK" >> "$GITHUB_ENV"
+          echo "SSH_AGENT_PID=$SSH_AGENT_PID" >> "$GITHUB_ENV"
+          printf '%s\n' "$KNOWN_HOSTS" > ~/.ssh/known_hosts
+          chmod 600 ~/.ssh/known_hosts
+
+      - name: Run sync_catalog via SSH
+        env:
+          HOST: ${{ secrets.XSERVER_SSH_HOST }}
+          USER: ${{ secrets.XSERVER_SSH_USER }}
+          PORT: ${{ secrets.XSERVER_SSH_PORT }}
+          REPO_DIR: ${{ secrets.XSERVER_REPO_DIR }}
+          HITS: ${{ github.event.inputs.hits || '100' }}
+          FLOORS: ${{ github.event.inputs.floors || '' }}
+        run: |
+          set -euo pipefail
+          : "${HOST:?XSERVER_SSH_HOST not set}"
+          : "${USER:?XSERVER_SSH_USER not set}"
+          : "${REPO_DIR:?XSERVER_REPO_DIR not set}"
+          PORT_OPT=""
+          if [ -n "${PORT}" ]; then
+            PORT_OPT="-p ${PORT}"
+          fi
+
+          # --floors を空なら付けない (sync_catalog のデフォルト挙動を使うため)。
+          FLOORS_ARG=""
+          if [ -n "${FLOORS}" ]; then
+            FLOORS_ARG="--floors ${FLOORS}"
+          fi
+
+          # VPS 上で docker compose run --rm jobs を叩く。
+          # jobs サービスは profiles: ["cli"] なので "docker compose up" には含まれず、
+          # ここで明示的に呼ぶことでだけ起動する。完了後はそのまま破棄される (--rm)。
+          ssh ${PORT_OPT} -o BatchMode=yes "${USER}@${HOST}" bash -s <<EOF
+          set -euo pipefail
+          cd "${REPO_DIR}/infra/xserver"
+          # 既存 build を流用するが、image が古ければ再 build される。
+          # build しか走らない時でも数十秒で済むので毎回付けておく。
+          docker compose --profile cli build jobs
+          docker compose --profile cli run --rm jobs \
+            python -m src.sync_catalog \
+              --mode incremental \
+              --hits ${HITS} \
+              ${FLOORS_ARG}
+          EOF
+
+      - name: Tear down ssh-agent
+        if: always()
+        run: |
+          if [ -n "${SSH_AGENT_PID:-}" ]; then
+            kill "$SSH_AGENT_PID" 2>/dev/null || true
+          fi
+          rm -f ~/.ssh/known_hosts

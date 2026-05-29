@@ -9,8 +9,7 @@ dependencies = [
     "asyncpg>=0.29",
     "pydantic>=2.7",
     "pydantic-settings>=2.2",
-    # scheduler.py 用 (Railway 内常駐 worker で内蔵 cron を回す)
-    "apscheduler>=3.10",
+    # tz データ (slim base image で zoneinfo を使うため)
     "tzdata>=2024.1",
     # DMM API 呼び出し用の非同期トークンバケット rate limiter
     # (time.sleep(1) で event loop を止めず、複数 floor / 並列 worker からも共通制御するため)

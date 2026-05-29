@@ -54,8 +54,9 @@
 # 注意:
 #   - dump は機微情報 (ユーザーデータ含む) を含む。終了後に DUMP_DIR を
 #     安全に削除する (`shred -u` 推奨) こと。スクリプトは消さない。
-#   - migration 完了後は infra/xserver/.env の SCHEDULER_BOOTSTRAP=false に戻し、
-#     Railway 側 DB の認証情報をローテーションすること (docs/migration/xserver-vps.md)。
+#   - migration 完了後は Railway 側 DB の認証情報をローテーションすること
+#     (docs/migration/xserver-vps.md)。jobs はもう GitHub Actions で動くため
+#     SCHEDULER_BOOTSTRAP を触る必要はない。
 # ============================================================================
 
 set -euo pipefail
@@ -305,9 +306,10 @@ cat <<'POSTMSG'
        docker compose -f infra/xserver/docker-compose.yml up -d api
        curl -sf http://127.0.0.1:8000/ >/dev/null && echo "api up"
 
-  2. infra/xserver/.env の SCHEDULER_BOOTSTRAP を false に戻す
-       (もしデータ取り込みのため true にしていた場合のみ)
-     → docker compose -f infra/xserver/docker-compose.yml up -d jobs-worker
+  2. jobs は GitHub Actions ハイブリッド構成に移行済み。
+     初回一括取り込みが必要なら:
+       Actions UI → "Jobs - bootstrap (full re-sync)" を dispatch
+     定期実行は .github/workflows/jobs-sync-*.yml の cron で自動起動。
 
   3. Railway 側のセキュリティ後処理
        - DATABASE_URL のパスワードをローテーション

@@ -1,0 +1,364 @@
+# ============================================================================
+# .github/workflows/jobs-bootstrap.yml
+# ----------------------------------------------------------------------------
+# 一括取り直しジョブ (旧 scheduler.py の SCHEDULER_BOOTSTRAP=true 相当)。
+# matrix で年並列に sync_catalog --mode full を走らせる。
+#
+# ホスティングの判断:
+#   incremental (sync_catalog / sync_actress) は VPS 上で実行する
+#   (DB ローカル socket でレイテンシゼロ、メモリ ~500MB で済む)。
+#   bootstrap だけは:
+#     - 1 ジョブで ~700MB 使う (VPS RAM 1.9GB ではほぼ 1 並列が限界)
+#     - 全年並列で走らせたい (1 年 ~12h × 9 年 = VPS 1 並列だと 4-5 日)
+#   ため Actions runner (Ubuntu, 7GB RAM, 同時実行 20 まで) を使う。
+#
+# DB アクセス:
+#   VPS Postgres は外部公開していないため、SSH ローカルポートフォワード経由で
+#   接続する: `ssh -L 15432:localhost:5432 user@vps -fN`
+#   → Python から DATABASE_URL=postgresql+asyncpg://...@localhost:15432/... で書ける。
+#   日米間 RTT は 1 コネクションあたり遅延を持ち込むが、bootstrap は
+#   sync_catalog 内部で batch commit + GenreCache 等によって往復回数を抑えている
+#   (PR #254) ため、許容範囲に収まる想定。
+#
+# 必要な GitHub Secrets:
+#   既存 (deploy-xserver.yml と共通):
+#     XSERVER_SSH_HOST / USER / PORT / KEY / KNOWN_HOSTS / REPO_DIR
+#   新規 (このワークフローでのみ使用):
+#     XSERVER_DB_USER     : Postgres ユーザー名 (.env の POSTGRES_USER)
+#     XSERVER_DB_PASSWORD : Postgres パスワード (.env の POSTGRES_PASSWORD)
+#     XSERVER_DB_NAME     : Postgres DB 名 (.env の POSTGRES_DB)
+#     DMM_API_ID          : DMM Webservice API ID
+#     DMM_AFFILIATE_ID    : DMM API 呼び出し用 (-990〜-999)
+#     DMM_LINK_AFFILIATE_ID : 購入リンク用 af_id
+#
+# 起動方法:
+#   GitHub UI: Actions → "Jobs - bootstrap (full re-sync)" → Run workflow
+#     - start_year / end_year / floors を指定可能
+#     - default: 2018-2026 / videoa,videoc
+#
+# 注意:
+#   - matrix で年×フロアを並列実行する。Free プランの同時並列数は 20、月 2000 分。
+#   - 1 年あたり ~30-90 分。9 年で並列 9 走らせれば 1 時間ちょっとで完走する想定。
+#   - sync_actress_profiles / goods は別ワークフロー (後続ステップ) で直列に走らせる。
+# ============================================================================
+name: Jobs - bootstrap (full re-sync)
+
+on:
+  workflow_dispatch:
+    inputs:
+      start_year:
+        description: "開始年 (含む)"
+        required: false
+        default: "2018"
+      end_year:
+        description: "終了年 (含む)"
+        required: false
+        default: "2026"
+      floors:
+        description: "動画フロア (カンマ区切り)"
+        required: false
+        default: "videoa,videoc"
+      run_actress:
+        description: "完了後に sync_actress_profiles を走らせるか"
+        required: false
+        default: "true"
+      run_goods:
+        description: "完了後に goods フロアを sync するか"
+        required: false
+        default: "true"
+
+# bootstrap は重いので並列起動を禁止する。すでに走っている時は新しい dispatch は
+# キャンセル (二重実行で DB に負荷が掛かるのを防ぐ)。
+concurrency:
+  group: jobs-bootstrap
+  cancel-in-progress: false
+
+jobs:
+  # ─────────────────────────────────────────────────────────────────
+  # 1. 動画フロアを年並列で full 取得
+  # ─────────────────────────────────────────────────────────────────
+  prepare-matrix:
+    name: prepare year matrix
+    runs-on: ubuntu-latest
+    outputs:
+      years: ${{ steps.gen.outputs.years }}
+    steps:
+      - name: Generate year list as JSON
+        id: gen
+        env:
+          START: ${{ github.event.inputs.start_year }}
+          END: ${{ github.event.inputs.end_year }}
+        run: |
+          set -euo pipefail
+          python3 - <<PY >> "$GITHUB_OUTPUT"
+          import json, os
+          s = int(os.environ["START"])
+          e = int(os.environ["END"])
+          assert s <= e, "start_year must be <= end_year"
+          years = list(range(s, e + 1))
+          print(f"years={json.dumps(years)}")
+          PY
+
+  sync-year:
+    name: "sync_catalog full ${{ matrix.year }}"
+    needs: prepare-matrix
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
+    environment: production
+    strategy:
+      # 1 年失敗しても他年は続けたい。
+      fail-fast: false
+      # 同時並列度。Free プランは同一 repo で同時 20 ジョブまでなので、
+      # 9 年 (2018-2026) なら全部並列でも問題ない。
+      max-parallel: 9
+      matrix:
+        year: ${{ fromJson(needs.prepare-matrix.outputs.years) }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install jobs package
+        run: |
+          set -euo pipefail
+          python -m pip install --upgrade pip
+          pip install -e apps/api
+          pip install -e apps/jobs
+
+      - name: Set up SSH
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.XSERVER_SSH_KEY }}
+          KNOWN_HOSTS: ${{ secrets.XSERVER_KNOWN_HOSTS }}
+        run: |
+          set -euo pipefail
+          mkdir -p ~/.ssh
+          chmod 700 ~/.ssh
+          eval "$(ssh-agent -s)"
+          printenv SSH_PRIVATE_KEY | ssh-add - >/dev/null
+          echo "SSH_AUTH_SOCK=$SSH_AUTH_SOCK" >> "$GITHUB_ENV"
+          echo "SSH_AGENT_PID=$SSH_AGENT_PID" >> "$GITHUB_ENV"
+          printf '%s\n' "$KNOWN_HOSTS" > ~/.ssh/known_hosts
+          chmod 600 ~/.ssh/known_hosts
+
+      - name: Open SSH tunnel to Postgres
+        env:
+          HOST: ${{ secrets.XSERVER_SSH_HOST }}
+          USER: ${{ secrets.XSERVER_SSH_USER }}
+          PORT: ${{ secrets.XSERVER_SSH_PORT }}
+        run: |
+          set -euo pipefail
+          PORT_OPT=""
+          if [ -n "${PORT}" ]; then
+            PORT_OPT="-p ${PORT}"
+          fi
+          # docker-compose.yml で db サービスは
+          #   ports: ["127.0.0.1:5432:5432"]
+          # としてホスト OS の loopback にのみ bind しているため、
+          # SSH して初めて db コンテナへ到達できる。
+          # 外部ネットワークからは見えないので firewall 面も安全。
+          ssh ${PORT_OPT} -o BatchMode=yes -o ExitOnForwardFailure=yes \
+            -L 15432:127.0.0.1:5432 -fN "${USER}@${HOST}"
+          # tunnel が立ち上がるまで少し待つ
+          for i in 1 2 3 4 5 6 7 8 9 10; do
+            if (echo > /dev/tcp/127.0.0.1/15432) >/dev/null 2>&1; then
+              echo "tunnel ready"
+              break
+            fi
+            sleep 1
+          done
+
+      - name: Run sync_catalog full for ${{ matrix.year }}
+        env:
+          # asyncpg は postgresql+asyncpg:// プレフィクスを受け取る (sqlalchemy 側)。
+          DATABASE_URL: "postgresql+asyncpg://${{ secrets.XSERVER_DB_USER }}:${{ secrets.XSERVER_DB_PASSWORD }}@127.0.0.1:15432/${{ secrets.XSERVER_DB_NAME }}"
+          DMM_API_ID: ${{ secrets.DMM_API_ID }}
+          DMM_AFFILIATE_ID: ${{ secrets.DMM_AFFILIATE_ID }}
+          DMM_LINK_AFFILIATE_ID: ${{ secrets.DMM_LINK_AFFILIATE_ID }}
+          APP_ENV: production
+          DEPLOY_TARGET: xserver
+          FLOORS: ${{ github.event.inputs.floors }}
+          YEAR: ${{ matrix.year }}
+        working-directory: apps/jobs
+        run: |
+          set -euo pipefail
+          python -m src.sync_catalog \
+            --mode full \
+            --floors "${FLOORS}" \
+            --start-date "${YEAR}-01-01" \
+            --end-date "${YEAR}-12-31"
+
+      - name: Close SSH tunnel
+        if: always()
+        run: |
+          set +e
+          pkill -f "ssh.*-L 15432:" 2>/dev/null
+          if [ -n "${SSH_AGENT_PID:-}" ]; then
+            kill "$SSH_AGENT_PID" 2>/dev/null
+          fi
+          rm -f ~/.ssh/known_hosts
+          exit 0
+
+  # ─────────────────────────────────────────────────────────────────
+  # 2. (optional) sync_actress_profiles を 1 度走らせる
+  # ─────────────────────────────────────────────────────────────────
+  sync-actress:
+    name: sync_actress_profiles (after bootstrap)
+    needs: sync-year
+    if: ${{ github.event.inputs.run_actress == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
+    environment: production
+
+    steps:
+      - name: Set up SSH
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.XSERVER_SSH_KEY }}
+          KNOWN_HOSTS: ${{ secrets.XSERVER_KNOWN_HOSTS }}
+        run: |
+          set -euo pipefail
+          mkdir -p ~/.ssh
+          chmod 700 ~/.ssh
+          eval "$(ssh-agent -s)"
+          printenv SSH_PRIVATE_KEY | ssh-add - >/dev/null
+          echo "SSH_AUTH_SOCK=$SSH_AUTH_SOCK" >> "$GITHUB_ENV"
+          echo "SSH_AGENT_PID=$SSH_AGENT_PID" >> "$GITHUB_ENV"
+          printf '%s\n' "$KNOWN_HOSTS" > ~/.ssh/known_hosts
+          chmod 600 ~/.ssh/known_hosts
+
+      - name: Run sync_actress_profiles via SSH (VPS-side, lighter)
+        env:
+          HOST: ${{ secrets.XSERVER_SSH_HOST }}
+          USER: ${{ secrets.XSERVER_SSH_USER }}
+          PORT: ${{ secrets.XSERVER_SSH_PORT }}
+          REPO_DIR: ${{ secrets.XSERVER_REPO_DIR }}
+        run: |
+          set -euo pipefail
+          PORT_OPT=""
+          if [ -n "${PORT}" ]; then
+            PORT_OPT="-p ${PORT}"
+          fi
+          # actress は 1 ジョブ = 1 プロセスで完結し、メモリも軽いので
+          # VPS 上で docker compose run --rm jobs で十分。
+          ssh ${PORT_OPT} -o BatchMode=yes "${USER}@${HOST}" bash -s <<EOF
+          set -euo pipefail
+          cd "${REPO_DIR}/infra/xserver"
+          docker compose --profile cli build jobs
+          docker compose --profile cli run --rm jobs \
+            python -m src.sync_actress_profiles
+          EOF
+
+      - name: Tear down ssh-agent
+        if: always()
+        run: |
+          if [ -n "${SSH_AGENT_PID:-}" ]; then
+            kill "$SSH_AGENT_PID" 2>/dev/null || true
+          fi
+          rm -f ~/.ssh/known_hosts
+
+  # ─────────────────────────────────────────────────────────────────
+  # 3. (optional) goods フロアを年並列で取得 (actress に依存)
+  # ─────────────────────────────────────────────────────────────────
+  sync-goods:
+    name: "sync_catalog goods ${{ matrix.year }}"
+    needs:
+      - sync-year
+      - sync-actress
+    # actress を skip しても goods だけ走らせたいケースもあるが、
+    # 仕様 (goods は DB の女優名でフィルタ) 上 actress 後にしか走らせない。
+    if: ${{ github.event.inputs.run_goods == 'true' && (github.event.inputs.run_actress == 'true' || always()) }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
+    environment: production
+    strategy:
+      fail-fast: false
+      max-parallel: 9
+      matrix:
+        year: ${{ fromJson(needs.prepare-matrix.outputs.years) }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install jobs package
+        run: |
+          set -euo pipefail
+          python -m pip install --upgrade pip
+          pip install -e apps/api
+          pip install -e apps/jobs
+
+      - name: Set up SSH
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.XSERVER_SSH_KEY }}
+          KNOWN_HOSTS: ${{ secrets.XSERVER_KNOWN_HOSTS }}
+        run: |
+          set -euo pipefail
+          mkdir -p ~/.ssh
+          chmod 700 ~/.ssh
+          eval "$(ssh-agent -s)"
+          printenv SSH_PRIVATE_KEY | ssh-add - >/dev/null
+          echo "SSH_AUTH_SOCK=$SSH_AUTH_SOCK" >> "$GITHUB_ENV"
+          echo "SSH_AGENT_PID=$SSH_AGENT_PID" >> "$GITHUB_ENV"
+          printf '%s\n' "$KNOWN_HOSTS" > ~/.ssh/known_hosts
+          chmod 600 ~/.ssh/known_hosts
+
+      - name: Open SSH tunnel to Postgres
+        env:
+          HOST: ${{ secrets.XSERVER_SSH_HOST }}
+          USER: ${{ secrets.XSERVER_SSH_USER }}
+          PORT: ${{ secrets.XSERVER_SSH_PORT }}
+        run: |
+          set -euo pipefail
+          PORT_OPT=""
+          if [ -n "${PORT}" ]; then
+            PORT_OPT="-p ${PORT}"
+          fi
+          ssh ${PORT_OPT} -o BatchMode=yes -o ExitOnForwardFailure=yes \
+            -L 15432:127.0.0.1:5432 -fN "${USER}@${HOST}"
+          for i in 1 2 3 4 5 6 7 8 9 10; do
+            if (echo > /dev/tcp/127.0.0.1/15432) >/dev/null 2>&1; then
+              echo "tunnel ready"
+              break
+            fi
+            sleep 1
+          done
+
+      - name: Run sync_catalog goods full for ${{ matrix.year }}
+        env:
+          DATABASE_URL: "postgresql+asyncpg://${{ secrets.XSERVER_DB_USER }}:${{ secrets.XSERVER_DB_PASSWORD }}@127.0.0.1:15432/${{ secrets.XSERVER_DB_NAME }}"
+          DMM_API_ID: ${{ secrets.DMM_API_ID }}
+          DMM_AFFILIATE_ID: ${{ secrets.DMM_AFFILIATE_ID }}
+          DMM_LINK_AFFILIATE_ID: ${{ secrets.DMM_LINK_AFFILIATE_ID }}
+          APP_ENV: production
+          DEPLOY_TARGET: xserver
+          YEAR: ${{ matrix.year }}
+        working-directory: apps/jobs
+        run: |
+          set -euo pipefail
+          python -m src.sync_catalog \
+            --mode full \
+            --floors "goods" \
+            --start-date "${YEAR}-01-01" \
+            --end-date "${YEAR}-12-31"
+
+      - name: Close SSH tunnel
+        if: always()
+        run: |
+          set +e
+          pkill -f "ssh.*-L 15432:" 2>/dev/null
+          if [ -n "${SSH_AGENT_PID:-}" ]; then
+            kill "$SSH_AGENT_PID" 2>/dev/null
+          fi
+          rm -f ~/.ssh/known_hosts
+          exit 0

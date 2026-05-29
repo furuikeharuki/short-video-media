@@ -121,8 +121,8 @@ docker image prune -f >/dev/null 2>&1 || true
 log "deploy complete: $CURRENT_SHA -> $NEW_SHA"
 log "rollback: git reset --hard $PRE_DEPLOY_TAG && docker compose -f $COMPOSE_FILE up -d --build"
 
-# jobs-worker は up -d で常に再作成される。SCHEDULER_BOOTSTRAP=true で実行中の
-# 一括取り直し (BOOTSTRAP_* / 2008-2026 full sync など) がある場合、ここで強制
-# 中断される点に注意。SCHEDULE_* で定期実行をチューニングするだけのデプロイ
-# でも同じく recreate される。
-log "note: jobs-worker は up -d で recreate されます。SCHEDULER_BOOTSTRAP=true の長時間ジョブが走行中なら中断されるので注意してください (SCHEDULE_* の変更も同様)."
+# jobs サービスは profiles: ["cli"] のため docker compose up -d では起動せず、
+# GitHub Actions (.github/workflows/jobs-sync-*.yml) から docker compose run --rm で
+# 一発実行される。よってこのデプロイスクリプトで jobs コンテナを
+# recreate してしまう心配はない。走行中の jobs 処理がある場合は Actions 側の
+# concurrency グループ (jobs-sync-catalog 等) が二重起動を防ぐ。

@@ -6,7 +6,9 @@
 #
 # ※ サンプル動画 MP4 URL の DB キャッシュは廃止された (apps/api 内で都度抽出する
 #    設計に変更)。そのため Playwright 同梱版 (旧 Dockerfile.playwright) は不要に
-#    なり削除済み。常駐の scheduler は Dockerfile.worker を使うこと。
+#    なり削除済み。
+# ※ APScheduler 常駐の Dockerfile.worker も廃止済み (jobs は GitHub Actions 側で
+#    cron を回し、VPS 側では docker compose run --rm jobs ... として 1 発実行される)。
 # ============================================================================
 FROM python:3.12-slim
 

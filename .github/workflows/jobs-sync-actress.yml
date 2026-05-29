@@ -1,0 +1,99 @@
+# ============================================================================
+# .github/workflows/jobs-sync-actress.yml
+# ----------------------------------------------------------------------------
+# Xserver VPS 上で sync_actress_profiles (--only-missing) を 1 日 1 回実行する。
+#
+# 設計はjobs-sync-catalog.yml と同じハイブリッド構成:
+#   GitHub Actions cron → SSH → VPS で docker compose run --rm jobs
+#
+# スケジュール:
+#   - 13:00 JST = 04:00 UTC
+#     (sync_catalog 08:00 / 14:00 の間でぶつからない時間帯を選択)
+# ============================================================================
+name: Jobs - sync_actress_profiles
+
+on:
+  schedule:
+    - cron: "0 4 * * *"   # 13:00 JST
+  workflow_dispatch:
+    inputs:
+      only_missing:
+        description: "--only-missing を付けるか (false にすると全女優再取得)"
+        required: false
+        default: "true"
+      limit:
+        description: "処理件数上限 (空なら無制限)"
+        required: false
+        default: ""
+
+concurrency:
+  group: jobs-sync-actress
+  cancel-in-progress: false
+
+jobs:
+  sync-actress:
+    name: sync_actress_profiles on Xserver VPS
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    environment: production
+
+    steps:
+      - name: Set up SSH
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.XSERVER_SSH_KEY }}
+          KNOWN_HOSTS: ${{ secrets.XSERVER_KNOWN_HOSTS }}
+        run: |
+          set -euo pipefail
+          mkdir -p ~/.ssh
+          chmod 700 ~/.ssh
+          eval "$(ssh-agent -s)"
+          printenv SSH_PRIVATE_KEY | ssh-add - >/dev/null
+          echo "SSH_AUTH_SOCK=$SSH_AUTH_SOCK" >> "$GITHUB_ENV"
+          echo "SSH_AGENT_PID=$SSH_AGENT_PID" >> "$GITHUB_ENV"
+          printf '%s\n' "$KNOWN_HOSTS" > ~/.ssh/known_hosts
+          chmod 600 ~/.ssh/known_hosts
+
+      - name: Run sync_actress_profiles via SSH
+        env:
+          HOST: ${{ secrets.XSERVER_SSH_HOST }}
+          USER: ${{ secrets.XSERVER_SSH_USER }}
+          PORT: ${{ secrets.XSERVER_SSH_PORT }}
+          REPO_DIR: ${{ secrets.XSERVER_REPO_DIR }}
+          ONLY_MISSING: ${{ github.event.inputs.only_missing || 'true' }}
+          LIMIT: ${{ github.event.inputs.limit || '' }}
+        run: |
+          set -euo pipefail
+          : "${HOST:?XSERVER_SSH_HOST not set}"
+          : "${USER:?XSERVER_SSH_USER not set}"
+          : "${REPO_DIR:?XSERVER_REPO_DIR not set}"
+          PORT_OPT=""
+          if [ -n "${PORT}" ]; then
+            PORT_OPT="-p ${PORT}"
+          fi
+
+          ONLY_MISSING_ARG=""
+          if [ "${ONLY_MISSING}" = "true" ]; then
+            ONLY_MISSING_ARG="--only-missing"
+          fi
+          LIMIT_ARG=""
+          if [ -n "${LIMIT}" ]; then
+            LIMIT_ARG="--limit ${LIMIT}"
+          fi
+
+          ssh ${PORT_OPT} -o BatchMode=yes "${USER}@${HOST}" bash -s <<EOF
+          set -euo pipefail
+          cd "${REPO_DIR}/infra/xserver"
+          docker compose --profile cli build jobs
+          docker compose --profile cli run --rm jobs \
+            python -m src.sync_actress_profiles \
+              ${ONLY_MISSING_ARG} \
+              ${LIMIT_ARG}
+          EOF
+
+      - name: Tear down ssh-agent
+        if: always()
+        run: |
+          if [ -n "${SSH_AGENT_PID:-}" ]; then
+            kill "$SSH_AGENT_PID" 2>/dev/null || true
+          fi
+          rm -f ~/.ssh/known_hosts

@@ -15,17 +15,25 @@
 │                      │         │  │   (httpx → DMM)        │  │
 └──────────┬───────────┘         │  └─────────┬──────────────┘  │
            │                     │            │                 │
-           │                     │  ┌────────────────────────┐  │
-           │                     │  │ jobs-worker (apps/jobs)│  │
-           │                     │  │ APScheduler 常駐       │  │
-           │                     │  └─────────┬──────────────┘  │
-           │                     │            │                 │
            │                     │  ┌─────────▼──────────────┐  │
            │                     │  │ db (Postgres 18)       │  │
+           │                     │  │ 127.0.0.1:5432 (bind)  │  │
            │                     │  └────────────────────────┘  │
+           │                     └────────────▲─────────────────┘
+           │                                  │ SSH
+           │                     ┌────────────┴─────────────────┐
+           │                     │ GitHub Actions (apps/jobs)   │
+           │                     │  - jobs-sync-catalog (3x/d)  │
+           │                     │  - jobs-sync-actress (1x/d)  │
+           │                     │  - jobs-bootstrap (dispatch) │
+           │                     │  → SSH で VPS 上 docker      │
+           │                     │    compose run --rm jobs ... │
+           │                     │  → bootstrap は Actions      │
+           │                     │    runner で SSH トンネル     │
+           │                     │    経由 (matrix 年並列)      │
            │                     └──────────────────────────────┘
            │
-           └─ DMM / FANZA API (api / jobs-worker から outbound)
+           └─ DMM / FANZA API (api / Actions runner / VPS jobs から outbound)
 ```
 
 ## モジュール責務
@@ -35,7 +43,7 @@
 | `apps/web` | UI / SSR / Auth.js / 縦スクロール再生 / モーダル詳細 | Vercel |
 | `apps/api` | REST API / DB アクセス / 計測イベント受付 / JWT 発行 / DMM MP4 URL 抽出 | Xserver VPS (旧 Railway) |
 | `apps/api` (`app.resolver`) | DMM html5_player ページ → MP4 URL 抽出 (httpx, in-process) | apps/api と同じプロセスで動作 |
-| `apps/jobs` | DMM API 取得 / DB upsert / sample URL 解決ジョブ | Xserver VPS の jobs-worker (旧 GitHub Actions cron) |
+| `apps/jobs` | DMM API 取得 / DB upsert / sample URL 解決ジョブ | GitHub Actions cron + Xserver VPS 上で docker compose run --rm jobs (ハイブリッド構成) |
 | `packages/shared` | TS 型・JSON Schema 共有 | (内部) |
 
 ### MP4 URL 抽出の位置づけ
@@ -49,7 +57,7 @@
 - 通常 API コンテナ (slim Python image, ~150MB) だけで完結する
 - `apps/api/app/resolver/extractor.py` が抽出ロジック本体
 - `apps/api/app/services/resolver_client.py` が in-flight デデュープ + 短期成功キャッシュ
-- jobs-worker のバックフィルジョブ (`resolve_sample_urls.py`) も同じ extractor を再利用
+- jobs のバックフィルジョブ (`resolve_sample_urls.py`) も同じ extractor を再利用
 
 ## データフロー
 

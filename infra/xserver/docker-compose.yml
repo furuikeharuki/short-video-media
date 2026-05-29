@@ -1,7 +1,7 @@
 # ============================================================================
 # infra/xserver/docker-compose.yml
 # ----------------------------------------------------------------------------
-# Xserver VPS 上で api / jobs-worker / postgres / Caddy を起動するための
+# Xserver VPS 上で api / postgres / Caddy を起動するための
 # Compose ファイル。Vercel (web) は外部にあるため対象外。
 #
 # DMM サンプル動画 MP4 URL 抽出はかつて Playwright 製の resolver コンテナで
@@ -18,7 +18,9 @@
 #
 # ログ:
 #   docker compose logs -f api
-#   docker compose logs -f jobs-worker
+#
+# jobs は常駐コンテナを廃止し GitHub Actions ハイブリッド構成に移行済み。
+# 詳細はファイル下部の `jobs` サービス上のコメントを参照。
 #
 # 停止:
 #   docker compose down            # コンテナ停止
@@ -61,6 +63,13 @@ services:
       - postgres_data:/var/lib/postgresql
       # 初回起動用 init スクリプトが必要ならここに追加:
       # - ./initdb:/docker-entrypoint-initdb.d:ro
+    # SSH トンネル経由で GitHub Actions から bootstrap (sync_catalog full)
+    # を走らせるため、ホスト OS の loopback (127.0.0.1) にのみ bind する。
+    # 0.0.0.0 にはしないので外部ネットワークからは見えない。
+    # incremental ジョブを VPS 上で走らせる分には引き続き docker network の
+    # `db` 名前解決を使うので、この ports は bootstrap (Actions runner) 用だけの途。
+    ports:
+      - "127.0.0.1:5432:5432"
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
       interval: 10s
@@ -120,15 +129,37 @@ services:
           memory: 512M
 
   # --------------------------------------------------------------------------
-  # jobs worker (APScheduler 常駐)
+  # jobs-worker (APScheduler 常駐) は廃止された
   # --------------------------------------------------------------------------
-  # Railway の jobs-worker サービスを Xserver に持ってきたもの。
-  # cron は内部の APScheduler に任せる (GitHub Actions cron は不要)。
-  jobs-worker:
+  # 以前はここで APScheduler 常駐コンテナを走らせ、sync_catalog を 1日 7回、
+  # sync_actress_profiles を 1日 1回、そして bootstrap を SCHEDULER_BOOTSTRAP=true の時に
+  # 実行していたが、以下の理由で GitHub Actions に移行した:
+  #
+  #   1. bootstrap を年並列で走らせるとこの VPS (RAM 1.9GB) では OOM する
+  #   2. 常駐コンテナで RAM 700MB を 24h 消費するのがもったいない
+  #   3. スケジュール管理を GitHub Actions UI に一元化したい (ログもそちらの方が見やすい)
+  #
+  # 現在の実行体制:
+  #   - incremental sync_catalog (日 3 回): .github/workflows/jobs-sync-catalog.yml
+  #       → Actions から SSH して VPS 上で docker compose run --rm で 1 発実行 (DB はローカル socket)
+  #   - incremental sync_actress_profiles (日 1 回): .github/workflows/jobs-sync-actress.yml
+  #       → 同上
+  #   - bootstrap (手動 dispatch): .github/workflows/jobs-bootstrap.yml
+  #       → Actions runner (RAM 7GB) で matrix 年並列 + SSH トンネルで DB に接続
+  #
+  # ジョブを手動で走らせたい場合 (VPS で SSH ログイン中):
+  #   docker compose -f infra/xserver/docker-compose.yml run --rm jobs python -m src.sync_catalog --mode incremental
+  #   docker compose -f infra/xserver/docker-compose.yml run --rm jobs python -m src.sync_actress_profiles --only-missing
+  # --------------------------------------------------------------------------
+  jobs:
+    # 一回実行用の CLI イメージ。 デフォルト profile には含めないので
+    # 「docker compose up」だけでは起動しない。Actions から明示的に
+    # 「docker compose run --rm jobs ...」と呼ぶことを想定。
+    # restartもなし、コマンドが終わるとそのまま退場する。
+    profiles: ["cli"]
     build:
       context: ../..
-      dockerfile: apps/jobs/Dockerfile.worker
-    restart: unless-stopped
+      dockerfile: apps/jobs/Dockerfile.sync
     depends_on:
       db:
         condition: service_healthy
@@ -139,10 +170,8 @@ services:
       APP_ENV: production
       DEPLOY_TARGET: xserver
       TZ: Asia/Tokyo
-      # 起動直後の bootstrap は誤発火を避けるためデフォルト false。
-      # 初回データ取り込みが必要な時だけ .env で true にすること。
-      SCHEDULER_BOOTSTRAP: ${SCHEDULER_BOOTSTRAP:-false}
-      SCHEDULER_RUN_ON_START: ${SCHEDULER_RUN_ON_START:-false}
+    # メモリ上限は scheduler 時代 (768M) より低めに制限して OOM リスクを下げる。
+    # incremental は 1 ジョブ ~500MB で収まるはず (bootstrap はここで走らさない)。
     deploy:
       resources:
         limits:

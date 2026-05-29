@@ -31,7 +31,7 @@
 | optional Sentry hooks (`SENTRY_DSN` が設定された場合のみ有効) | `apps/api/app/core/sentry.py` (新規) + `apps/api/app/main.py` の import 時 `init_sentry()`。`sentry-sdk` 未インストール時は完全 no-op。 |
 | Request ID logging middleware | `apps/api/app/core/request_id.py` (新規) + `apps/api/app/main.py`。受信 `X-Request-Id` を検証して採用、なければ UUID4 hex を生成し ASGI scope と response header に伝搬。CORS の `allow_headers` / `expose_headers` にも追加。 |
 | `/resolve-mp4` retry storm 防止 (`force` リトライの 5 秒クールダウン) | `apps/api/app/services/resolver_client.py` の `should_throttle_force_retry/mark_force_retry` + `apps/api/app/api/v1/endpoints/movies.py` で `effective_force` に降格。`_FORCE_RETRY_MIN_INTERVAL_S = 5.0`。 |
-| Job 単独実行アドバイザリロック | `apps/jobs/src/advisory_lock.py` (新規) + `apps/jobs/src/scheduler.py` の `_run_sync_catalog` / `_run_sync_actress_profiles`。`pg_try_advisory_lock` を取れなければ no-op スキップ。DB エラーなら安全側 (ロックなしで実行) にフォールバック。 |
+| Job 単独実行アドバイザリロック | `apps/jobs/src/advisory_lock.py` (新規)。当初旧 `apps/jobs/src/scheduler.py` で使うために作ったが、scheduler 自体は GitHub Actions ハイブリッド移行で廃止済み。各ジョブ (sync_catalog / sync_actress_profiles) を今後手動・複数経路から起動しても二重実行を防ぐセーフティネットとして残してある。`pg_try_advisory_lock` を取れなければ no-op スキップ。DB エラーなら安全側 (ロックなしで実行) にフォールバック。 |
 | 詳細ページの JSON-LD 強化 (VideoObject, BreadcrumbList, Product) | `apps/web/app/movies/[slug]/page.tsx` — VideoObject / Breadcrumb は既存。Product JSON-LD を価格が取得できる場合のみ追加 (Offer, Brand, sku, aggregateRating)。 |
 | SQLi 静的スキャン (補助スクリプト) | `scripts/sql-injection-scan.sh` (新規)。`text(f"...")` / `execute(f"...")` / `.format(...)` 等の文字列補間 SQL を grep。現状 0 件 hit。bandit/semgrep のコマンド例も script 内 docstring に記載。 |
 

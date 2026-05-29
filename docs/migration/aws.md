@@ -3,6 +3,13 @@
 Xserver VPS で稼働させたあとに将来 AWS へ持っていく際の設計指針。
 実装の手順書ではなく「設計上どう分けておくと困らないか」をまとめたメモ。
 
+> ⚠️ **現状 (2026-05 以降)**: jobs は常駐 worker を廃止し GitHub Actions cron
+> + VPS 上 `docker compose run --rm jobs ...` のハイブリッド構成に移行済み。
+> AWS へ移せば ECS Fargate 常駐 service として `jobs-worker` を立てるよりも、
+> 同様のハイブリッド (EventBridge Scheduler + ECS RunTask, もしくは Lambda
+> + ECS RunTask) に設計スライドさせる方が見通しが乗りよい。以下 `jobs-worker`
+> と書いてある部分は「ジョブコンテナ」と読み替えても品質上原則成り立つ。
+
 > 関連: [`xserver-vps.md`](./xserver-vps.md)
 
 ---

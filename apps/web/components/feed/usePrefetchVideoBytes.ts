@@ -508,35 +508,53 @@ export function usePrefetchVideoBytes(
     const upcomingTargets = activeTargets.filter((t) => t.offset !== PREFETCH_START_OFFSET);
 
     const fire = (target: Target, immediate: boolean) => {
-      // 既に同 id/slug/preload の slot がある (= 既に preload 中の <video> 要素が
+      // 既に同 id/slug の slot がある (= 既に preload 中の <video> 要素が
       // handoff registry に温まっている) ならば、resolve は再発火しない。
-      // ただし offset / targetIndex が変わっていれば更新する (例: +2 で立てた slot が
-      // active 前進で +1 に繰り上がる)。これをしないと vt の slot ログが古い offset
-      // のまま残り、「+1 slot 不在」に見えてしまう。
+      // 以下のフィールド変化はその場で slot をパッチする (= 再 resolve しない):
+      //   - offset / targetIndex: active が動いたことで繰り上がり (例: +3 → +1)。
+      //   - preload: 同じ slug が +3 metadata → +1/+2 で auto に格上げされた、または
+      //     その逆の格下げ。preload が変わると PrefetchVideoBuffer の effect が
+      //     再 run され、registerPrefetchElement が `el.preload` を新しい値に
+      //     更新する (同 src なので element/バッファは温存される)。
+      //   - minStart: 通常変わらないが、念のため反映する。
       const existingSlot = slotsRef.current.find((s) => s.id === target.id);
-      if (
-        existingSlot &&
-        existingSlot.slug === target.slug &&
-        existingSlot.preload === target.preload &&
-        existingSlot.minStart === target.minStart
-      ) {
-        if (
+      if (existingSlot && existingSlot.slug === target.slug) {
+        const offsetChanged =
           existingSlot.offset !== target.offset ||
-          existingSlot.targetIndex !== target.targetIndex
-        ) {
+          existingSlot.targetIndex !== target.targetIndex;
+        const preloadChanged = existingSlot.preload !== target.preload;
+        const minStartChanged = existingSlot.minStart !== target.minStart;
+        if (preloadChanged) {
+          // 主要ケース: +3 metadata で立てた slot がそのまま +2/+1 にスライドして
+          // きたとき、preload を auto に格上げする。これをしないと隠し <video>
+          // は metadata のまま canplay に到達せず、active 到達時に
+          // `host-only-deadlock → force-fallback` を引き起こす。
+          vtPrefetchLog(
+            `slot promote-preload slug=${target.slug} from=${existingSlot.preload} to=${target.preload} offset=${fmtOffset(target.offset)} index=${target.targetIndex}`,
+          );
+        } else if (offsetChanged) {
           // offset の繰り上がり (例: +2 → +1) を slot に反映し、active が claim
           // しに来た時に readiness window で「+1 はあるが既存 entry を再利用」
           // と読めるようにする。
           vtPrefetchLog(
             `slot promote-offset slug=${target.slug} from=${fmtOffset(existingSlot.offset)} to=${fmtOffset(target.offset)} index=${target.targetIndex}`,
           );
+        } else if (!minStartChanged) {
+          vtPrefetchLog(
+            `slot reuse index=${target.targetIndex} slug=${target.slug} offset=${fmtOffset(target.offset)}`,
+          );
+          return;
+        }
+        if (offsetChanged || preloadChanged || minStartChanged) {
           setSlots((prev) => {
             const idx = prev.findIndex((s) => s.id === target.id);
             if (idx === -1) return prev;
             const cur = prev[idx];
             if (
               cur.offset === target.offset &&
-              cur.targetIndex === target.targetIndex
+              cur.targetIndex === target.targetIndex &&
+              cur.preload === target.preload &&
+              cur.minStart === target.minStart
             ) {
               return prev;
             }
@@ -545,13 +563,11 @@ export function usePrefetchVideoBytes(
               ...cur,
               offset: target.offset,
               targetIndex: target.targetIndex,
+              preload: target.preload,
+              minStart: target.minStart,
             };
             return copy;
           });
-        } else {
-          vtPrefetchLog(
-            `slot reuse index=${target.targetIndex} slug=${target.slug} offset=${fmtOffset(target.offset)}`,
-          );
         }
         return;
       }

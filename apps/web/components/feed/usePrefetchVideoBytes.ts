@@ -286,24 +286,26 @@ export function usePrefetchVideoBytes(
   }
   // current-1 の軽量ウォーミング。ユーザが上方向スワイプで「直前見ていた
   // スライド」に戻ったときに、resolveCache + <video> container だけでも
-  // 温めておいて、ゼロロードからの force-load 動作を避ける。bytes
-  // 負荷を上げたくないので preload="metadata" 固定。rapid swipe 中は
-  // activeTargets フィルタで除外される。
+  // 温めておいて、ゼロロードからの force-load 動作を避ける。
+  // aheadCount>=2 (= 通常モード: Chromium + 4G/WiFi 等) のときは canplay まで
+  // 温めるために preload="auto" に格上げし、戻りスワイプ時に handoff pool 経由
+  // で即 promote できるようにする。Safari (aheadCount=1) / Save-Data / 2G
+  // (aheadCount=0) では bytes を取らず metadata 固定 (または slot 自体作らない)。
+  // rapid swipe 中は activeTargets フィルタで除外される。
   if (policy.aheadCount > 0) {
     const offset = PREV_PREFETCH_OFFSET;
     const idx = currentIndex + offset;
     if (idx >= 0 && idx < items.length) {
       const it = items[idx];
       if (it && it.slug) {
+        const prevPreload: "auto" | "metadata" =
+          policy.aheadCount >= 2 ? "auto" : "metadata";
         targets.push({
           id: it.id,
           slug: it.slug,
           offset,
           targetIndex: idx,
-          // 反復見返しはそこまで頻度が高くないため bytes は取らない。
-          // resolveCache ヒット + <video> container 事前初期化 + browser の
-          // metadata Range 取得までをゴールにする。
-          preload: "metadata",
+          preload: prevPreload,
           minStart: getMinStartTime(it.genres),
         });
       }

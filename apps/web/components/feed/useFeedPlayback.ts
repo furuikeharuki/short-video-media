@@ -1309,7 +1309,6 @@ export function useFeedPlayback({ slug, title, isActive, videoSrc, boundElement 
           target.readyState === 0 &&
           target.networkState === 2 &&
           target.error === null &&
-          target.currentTime === 0 &&
           !activeAutoplayLoadingGraceArmedRef.current
         ) {
           activeAutoplayLoadingGraceArmedRef.current = true;
@@ -1625,28 +1624,20 @@ export function useFeedPlayback({ slug, title, isActive, videoSrc, boundElement 
       //       リセットで十分なケース)。
       const currentSrc = video.currentSrc || video.src;
       const sameUrl = currentSrc === urlAfter;
-      const stuckLow =
-        video.readyState < 2 &&
-        (video.networkState === 0 ||
-          video.networkState === 1 ||
-          video.networkState === 3);
-      const needsHardReset = sameUrl && stuckLow;
-      try { video.pause(); } catch { /* ignore */ }
+      // sameUrl=true のときは load()/hard-reset を撃たない (in-flight Range と pending
+      // play() を維持して AbortError 連鎖を回避)。play() retry は後段の
+      // loadedmetadata/canplay/loadeddata listener -> tryFireRecoveryPlay 経路に委ねる。
+      const needsHardReset = false;
+      const skipLoad = sameUrl;
       if (!sameUrl && urlAfter) {
+        try { video.pause(); } catch { /* ignore */ }
         try { video.src = urlAfter; } catch { /* ignore */ }
-        try { video.load(); } catch { /* ignore */ }
-      } else if (needsHardReset && urlAfter) {
-        try { video.removeAttribute("src"); } catch { /* ignore */ }
-        try { video.load(); } catch { /* ignore */ }
-        try { video.src = urlAfter; } catch { /* ignore */ }
-        try { video.load(); } catch { /* ignore */ }
-      } else {
         try { video.load(); } catch { /* ignore */ }
       }
       if (isVideoTimingEnabled()) {
         // eslint-disable-next-line no-console
         console.debug(
-          `vt ${slug}: active recovery applying url sameUrl=${sameUrl} hardReset=${needsHardReset} rs=${video.readyState} networkState=${video.networkState}`,
+          `vt ${slug}: active recovery applying url sameUrl=${sameUrl} skipLoad=${skipLoad} hardReset=${needsHardReset} rs=${video.readyState} networkState=${video.networkState}`,
         );
       }
 

@@ -446,7 +446,7 @@ export default function FeedItem({ item, isActive, isAdjacent = false, isFirst, 
     const isPendingOnly =
       !hasPromotableElement(item.slug, videoSrc) &&
       hasPendingElement(item.slug, videoSrc);
-    const HOST_ONLY_DEADLOCK_MS = isPendingOnly ? 500 : 4000;
+    const HOST_ONLY_DEADLOCK_MS = isPendingOnly ? 1800 : 4000;
     const timer = setTimeout(() => {
       try {
         window.dispatchEvent(

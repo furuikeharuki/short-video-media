@@ -313,6 +313,112 @@ def test_batch_continues_after_a_failing_item_doesnt_pollute_cache():
     _run(go())
 
 
+def test_process_items_succeeds_when_caches_were_warmed_without_explicit_tx():
+    """warm() を `async with session.begin()` で囲わずに呼んだ後でも `_process_items`
+    が "A transaction is already begun on this Session." で停止しないこと。
+
+    本物のジョブと同じく `await cache.warm(session)` だけを直呼びすると、
+    SQLAlchemy 2.0 は SELECT を autobegin する。autobegin した transaction を
+    閉じずに `_process_items` の `async with session.begin():` に入ると
+    InvalidRequestError で全件失敗していた。この回帰テストは新規パスで明示的に
+    commit を仕込んだ後の状態を再現する (= warm 後にトランザクションを閉じる)。
+    """
+
+    async def go():
+        engine, Session = await _make_session()
+        async with Session() as session:
+            gc = GenreCache()
+            ac = ActressCache()
+            sc = SeriesCache()
+            lc = MovieLinkCache()
+            # main() と同じシナリオ: warm を `session.begin()` 内で実行して clean commit
+            async with session.begin():
+                await gc.warm(session)
+                await ac.warm(session)
+                await sc.warm(session)
+
+            counters = UpsertCounters()
+            items = [_make_item("test001"), _make_item("test002")]
+            await _process_items(
+                session, items, prefix="videoa", counters=counters,
+                affiliate_id="af-990", floor="videoa", dry_run=False,
+                actress_filter=None, http_client=None,
+                genre_cache=gc, actress_cache=ac, series_cache=sc, link_cache=lc,
+            )
+            assert counters.errors == 0, f"got {counters}"
+            assert counters.inserted == 2
+        await engine.dispose()
+
+    _run(go())
+
+
+def test_process_items_recovers_when_session_already_autobegun():
+    """`_process_items` 前に session に autobegin'ed transaction が残っていても、
+    `[ERROR] batch commit failed` で全件 error 計上はしつつも、後続バッチが
+    greenlet_spawn で全滅しないこと (キャッシュが再 warm されてリカバリーする)。
+
+    log で観測された
+        [ERROR] batch commit failed floor=videoa: A transaction is already begun on this Session.
+    の後、後続 item で greenlet_spawn になっていた regression を防ぐ。
+
+    本番では warm 時点で 285 genres / 9077 actresses / 8337 series が
+    キャッシュに乗っており、autobegin'ed transaction → rollback で expire
+    された ORM オブジェクトを次バッチで参照して greenlet_spawn になっていた。
+    再現するため DB 既存行を予め入れてから warm する。
+    """
+    from app.db.models.genre import Genre as _Genre  # noqa: PLC0415
+
+    async def go():
+        engine, Session = await _make_session()
+        async with Session() as session:
+            # production と同じく、warm 時点でキャッシュに ORM 行が入る状況を作る
+            session.add(_Genre(name="ジャンルA"))
+            session.add(Actress(content_id="1069961", name="テスト 女優", slug="1069961"))
+            session.add(Series(
+                id=str(uuid.uuid4()), content_id="4279762",
+                name="AI Japan", slug=_slugify("AI Japan", "4279762"),
+            ))
+            await session.commit()
+
+            gc = GenreCache()
+            ac = ActressCache()
+            sc = SeriesCache()
+            lc = MovieLinkCache()
+            # warm を session.begin() 抜きで呼ぶ (autobegin が立ったまま)
+            await gc.warm(session)
+            await ac.warm(session)
+            await sc.warm(session)
+            assert len(gc.by_name) == 1 and len(ac.by_name) == 1 and len(sc.by_content_id) == 1
+            # コミットせずに `_process_items` に入る = 本番で起きていた状況を再現
+            counters_first = UpsertCounters()
+            items_first = [_make_item("first001")]
+            await _process_items(
+                session, items_first, prefix="videoa", counters=counters_first,
+                affiliate_id="af-990", floor="videoa", dry_run=False,
+                actress_filter=None, http_client=None,
+                genre_cache=gc, actress_cache=ac, series_cache=sc, link_cache=lc,
+            )
+            # 最初のバッチは "transaction already begun" で commit 失敗扱い
+            assert counters_first.errors >= 1, f"expected outer failure, got {counters_first}"
+
+            # 後続バッチ: 既存 genre/actress/series を再利用して普通に upsert できるはず
+            counters_second = UpsertCounters()
+            items_second = [_make_item("second001"), _make_item("second002")]
+            await _process_items(
+                session, items_second, prefix="videoa", counters=counters_second,
+                affiliate_id="af-990", floor="videoa", dry_run=False,
+                actress_filter=None, http_client=None,
+                genre_cache=gc, actress_cache=ac, series_cache=sc, link_cache=lc,
+            )
+            assert counters_second.errors == 0, (
+                f"second batch must succeed after re-warm, got {counters_second}"
+            )
+            assert counters_second.inserted == 2
+        await engine.dispose()
+
+    _run(go())
+
+
 def test_actress_cache_get_or_create_handles_duplicate_slug():
     """ActressCache.get_or_create がキャッシュミス → INSERT で
     UNIQUE 違反 (slug 衝突) を起こしても、SELECT-fallback で既存を返すこと。"""

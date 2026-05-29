@@ -576,19 +576,47 @@ export default function FeedItem({ item, isActive, isAdjacent = false, isFirst, 
     preloadAttr = "metadata";
   }
 
+  // FeedItemVideo に渡すハンドラの identity を変えないために、変動する値は ref
+  // 経由で参照する。これらの handler の identity が render ごとに変わると、
+  // FeedItemVideo の adopt 用 useLayoutEffect の依存配列にぶら下がっているハンドラ
+  // props も変化し、その cleanup (promotedElement.pause() / removeAttribute('src') /
+  // load() / removeChild / videoRef.current = null) が走ってしまう。
+  // 結果として canplay 済みの promoted <video> が rs=0 にリセットされ、次の src 同期
+  // useEffect で load() が再度走り、active autoplay promote force-load → loadeddata
+  // +3〜5s / canplay +5〜12s という大きな遅延が発生する。
+  const forceFallbackSlugRef = useRef<string | null>(null);
+  const fallbackEpochRef = useRef(0);
+  const itemSlugRef = useRef(item.slug);
+  const isActiveRef = useRef(isActive);
+  useEffect(() => {
+    forceFallbackSlugRef.current = forceFallbackSlug;
+  }, [forceFallbackSlug]);
+  useEffect(() => {
+    fallbackEpochRef.current = fallbackEpoch;
+  }, [fallbackEpoch]);
+  useEffect(() => {
+    itemSlugRef.current = item.slug;
+  }, [item.slug]);
+  useEffect(() => {
+    isActiveRef.current = isActive;
+  }, [isActive]);
+
   const handleLoadStart = useCallback(() => {
     // ロード中のサムネ表示は thumbnail-cover で別経路。
     // force-fallback で remount された JSX <video> がここに到達したことを観測する
     // ために、fallback session 中だけ専用ログを出す。これにより
     // 「force-fallback engaged は出たが loadstart が来ない (= remount 自体に失敗)」
     // ケースが切り分けられる。
-    if (forceFallbackSlug === item.slug && isVideoTimingEnabled()) {
+    //
+    // 依存値は全部 ref から読む。ハンドラ identity は固定。
+    const slug = itemSlugRef.current;
+    if (forceFallbackSlugRef.current === slug && isVideoTimingEnabled()) {
       // eslint-disable-next-line no-console
       console.debug(
-        `vt ${item.slug}: fallback video src-attached epoch=${fallbackEpoch}`,
+        `vt ${slug}: fallback video src-attached epoch=${fallbackEpochRef.current}`,
       );
     }
-  }, [forceFallbackSlug, fallbackEpoch, item.slug]);
+  }, []);
 
   const handleLoadedMetadata = useCallback(() => {
     videoSettledRef.current = true;
@@ -676,14 +704,17 @@ export default function FeedItem({ item, isActive, isAdjacent = false, isFirst, 
     setShimmerVisible(false);
   }, [setVideoReady, setSpinnerVisible, setShimmerVisible, clearHardTimeout, abandonPendingIfActiveReady]);
 
+  // isActive を ref で参照することでハンドラ identity を安定させる。FeedItemVideo
+  // の useLayoutEffect 依存配列にこのハンドラが入っており、identity 変化で cleanup
+  // (promoted <video> の pause+src removal+load+detach) が走ってしまうのを防ぐ。
   const handleVideoError = useCallback(() => {
     videoSettledRef.current = true;
     clearHardTimeout();
-    if (!isActive) {
+    if (!isActiveRef.current) {
       return;
     }
     handleError();
-  }, [handleError, clearHardTimeout, isActive]);
+  }, [handleError, clearHardTimeout]);
 
   useEffect(() => {
     if (!isActive || !videoSrc) {

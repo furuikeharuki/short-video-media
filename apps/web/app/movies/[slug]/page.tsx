@@ -138,6 +138,12 @@ export default async function MovieDetailPage({ params }: PageProps) {
             worstRating: 1,
           }
         : undefined,
+      // TODO(seo): MovieDetail に集計済み watch_count / play_count を載せられたら
+      //   ここで interactionStatistic を埋める。捏造値は入れない方針なので、
+      //   バックエンドが /api/v1/interaction-events 集約 → movies テーブル
+      //   (e.g. movies.view_count / movies.play_count) を持つようになるまで undefined。
+      //   参考: https://developers.google.com/search/docs/appearance/structured-data/video
+      interactionStatistic: undefined,
     };
 
     const breadcrumbJsonLd = {

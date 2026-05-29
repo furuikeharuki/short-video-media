@@ -33,6 +33,10 @@ interface Props {
   onNearEnd?: (currentIndex: number) => void;
   /** 親が追加でフックしたい index 変化通知 (任意)。 */
   onIndexChange?: (index: number) => void;
+  /** インタラクション計測の surface タグ ("home" / "search" / "actress" 等)。 */
+  surface?: string | null;
+  /** インタラクション計測の rec_source タグ (詳細レコメンドソース)。 */
+  recSource?: string | null;
 }
 
 export default function FeedSurface({
@@ -42,12 +46,16 @@ export default function FeedSurface({
   sessionIndexKey = null,
   onNearEnd,
   onIndexChange,
+  surface = null,
+  recSource = null,
 }: Props) {
   const { handleIndexChange: trackingHandler } = useFeedViewTracking({
     items,
     initialIndex,
     ready,
     sessionIndexKey,
+    surface,
+    recSource,
   });
 
   const combinedIndexChange = useCallback(

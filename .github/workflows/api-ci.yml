@@ -1,8 +1,10 @@
 name: API CI
 
-# apps/api への push / PR で pytest を回す軽量 CI。
-# - DB に接続しないテスト (test_health / test_feed / test_movie_detail / test_data_consistency / test_sample_url_regex) のみ実行
-# - 将来 DB を立てるテストを追加する場合は services.postgres を追加する
+# apps/api の pytest を実行する CI。
+# - DB なしで動作するように conftest が DSN をダミー化し、サービス層を monkeypatch
+#   する設計のため、ここでは Postgres サービスを起動しない。
+# - analytics 系 (interaction_events / watch_count / ranking) の集計テストは
+#   後続の修正で壊れやすいので、フルテストとは別ステップで明示的に実行する。
 
 on:
   push:
@@ -29,6 +31,13 @@ jobs:
       run:
         working-directory: apps/api
 
+    env:
+      # テスト用ダミー値。production と判定されないよう APP_ENV は development のまま。
+      APP_ENV: development
+      DATABASE_URL: postgresql+asyncpg://test:test@localhost:5432/test
+      PYTHONDONTWRITEBYTECODE: "1"
+      PIP_DISABLE_PIP_VERSION_CHECK: "1"
+
     steps:
       - uses: actions/checkout@v4
 
@@ -36,17 +45,46 @@ jobs:
         with:
           python-version: "3.12"
           cache: "pip"
+          cache-dependency-path: apps/api/pyproject.toml
 
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          # [dev] extras: pytest / pytest-asyncio / httpx (FastAPI TestClient 依存)
+          # [dev] extras: pytest / pytest-asyncio / httpx / aiosqlite
           pip install -e ".[dev]"
 
-      - name: Run pytest
-        env:
-          # テスト用ダミー値。production と判定されないよう APP_ENV は development のまま。
-          APP_ENV: development
-          DATABASE_URL: postgresql+asyncpg://test:test@localhost:5432/test
+      - name: Check Python syntax (compileall)
         run: |
-          python -m pytest -v
+          # 構文エラーを最速で検出する軽量ガード。テスト本体より先に落とす。
+          python -m compileall -q app tests
+
+      # ------------------------------------------------------------------
+      # analytics 系の集計テストを **必ず** 走らせる。フルテストに含まれて
+      # いるが、別ステップで先に走らせることで:
+      #   - PR レビューで「集計まわりが壊れていないか」を一目で判別できる
+      #   - 何らかの理由で後続ステップを skip する設定が入ってもガードできる
+      # ------------------------------------------------------------------
+      - name: Run analytics aggregation tests (watch_count / ranking / interaction_events)
+        run: |
+          python -m pytest -v \
+            tests/test_watch_count.py \
+            tests/test_ranking_service.py \
+            tests/test_movie_service_watch_count.py \
+            tests/test_movie_detail.py \
+            tests/test_interaction_events.py \
+            --junitxml=pytest-analytics.xml
+
+      - name: Run full pytest
+        run: |
+          python -m pytest -v --junitxml=pytest-full.xml
+
+      - name: Upload pytest results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pytest-results-api
+          path: |
+            apps/api/pytest-analytics.xml
+            apps/api/pytest-full.xml
+          if-no-files-found: ignore
+          retention-days: 7

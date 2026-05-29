@@ -139,6 +139,18 @@ export default async function MovieDetailPage({ params }: PageProps) {
             worstRating: 1,
           }
         : undefined,
+      // watch_count は「50% 以上再生に到達したユニーク feed_session 数」を
+      // canonical な視聴回数として interaction_events から集計したもの。
+      // 0 や null (= まだ集計データが無い) のときは捏造値を入れないため出力しない。
+      //   参考: https://developers.google.com/search/docs/appearance/structured-data/video
+      interactionStatistic:
+        movie.watch_count != null && movie.watch_count > 0
+          ? {
+              "@type": "InteractionCounter",
+              interactionType: { "@type": "WatchAction" },
+              userInteractionCount: movie.watch_count,
+            }
+          : undefined,
     };
 
     const breadcrumbJsonLd = {

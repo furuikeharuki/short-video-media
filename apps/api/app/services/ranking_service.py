@@ -16,6 +16,10 @@ from app.repositories.event_repository import (
     aggregate_view_ranking_all_time,
 )
 from app.repositories.goods_repository import get_popular_goods
+from app.repositories.interaction_event_repository import (
+    aggregate_watch_count_ranking,
+    aggregate_watch_count_ranking_all_time,
+)
 from app.repositories.movie_repository import (
     get_fallback_ranking_movies,
     get_movies_by_slugs_ordered,
@@ -44,8 +48,24 @@ async def get_ranking(
     limit: int = 20,
     offset: int = 0,
 ) -> list[MovieCard]:
-    """期間ランキング。offset/limit は SQL レベルで適用されるため、
-    データ量がどれだけ増えても 1 ページあたりの計算量は limit 件に収まる。
+    """期間ランキング (daily / weekly / monthly)。
+
+    主指標 (一次キー) は **watch_count** (50% 以上再生に到達したユニーク
+    feed_session 数を期間内で集計したもの)。`get_popular_all_time` と同じ
+    canonical 定義 (`aggregate_watch_count_ranking`) を、期間ウィンドウ
+    付きで使う。
+
+    watch_count が薄い間 (interaction_events がまだ十分に貯まっていない
+    初期段階) の挙動を保つため、不足分は次の順でフォールバックする:
+
+      1. watch_count ランキング (期間内, daily=24h / weekly=7d / monthly=30d)
+      2. 既存の raw view イベントランキング (同じ期間ウィンドウ)
+      3. 期間ごとに窓幅を変えた汎用フォールバック (`_FALLBACK_WINDOW_DAYS`)
+
+    並び順は watch_count 由来 → view 由来 → 汎用フォールバック由来、と
+    水平方向に上から積まれる。重複は `seen_ids` で抑止する。
+    offset/limit は SQL レベルで適用されるため、データ量がどれだけ増えても
+    1 ページあたりの計算量は limit 件に収まる。
     """
     if period not in VALID_PERIODS:
         raise ValueError(f"period must be one of {VALID_PERIODS}")
@@ -53,7 +73,8 @@ async def get_ranking(
     cards: list[MovieCard] = []
     seen_ids: set[str] = set()
 
-    ranked = await aggregate_view_ranking(
+    # 1) watch_count (期間内) を主指標として使う
+    ranked = await aggregate_watch_count_ranking(
         db, period=period, limit=limit, offset=offset
     )
     slugs = [s for s, _ in ranked if s]
@@ -68,21 +89,38 @@ async def get_ranking(
     if len(cards) >= limit:
         return cards[:limit]
 
-    # 期間内 view イベントだけでは limit に満たないときは、期間ごとに
-    # 異なる窓幅 (_FALLBACK_WINDOW_DAYS) のフォールバックで穴埋めする。
-    # こうすると view イベントが少なくて daily/weekly/monthly の上位が
-    # 同じになるケースでも、フォールバック側の窓 (7/30/90日) の差で
-    # 自然に並びが分かれる。
+    # 2) watch_count が薄い間は、既存の raw view イベントランキング (同じ
+    #    期間ウィンドウ) で穴埋め。これにより interaction_events が貯まる
+    #    までの移行期間も上位がほぼ空にならない。
     #
-    # フォールバック側に渡す offset:
-    #   - イベント由来で 1 件でも取れている場合は 0 から取り直し、
-    #     重複は seen_ids で除外する (ページ送り中の二重表示を防ぐ)。
-    #   - イベント由来がゼロのときは元の offset を渡してフォールバック
-    #     単独のページ送りに切り替わる (従来挙動と同じ)。
+    #    フォールバック側に渡す offset:
+    #     - watch_count 由来で 1 件でも取れている場合は 0 から取り直して
+    #       seen_ids で重複除去 (ページ送り中の二重表示を防ぐ)。
+    #     - watch_count 由来がゼロのときは元の offset を渡して raw view
+    #       単独のページ送りに切り替わる (従来挙動と同じ)。
+    need = limit - len(cards)
+    view_ranked = await aggregate_view_ranking(
+        db, period=period, limit=need * 2, offset=0 if cards else offset
+    )
+    view_slugs = [s for s, _ in view_ranked if s]
+    if view_slugs:
+        view_movies = await get_movies_by_slugs_ordered(db, view_slugs)
+        for m in view_movies:
+            if len(cards) >= limit:
+                break
+            if m.id in seen_ids:
+                continue
+            cards.append(_to_card(m))
+            seen_ids.add(m.id)
+
+    if len(cards) >= limit:
+        return cards[:limit]
+
+    # 3) 期間ごとに異なる窓幅 (_FALLBACK_WINDOW_DAYS) の汎用フォールバック。
+    #    watch_count / view ともに足りないときの最終手段。
     need = limit - len(cards)
     fallback = await get_fallback_ranking_movies(
         db,
-        # 重複除去で枯れるリスクを下げるため少し多めに取得。
         limit=need * 2,
         window_days=_FALLBACK_WINDOW_DAYS[period],
         offset=0 if cards else offset,
@@ -103,22 +141,73 @@ async def get_popular_all_time(
     limit: int = 20,
     offset: int = 0,
 ) -> list[MovieCard]:
-    """「人気」セクション: 全期間の view イベント計順。
-    view イベントが不足しているときは全体の review_count 順 (windowなし) で補う。
+    """「人気」セクション: 全期間の watch_count (= 50%以上再生に到達したユニーク feed_session 数) 順。
+
+    interaction_events ベースの watch_count を主指標にし、不足分は
+    既存 view イベント / review_count フォールバックで穴埋めする。
     SQL OFFSET/LIMIT でページネーション。
+
+    互換性メモ:
+        従来は raw view イベント数を「総視聴回数」として並べていたが、
+        フィード上の単なる通過 / 自動再生でも view が積み上がるため、
+        2026-05 以降は「50% 到達ユニーク watch」を canonical な指標として採用する。
+        watch_count が貯まるまでは aggregate_view_ranking_all_time + 既存
+        フォールバックで補い、ユーザー体験を維持する。
     """
-    ranked = await aggregate_view_ranking_all_time(db, limit=limit, offset=offset)
+    ranked = await aggregate_watch_count_ranking_all_time(
+        db, limit=limit, offset=offset
+    )
     slugs = [s for s, _ in ranked if s]
+    cards: list[MovieCard] = []
+    seen_ids: set[str] = set()
 
     if slugs:
         movies = await get_movies_by_slugs_ordered(db, slugs)
-        if movies:
-            return [_to_card(m) for m in movies]
+        for m in movies:
+            if m.id in seen_ids:
+                continue
+            cards.append(_to_card(m))
+            seen_ids.add(m.id)
 
-    movies = await get_fallback_ranking_movies(
-        db, limit=limit, window_days=None, offset=offset
+    if len(cards) >= limit:
+        return cards[:limit]
+
+    # watch_count 由来で limit に届かないときは、まず view イベント由来で補う。
+    # interaction_events がまだ十分に貯まっていない初期段階で、
+    # ホームの人気セクションが空になるのを防ぐためのフォールバック。
+    need = limit - len(cards)
+    view_ranked = await aggregate_view_ranking_all_time(
+        db,
+        limit=need * 2,
+        offset=0 if cards else offset,
     )
-    return [_to_card(m) for m in movies]
+    view_slugs = [s for s, _ in view_ranked if s]
+    if view_slugs:
+        view_movies = await get_movies_by_slugs_ordered(db, view_slugs)
+        for m in view_movies:
+            if len(cards) >= limit:
+                break
+            if m.id in seen_ids:
+                continue
+            cards.append(_to_card(m))
+            seen_ids.add(m.id)
+
+    if len(cards) >= limit:
+        return cards[:limit]
+
+    # 最終フォールバック: review_count ベースの汎用ランキング。
+    need = limit - len(cards)
+    fallback = await get_fallback_ranking_movies(
+        db, limit=need * 2, window_days=None, offset=0 if cards else offset
+    )
+    for m in fallback:
+        if len(cards) >= limit:
+            break
+        if m.id in seen_ids:
+            continue
+        cards.append(_to_card(m))
+        seen_ids.add(m.id)
+    return cards[:limit]
 
 
 def _to_actress_card(actress) -> ActressCard:

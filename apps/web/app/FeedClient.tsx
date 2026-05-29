@@ -681,6 +681,7 @@ export default function FeedClient() {
         ready={!isLoading}
         sessionIndexKey={FEED_INDEX_KEY}
         onNearEnd={handleNearEnd}
+        surface="home"
       />
       <style>{uiStyle}</style>
     </>

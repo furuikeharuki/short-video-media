@@ -63,6 +63,7 @@ export default function SearchFeedPage() {
       initialIndex={0}
       ready={items.length > 0}
       sessionIndexKey={SEARCH_FEED_INDEX_KEY}
+      surface="search"
     />
   );
 }

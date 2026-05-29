@@ -4,6 +4,7 @@ from app.api.v1.endpoints.actresses import router as actresses_router
 from app.api.v1.endpoints.auth import router as auth_router
 from app.api.v1.endpoints.comments import router as comments_router
 from app.api.v1.endpoints.events import router as events_router
+from app.api.v1.endpoints.interaction_events import router as interaction_events_router
 from app.api.v1.endpoints.feed import router as feed_router
 from app.api.v1.endpoints.health import router as health_router
 from app.api.v1.endpoints.home import router as home_router
@@ -21,6 +22,7 @@ api_router.include_router(movies_router, tags=["movies"])
 api_router.include_router(search_router, tags=["search"])
 api_router.include_router(tags_router, tags=["tags"])
 api_router.include_router(events_router, tags=["events"])
+api_router.include_router(interaction_events_router, tags=["interaction_events"])
 api_router.include_router(rankings_router, tags=["rankings"])
 api_router.include_router(home_router, tags=["home"])
 api_router.include_router(auth_router, tags=["auth"])

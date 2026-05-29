@@ -6,6 +6,7 @@ import { useBookmarks } from "@/components/auth/BookmarksProvider";
 import { signIn } from "next-auth/react";
 import { useFeedPlayback } from "./feed/useFeedPlayback";
 import { useResolvedVideoSrc } from "./feed/useResolvedVideoSrc";
+import { useVideoInteractionTracking } from "./feed/useVideoInteractionTracking";
 import { createVideoTimer, isVideoTimingEnabled } from "@/lib/videoTiming";
 import {
   isProActressMovie,
@@ -703,6 +704,14 @@ export default function FeedItem({ item, isActive, isAdjacent = false, isFirst, 
     onOpenModal: handleOpenModal,
     isProActress,
     fallbackEpoch,
+  });
+
+  // 既存 playback ロジックには触らず、薄いレイヤとして再生ライフサイクル系の
+  // interaction event を /api/v1/interaction-events に送る。
+  useVideoInteractionTracking({
+    slug: item.slug,
+    videoRef,
+    isActive,
   });
 
   // preload 戦略:

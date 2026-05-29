@@ -198,6 +198,35 @@ def test_search_movies_count_uses_count_star_not_count_distinct() -> None:
     assert "distinct" not in sql.lower()
 
 
+def test_search_movies_orders_by_indexed_primary_date_desc() -> None:
+    """`search_movies` の items 取得が ORDER BY primary_date DESC NULLS LAST, id で
+    出ていることを保証する。
+
+    Movie.title には B-tree index が無いため、`ORDER BY title` だと数千件マッチする
+    キーワードで全マッチ行を読み込んでメモリソートしてから LIMIT 20 する形になり、
+    API レイテンシが 2 秒前後になる回帰を防ぐ。
+    primary_date には単独 / 複合 index があり、planner は top-K 早期打ち切りプランを
+    選べる。
+    """
+    from sqlalchemy import select as sa_select
+
+    from app.db.models.movie import Movie
+    from app.repositories.search_repository import _build_keyword_where
+
+    where = _build_keyword_where("alpha")
+    stmt = (
+        sa_select(Movie)
+        .where(where)
+        .order_by(Movie.primary_date.desc().nullslast(), Movie.id)
+        .limit(20)
+    )
+    sql = _compile(stmt)
+    # primary_date DESC NULLS LAST が ORDER BY に乗っている
+    assert "ORDER BY movies.primary_date DESC NULLS LAST" in sql
+    # title による ORDER BY が混入していない (索引が無いので使ってはいけない)
+    assert "ORDER BY movies.title" not in sql
+
+
 def test_keyword_where_uses_or_with_correlated_exists() -> None:
     """単一トークンの WHERE は title / description などへの ILIKE と、女優 / ジャンル /
     シリーズに対する相関 EXISTS の OR で構成されている。

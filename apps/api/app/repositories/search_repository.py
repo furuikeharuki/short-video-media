@@ -170,10 +170,19 @@ async def search_movies(
     # 1〜2 秒かかるため、cap+1 件で打ち切る (cap 件以下なら正確、超えていれば cap+1 を返す)。
     total = await _capped_count(db, where)
 
+    # ORDER BY を Movie.title (索引無し) から Movie.primary_date DESC (索引あり) に変更。
+    # title には B-tree index が無いため、`q=巨乳` のような数千件マッチするキーワードでは
+    # 全マッチ行を読み込んでメモリ上で sort してから LIMIT 20 する形になり、API 全体の
+    # レイテンシが 2 秒前後になる主因だった。
+    # primary_date は単独 index + 複合 index (ix_movies_visible_primary_date) を持つので、
+    # planner は「primary_date index を新しい順に走査し、WHERE にマッチした行を 20 件
+    # 集まるまで読む」プランを選べる (top-K 早期打ち切り)。
+    # ソート順としても新しい作品が先頭に来る方が ショート動画 UI の体験として自然なため、
+    # advanced search の sort=new と挙動が揃う形になる。
     stmt = (
         select(Movie)
         .where(where)
-        .order_by(Movie.title, Movie.id)
+        .order_by(Movie.primary_date.desc().nullslast(), Movie.id)
     )
     if offset:
         stmt = stmt.offset(offset)

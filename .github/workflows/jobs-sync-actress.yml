@@ -88,14 +88,32 @@ jobs:
           # SYNC_ACTRESS_* は infra/xserver/.env から docker compose の
           # env_file 経由で jobs コンテナに渡り、CLI 未指定時のフォールバックとして
           # スクリプトに参照される。
-          ssh ${PORT_OPT} -o BatchMode=yes "${USER}@${HOST}" bash -s <<EOF
+          #
+          # SSH keepalive と PYTHONUNBUFFERED の意図は jobs-sync-catalog.yml と同じ。
+          # 女優プロフィール同期は 1 件ごとに DMM API を 1 リクエスト叩くため、
+          # 1000 件級でも分単位の沈黙はなく出力は出続けるが、保険として一律に
+          # keepalive を付けて NAT 切断を防ぐ。
+          ssh ${PORT_OPT} \
+            -o BatchMode=yes \
+            -o ServerAliveInterval=30 \
+            -o ServerAliveCountMax=10 \
+            -o TCPKeepAlive=yes \
+            "${USER}@${HOST}" bash -s <<EOF
           set -euo pipefail
+          trap 'echo "[remote] exit_status=\$?" >&2' EXIT
+          echo "[remote] start \$(date -u +%FT%TZ)"
           cd "${REPO_DIR}/infra/xserver"
+          echo "[remote] docker compose build start \$(date -u +%FT%TZ)"
           docker compose --profile cli build jobs
-          docker compose --profile cli run --rm jobs \
+          echo "[remote] docker compose build done \$(date -u +%FT%TZ)"
+          echo "[remote] sync_actress_profiles run start \$(date -u +%FT%TZ)"
+          docker compose --profile cli run --rm -T \
+            -e PYTHONUNBUFFERED=1 \
+            jobs \
             python -m src.sync_actress_profiles \
               ${ONLY_MISSING_ARG} \
               ${LIMIT_ARG}
+          echo "[remote] sync_actress_profiles run done \$(date -u +%FT%TZ)"
           EOF
 
       - name: Tear down ssh-agent

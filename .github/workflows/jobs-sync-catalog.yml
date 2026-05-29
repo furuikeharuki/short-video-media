@@ -116,17 +116,37 @@ jobs:
           # スクリプトに参照される。
           # --mode incremental を明示することで、env で偶発的に full モードに
           # 切り替わるリスクを workflow レベルで排除する。
-          ssh ${PORT_OPT} -o BatchMode=yes "${USER}@${HOST}" bash -s <<EOF
+          #
+          # SSH keepalive (ServerAliveInterval=30 / CountMax=10 / TCPKeepAlive=yes) を
+          # 付与し、GitHub Actions runner 側 NAT / VPS 側 firewall が長い無出力期間
+          # (caches warm + DMM API rate limit 待ち) で TCP セッションを切るのを防ぐ。
+          # PYTHONUNBUFFERED=1 でコンテナ内 Python の stdout を即座に flush し、
+          # cron 失敗時の調査がしやすいようログをリアルタイムで流す。
+          ssh ${PORT_OPT} \
+            -o BatchMode=yes \
+            -o ServerAliveInterval=30 \
+            -o ServerAliveCountMax=10 \
+            -o TCPKeepAlive=yes \
+            "${USER}@${HOST}" bash -s <<EOF
           set -euo pipefail
+          trap 'echo "[remote] exit_status=\$?" >&2' EXIT
+          echo "[remote] start \$(date -u +%FT%TZ)"
           cd "${REPO_DIR}/infra/xserver"
           # 既存 build を流用するが、image が古ければ再 build される。
           # build しか走らない時でも数十秒で済むので毎回付けておく。
+          echo "[remote] docker compose build start \$(date -u +%FT%TZ)"
           docker compose --profile cli build jobs
-          docker compose --profile cli run --rm jobs \
+          echo "[remote] docker compose build done \$(date -u +%FT%TZ)"
+          echo "[remote] sync_catalog run start \$(date -u +%FT%TZ)"
+          # -T で TTY 無効化 / -e PYTHONUNBUFFERED=1 で Python stdout を即時 flush。
+          docker compose --profile cli run --rm -T \
+            -e PYTHONUNBUFFERED=1 \
+            jobs \
             python -m src.sync_catalog \
               --mode incremental \
               ${HITS_ARG} \
               ${FLOORS_ARG}
+          echo "[remote] sync_catalog run done \$(date -u +%FT%TZ)"
           EOF
 
       - name: Tear down ssh-agent

@@ -13,6 +13,8 @@
  *  - `sendBeacon` が使える環境ではそれを優先 (タブ遷移時の信頼性)。
  */
 
+import { forwardInteractionToGa4 } from "./interactions_ga4";
+
 const API_BASE_URL =
   (typeof window === "undefined"
     ? process.env.API_BASE_URL || process.env.INTERNAL_API_BASE_URL
@@ -116,8 +118,14 @@ function postBody(payload: InteractionEventPayload): string {
 }
 
 export function trackInteraction(payload: InteractionEventPayload): void {
-  if (!API_BASE_URL) return;
   if (typeof window === "undefined") return;
+
+  // GA4 への転送はバックエンド送信とは独立に行う。
+  // gtag が未ロード / 未設定なら no-op (interactions_ga4.ts 内で判定)。
+  // バックエンド未設定 (= API_BASE_URL 空) の環境でも GA4 だけは飛ぶ。
+  forwardInteractionToGa4(payload);
+
+  if (!API_BASE_URL) return;
 
   const url = `${API_BASE_URL}/api/v1/interaction-events`;
   const body = postBody(payload);

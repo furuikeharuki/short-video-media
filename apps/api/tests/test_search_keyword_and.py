@@ -55,15 +55,25 @@ def _compile(expr) -> str:
 
 
 def test_single_keyword_emits_single_or_group() -> None:
-    """空白なしの単一キーワードは従来通り 1 つの OR グループになる。"""
+    """空白なしの単一キーワードは従来通り 1 つの OR グループになる。
+
+    EXISTS サブクエリ内には自身の WHERE で AND が含まれるが、
+    それはトークン間結合ではなくサブクエリ内部条件。
+    「同じパターン (alpha) が複数のトークンとして繰り返されていない」ことで
+    トップレベル AND が無いことを担保する。
+    """
     sql = _compile(_build_keyword_where("alpha"))
     # 単一キーワードでは alpha のパターンが現れ、別キーワードは混ざらない。
     # (psycopg のパラメータバインドで '%' は SQL に '%%' として出るため、
     #  ILIKE '%%alpha%%' の形を許容する。)
     assert "alpha" in sql
     assert "beta" not in sql
-    # 単一トークンなら AND で別グループに連結されていない。
-    assert " AND " not in sql
+    # 単一トークンであれば、同じ %alpha% パターンが
+    # OR グループ 1 セット分しか出てこない。スペース分割で AND されたら
+    # 同じ %alpha% パターンが 2 セット出現する。
+    # 1 セット = title / description / director / maker / label / actress /
+    # genre / series の合計 8 か所。
+    assert sql.count("%%alpha%%") == 8
 
 
 def test_space_separated_keyword_uses_and_of_or_groups() -> None:
@@ -163,3 +173,51 @@ def test_advanced_conditions_multi_token_q_with_genres_all_anded() -> None:
     assert "G1" in sql
     # q 内 AND (alpha と beta) + q ↔ genres 間 AND で AND が複数登場する
     assert sql.count(" AND ") >= 2
+
+
+# ---------------- パフォーマンス回帰防止 ----------------
+
+
+def test_search_movies_count_uses_count_star_not_count_distinct() -> None:
+    """`search_movies` の total カウントが COUNT(DISTINCT id) ではなく
+    COUNT(*) になっていることを保証する。
+
+    WHERE が EXISTS / 直接カラム比較しかないので Movie 行は膨張せず、
+    DISTINCT を取ると不要にソート / ハッシュが入って遅くなる。
+    リファクタで戻ってしまった場合に気付ける回帰テスト。
+    """
+    from sqlalchemy import func, select
+
+    from app.db.models.movie import Movie
+    from app.repositories.search_repository import _build_keyword_where
+
+    where = _build_keyword_where("alpha")
+    count_stmt = select(func.count()).select_from(Movie).where(where)
+    sql = _compile(count_stmt)
+    assert "count(*)" in sql.lower()
+    assert "distinct" not in sql.lower()
+
+
+def test_advanced_conditions_uses_in_subquery_not_join_for_series() -> None:
+    """series_list は Series JOIN ではなく `Movie.series_id IN (subquery)` で
+    実装されていることを保証する (JOIN だと行数が膨らんで COUNT(*) も狂う)。"""
+    from sqlalchemy import and_
+
+    from app.repositories.search_repository import _build_advanced_conditions
+
+    conds = _build_advanced_conditions(
+        q=None,
+        genres=[],
+        actresses=[],
+        series_list=["MySeries"],
+        directors=[],
+        makers=[],
+        labels=[],
+        date_from=None,
+        date_to=None,
+        ng_words=[],
+    )
+    sql = _compile(and_(*conds))
+    # IN (SELECT ... FROM series ...) 形式になっている
+    assert "series_id IN" in sql or "movies.series_id IN" in sql
+    assert "MySeries" in sql

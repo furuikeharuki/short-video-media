@@ -41,23 +41,33 @@ def _split_keyword_tokens(query: str) -> list[str]:
 
 def _build_token_where(token: str):
     """単一トークンに対する OR 条件 (title / description / director / maker / label /
-    女優名 / ジャンル名 / シリーズ名 の部分一致いずれか) を返す。"""
+    女優名 / ジャンル名 / シリーズ名 の部分一致いずれか) を返す。
+
+    女優 / ジャンル / シリーズは IN (...) の代わりに EXISTS を使う。
+    pg_trgm GIN index と組み合わせた時に planner が選択しやすく、
+    行数が多くなっても IN マテリアライズを避けられる。
+    """
     pat = f"%{token}%"
 
-    actress_sub = (
-        select(Movie.id)
-        .join(Movie.actresses)
-        .where(Actress.name.ilike(pat))
+    actress_exists = (
+        select(1)
+        .select_from(MovieActress)
+        .join(Actress, Actress.id == MovieActress.actress_id)
+        .where(MovieActress.movie_id == Movie.id, Actress.name.ilike(pat))
+        .exists()
     )
-    genre_sub = (
-        select(Movie.id)
-        .join(Movie.genres)
-        .where(Genre.name.ilike(pat))
+    genre_exists = (
+        select(1)
+        .select_from(MovieGenre)
+        .join(Genre, Genre.id == MovieGenre.genre_id)
+        .where(MovieGenre.movie_id == Movie.id, Genre.name.ilike(pat))
+        .exists()
     )
-    series_sub = (
-        select(Movie.id)
-        .join(Movie.series)
-        .where(Series.name.ilike(pat))
+    series_exists = (
+        select(1)
+        .select_from(Series)
+        .where(Series.id == Movie.series_id, Series.name.ilike(pat))
+        .exists()
     )
 
     return or_(
@@ -66,9 +76,9 @@ def _build_token_where(token: str):
         Movie.director_name.ilike(pat),
         Movie.maker_name.ilike(pat),
         Movie.label_name.ilike(pat),
-        Movie.id.in_(actress_sub),
-        Movie.id.in_(genre_sub),
-        Movie.id.in_(series_sub),
+        actress_exists,
+        genre_exists,
+        series_exists,
     )
 
 
@@ -106,8 +116,9 @@ async def search_movies(
     """
     where = _build_keyword_where(query)
 
-    # total は item 取得とは別に COUNT(DISTINCT) で取る (ページングしても全体値が欲しい)
-    count_stmt = select(func.count(func.distinct(Movie.id))).where(where)
+    # WHERE は EXISTS / 直接カラム比較のみで Movie をマルチプライしないので
+    # DISTINCT を取らずに COUNT(*) で十分 (DISTINCT は大規模データでソート/ハッシュが入って遅い)。
+    count_stmt = select(func.count()).select_from(Movie).where(where)
     total = (await db.execute(count_stmt)).scalar_one()
 
     stmt = (
@@ -140,7 +151,6 @@ async def search_movies_by_exact_field(
     series は Series.name (Movie.series リレーション) を完全一致で照合する。
     """
     conditions = []
-    needs_series_join = False
     if director:
         conditions.append(Movie.director_name == director)
     if maker:
@@ -148,24 +158,22 @@ async def search_movies_by_exact_field(
     if label:
         conditions.append(Movie.label_name == label)
     if series:
-        conditions.append(Series.name == series)
-        needs_series_join = True
+        # Series JOIN を避けて FK 直接照合のサブクエリにする (Series.name に
+        # 一致する series_id 群を引いて IN するだけ)。これで Movie 側に
+        # 行数膨張がなく DISTINCT も不要。
+        conditions.append(
+            Movie.series_id.in_(select(Series.id).where(Series.name == series))
+        )
 
     if not conditions:
         return [], 0
 
-    # total を取るための COUNT(DISTINCT) クエリ
-    count_stmt = select(func.count(func.distinct(Movie.id)))
-    if needs_series_join:
-        count_stmt = count_stmt.join(Movie.series)
-    count_stmt = count_stmt.where(*conditions)
+    # Movie に対する直値比較 / IN サブクエリしか無いので COUNT(*) で OK。
+    count_stmt = select(func.count()).select_from(Movie).where(*conditions)
     total = (await db.execute(count_stmt)).scalar_one()
 
     # items 取得 (delivery_date 降順、同日内は id で安定ソート)
-    stmt = select(Movie)
-    if needs_series_join:
-        stmt = stmt.join(Movie.series)
-    stmt = stmt.where(*conditions).order_by(
+    stmt = select(Movie).where(*conditions).order_by(
         Movie.delivery_date.desc().nullslast(), Movie.id
     )
     if offset:
@@ -324,8 +332,10 @@ async def advanced_search_movies(
         ng_words=ng_words or [],
     )
 
-    # total は items 取得とは別クエリで先に取る (next_cursor 判定に使う)
-    count_stmt = select(func.count(func.distinct(Movie.id))).where(*conditions)
+    # total は items 取得とは別クエリで先に取る (next_cursor 判定に使う)。
+    # 全 WHERE 条件は Movie へのスカラー比較か Movie.id.in_(subquery) のみで
+    # 行数を膨張させないので COUNT(*) で OK (DISTINCT 不要)。
+    count_stmt = select(func.count()).select_from(Movie).where(*conditions)
     total = (await db.execute(count_stmt)).scalar_one()
 
     # items: ソート種別に応じてサブクエリを組み立てる
@@ -554,18 +564,19 @@ async def suggest_field_values(
             .where(Movie.is_visible.is_(True), name_col.is_not(None), name_col != "")
         )
     elif field == "director":
+        # director_name は Movie の直値カラム。1 行 = 1 作品なので COUNT(*) で OK。
         name_col = Movie.director_name
-        stmt = select(name_col, func.count(func.distinct(Movie.id)).label("cnt")).where(
+        stmt = select(name_col, func.count().label("cnt")).where(
             Movie.is_visible.is_(True), name_col.is_not(None), name_col != ""
         )
     elif field == "maker":
         name_col = Movie.maker_name
-        stmt = select(name_col, func.count(func.distinct(Movie.id)).label("cnt")).where(
+        stmt = select(name_col, func.count().label("cnt")).where(
             Movie.is_visible.is_(True), name_col.is_not(None), name_col != ""
         )
     elif field == "label":
         name_col = Movie.label_name
-        stmt = select(name_col, func.count(func.distinct(Movie.id)).label("cnt")).where(
+        stmt = select(name_col, func.count().label("cnt")).where(
             Movie.is_visible.is_(True), name_col.is_not(None), name_col != ""
         )
     else:
@@ -575,10 +586,19 @@ async def suggest_field_values(
     if pattern is not None:
         stmt = stmt.where(name_col.ilike(pattern))
 
-    # 同件数の場合は名前順で安定ソート
+    # 同件数の場合は名前順で安定ソート。
+    # cnt カラム (各 elif で計算したカウント式) で desc 順 → 名前 asc。
+    # SQLAlchemy の column() でラベル参照する代わりに、ORDER BY 2 (位置参照) を使うと
+    # ポータブルかつ実装に依存しないが、SQLAlchemy は ORDER BY 1/2 を直接サポート
+    # しないので、ここはコンパイル済みの集約式を再構築する。
+    cnt_expr = (
+        func.count(func.distinct(Movie.id))
+        if field in ("actress", "genre", "series")
+        else func.count()
+    )
     stmt = (
         stmt.group_by(name_col)
-        .order_by(func.count(func.distinct(Movie.id)).desc(), name_col.asc())
+        .order_by(cnt_expr.desc(), name_col.asc())
         .limit(limit)
     )
 

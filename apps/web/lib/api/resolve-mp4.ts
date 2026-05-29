@@ -63,14 +63,35 @@ export function pickPlaybackUrl(res: {
  *   _dmb_w.mp4 : medium-bitrate (中の上、_dm_w より高ビットレート)
  *   _mhb_w.mp4 : medium-high bitrate (HD 相当、最高画質)
  *
+ * コンパクト形 (近年 DMM が併用):
+ *   <cid>sm.mp4 / <cid>dm.mp4 / <cid>dmb.mp4 / <cid>mhb.mp4
+ * 例: `sone00614sm.mp4`, `sone00614mhb.mp4`。
+ * basename 末尾の `<tier>.mp4` を判定し、直前は **小文字英字以外** に限定して
+ * `smhb.mp4` のような偽陽性を避ける。
+ *
  * vt ログ用の安全な短いラベル。トークン付きクエリは含まない。
  */
+const COMPACT_SUFFIX_RE = /(?:^|[^a-z])(mhb|dmb|dm|sm)\.mp4$/i;
+
+function basenameOf(url: string): string {
+  let s = url;
+  const q = s.indexOf("?");
+  if (q >= 0) s = s.substring(0, q);
+  const h = s.indexOf("#");
+  if (h >= 0) s = s.substring(0, h);
+  const slash = s.lastIndexOf("/");
+  return slash >= 0 ? s.substring(slash + 1) : s;
+}
+
 export function inferQualityTier(url: string | null | undefined): string {
   if (!url) return "unknown";
   if (url.includes("_mhb_w.mp4")) return "mhb";
   if (url.includes("_dmb_w.mp4")) return "dmb";
   if (url.includes("_dm_w.mp4")) return "dm";
   if (url.includes("_sm_w.mp4")) return "sm";
+  // コンパクト形は basename 末尾だけを見る (`xxxxsm.mp4` 等)。
+  const m = COMPACT_SUFFIX_RE.exec(basenameOf(url));
+  if (m) return m[1].toLowerCase();
   return "other";
 }
 

@@ -198,6 +198,16 @@ def _normalize_mp4_url(src: str) -> str:
 #   _dmb_w.mp4  : medium-bitrate    (720x404 程度 / SD ハイビットレート)
 #   _mhb_w.mp4  : medium-high-bitrate (1280x720 程度 / HD 相当、最高画質)
 #
+# 加えて、近年の DMM は同等の品質グレードを *コンパクト形* で返すことがある:
+#   <cid>sm.mp4   ≒ small
+#   <cid>dm.mp4   ≒ medium
+#   <cid>dmb.mp4  ≒ medium-bitrate
+#   <cid>mhb.mp4  ≒ medium-high-bitrate (HD)
+# 例: `sone00614sm.mp4`, `sone00614mhb.mp4`。本番ログ (#283 で basename を残した)
+# で `basename=sone00614sm.mp4` が high として選ばれていたケースを直接救う。
+# コンパクト形は basename 末尾 `<tier>.mp4` を, 直前が **小文字英字以外**
+# (= 数字 / 区切り) であることを条件に判定し、`smhb.mp4` のような偽陽性を避ける。
+#
 # 旧テーブルは `_dmb_w` を最低 (10) と誤って書いていたため、bitrate キーが無い
 # レスポンスで `high = _dmb_w.mp4` (= 中) になり、`_mhb_w.mp4` を取り損ねる
 # ケースがあった。これがユーザー報告「再生動画が低解像度に見える」の主因の
@@ -210,12 +220,51 @@ _QUALITY_RANK_BY_SUFFIX: dict[str, int] = {
     "_mhb_w.mp4": 90,
 }
 
+# コンパクト形のランク。サフィックスの長い順に並べる (`dmb`/`mhb` を `dm`/`mh` より
+# 先に当てる)。値は `_xxx_w.mp4` 形と一致させる。
+_COMPACT_QUALITY_RANK: tuple[tuple[str, int], ...] = (
+    ("mhb", 90),
+    ("dmb", 60),
+    ("dm", 30),
+    ("sm", 10),
+)
+
+# basename 末尾の `<tier>.mp4` を捕捉。直前は文字列頭 or 非小文字英字に限定し、
+# `smhb.mp4` (= `mhb` が `s` に続く偽パターン) を弾く。
+_COMPACT_SUFFIX_RE = re.compile(
+    r"(?:^|[^a-z])(mhb|dmb|dm|sm)\.mp4$",
+    re.IGNORECASE,
+)
+
+
+def _basename(url: str) -> str:
+    """URL からファイル basename (クエリ / hash 除去後) を返す。"""
+    # クエリ / hash を切り捨て
+    for sep in ("?", "#"):
+        i = url.find(sep)
+        if i >= 0:
+            url = url[:i]
+    slash = url.rfind("/")
+    return url[slash + 1 :] if slash >= 0 else url
+
 
 def _suffix_rank(url: str) -> int:
-    """URL の末尾サフィックスから画質ランクを返す。低いほど軽量。"""
+    """URL の末尾サフィックスから画質ランクを返す。低いほど軽量。
+
+    1) 既存の `_xxx_w.mp4` 形を substring match (高速、優先)。
+    2) basename 末尾の `<tier>.mp4` コンパクト形を regex match。
+    どちらも該当しなければ未知扱いで 50。
+    """
     for suffix, rank in _QUALITY_RANK_BY_SUFFIX.items():
         if suffix in url:
             return rank
+    base = _basename(url).lower()
+    m = _COMPACT_SUFFIX_RE.search(base)
+    if m is not None:
+        tier = m.group(1).lower()
+        for key, rank in _COMPACT_QUALITY_RANK:
+            if tier == key:
+                return rank
     return 50
 
 
@@ -374,8 +423,9 @@ def _direct_mp4_candidates(html: str) -> _Candidates | None:
         seen.add(url)
         unique.append(url)
 
-    # primary: 既存挙動 (`_mhb_w.mp4` 優先 / それ以外は先頭)
-    preferred = [u for u in unique if "mhb_w.mp4" in u]
+    # primary: 既存挙動 (`_mhb_w.mp4` 優先) + コンパクト形 (`<cid>mhb.mp4`) も同等。
+    # `_suffix_rank` でランク 90 (= mhb) になる URL を最優先。それ以外は先頭。
+    preferred = [u for u in unique if _suffix_rank(u) >= 90]
     primary = preferred[0] if preferred else unique[0]
 
     if len(unique) == 1:

@@ -349,27 +349,44 @@ def _build_advanced_conditions(
         # else: 全トークンが構造化フィルタで冗長 → q 条件は付けない
 
     # ジャンル AND: 指定された全ジャンルを含む作品のみ。
-    # HAVING COUNT(DISTINCT genre_name) = N で「N 個全部マッチした movie_id」を出す。
+    #
+    # 以前は `Movie.id IN (SELECT movie_id ... HAVING COUNT(DISTINCT name)=N)` を
+    # 使っていたが、本番 EXPLAIN でこれが主因のレイテンシを生んでいた:
+    # planner が positive 候補 movie_id を全件 (例: 21,972 件) HashAggregate で
+    # 材料化 → movies_pkey へ Nested Loop で 21,972 回ランダムアクセスし、
+    # その各行に対して ng_words の相関 NOT EXISTS を評価してから Sort+Limit する。
+    # 22 件しか要らないのに 21,972 件分の pkey lookup + ng フィルタを舐めていた。
+    #
+    # ジャンル名ごとに 1 つの相関 EXISTS に分解する (「N 個すべて持つ」=「各 N に
+    # ついて EXISTS」)。こうすると planner は movies を primary_date DESC index 順に
+    # 走査し、各 movie に対し逆方向 index (ix_movie_genres_genre_id) で安価に
+    # EXISTS 判定でき、LIMIT 22 に達したら早期打ち切りできる (top-K)。
+    # ng_words の NOT EXISTS も「実際に上位に来た少数の movie」にしか評価されない。
+    #
+    # フィード経路 (`get_advanced_movie_ids`, LIMIT 無し) でも、IN の巨大候補集合を
+    # 材料化しない分だけ安全側 (PR #293 の IN 材料化回帰を再発させない)。
     if genres:
-        sub = (
-            select(MovieGenre.movie_id)
-            .join(Genre, Genre.id == MovieGenre.genre_id)
-            .where(Genre.name.in_(genres))
-            .group_by(MovieGenre.movie_id)
-            .having(func.count(func.distinct(Genre.name)) == len(genres))
-        )
-        conditions.append(Movie.id.in_(sub))
+        for name in genres:
+            genre_exists = (
+                select(1)
+                .select_from(MovieGenre)
+                .join(Genre, Genre.id == MovieGenre.genre_id)
+                .where(MovieGenre.movie_id == Movie.id, Genre.name == name)
+                .exists()
+            )
+            conditions.append(genre_exists)
 
-    # 女優 AND: 同じ手で。
+    # 女優 AND: 同じ手で 1 女優 = 1 相関 EXISTS に分解する。
     if actresses:
-        sub = (
-            select(MovieActress.movie_id)
-            .join(Actress, Actress.id == MovieActress.actress_id)
-            .where(Actress.name.in_(actresses))
-            .group_by(MovieActress.movie_id)
-            .having(func.count(func.distinct(Actress.name)) == len(actresses))
-        )
-        conditions.append(Movie.id.in_(sub))
+        for name in actresses:
+            actress_exists = (
+                select(1)
+                .select_from(MovieActress)
+                .join(Actress, Actress.id == MovieActress.actress_id)
+                .where(MovieActress.movie_id == Movie.id, Actress.name == name)
+                .exists()
+            )
+            conditions.append(actress_exists)
 
     # シリーズ OR: 作品は最大 1 シリーズしか持たないので AND の意味がなく OR。
     if series_list:

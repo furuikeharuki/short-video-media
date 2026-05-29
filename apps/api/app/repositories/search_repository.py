@@ -19,49 +19,6 @@ SortKey = Literal["new", "popular", "rating", "views", "bookmarks"]
 SuggestField = Literal["actress", "series", "director", "maker", "label", "genre"]
 
 
-# `total` を計算する際の上限。WHERE が広くマッチする (例: `q=巨乳` のような
-# 高頻度語) と、純粋な COUNT(*) でも全マッチ行をスキャンしないと総数が出ない。
-# UI では正確な総数は使っておらず (`next_cursor` の has_more 判定に使うだけ)、
-# ページングは offset+limit が cap を超えない範囲で動けば十分。
-# よって SELECT count(*) FROM (SELECT 1 FROM ... WHERE ... LIMIT cap+1) で
-# cap+1 件目に達した時点で打ち切る。
-#
-# cap = 1000 なら limit=20 で 50 ページまでページング可能。
-# 「もっと絞ってください」と UX 上促す前提でも十分な深さ。
-_COUNT_CAP = 1000
-
-
-async def _capped_count(
-    db: AsyncSession,
-    where_clauses,
-    *,
-    cap: int = _COUNT_CAP,
-) -> int:
-    """`SELECT count(*) FROM (SELECT 1 FROM movies WHERE ... LIMIT cap+1)` で
-    打ち切り付きカウントを返す。
-
-    フリーワード検索のように WHERE が広くマッチする場合に、
-    巨大な行数を最後まで数え上げないようにするための補助関数。
-    返り値が cap+1 の場合「ヒット件数は cap+1 件以上 (実数不明)」を意味するが、
-    呼び出し側ではこの値を `total` としてそのまま使えば has_more 判定は
-    `offset + limit < total` で正しく回る。
-    """
-    inner = select(1).select_from(Movie)
-    # where_clauses はリスト / 単一式 / and_() などのいずれもあり得る。
-    # SQLAlchemy 側は where() に複数引数を渡せば AND になるので、
-    # 受け取り側で正規化しておく。
-    if isinstance(where_clauses, (list, tuple)):
-        if where_clauses:
-            inner = inner.where(*where_clauses)
-    else:
-        inner = inner.where(where_clauses)
-    inner = inner.limit(cap + 1).subquery()
-
-    stmt = select(func.count()).select_from(inner)
-    total = (await db.execute(stmt)).scalar_one()
-    return int(total)
-
-
 # 半角スペース / 全角スペース (U+3000) / タブ / 改行など、Unicode 的な空白すべてで分割する。
 # 連続空白は \s+ で 1 つにまとまる。
 _KEYWORD_SPLIT_RE = re.compile(r"[\s　]+")
@@ -94,7 +51,6 @@ def _build_token_where(token: str):
     に置き換えていたが、フィード経路 (`get_advanced_movie_ids` → LIMIT 無しで
     全 ID を取得) と組み合わさるとプランナが巨大な IN セットを材料化して
     本番が極端に遅くなる回帰を出したため、PR #291 の EXISTS 形に戻している。
-    高頻度 2 文字キーワードの遅さは `_capped_count` (cap 1000) 側で吸収する。
     """
     pat = f"%{token}%"
 
@@ -162,23 +118,20 @@ async def search_movies(
     director_name / maker_name / label_name / series.name の部分一致検索。
 
     (items, total) を返す。limit=None なら全件取得する。
+
+    `total` はクライアント (`/api/v1/search` の next_cursor 判定) にしか使われない。
+    そのため別クエリで COUNT を取る代わりに「limit+1 件取りに行って、+1 件まで
+    届いたら has_more=true」というよく知られた省力化を使う。これで広域マッチする
+    キーワードでも 2 本目のスキャンが不要になり、レイテンシをおおむね半減できる。
+    `total` の体裁は `offset + len(items)` (= 末尾なら確定数、続きがあれば
+    "今までに見えた件数 + 1" の正の値) で返す。next_cursor は items 件数で判定。
     """
     where = _build_keyword_where(query)
 
-    # `total` は frontend の has_more 判定 (next_cursor 計算) にしか使われていない。
-    # `q=巨乳` のような高頻度語では純粋な COUNT(*) でも全マッチ行をスキャンして
-    # 1〜2 秒かかるため、cap+1 件で打ち切る (cap 件以下なら正確、超えていれば cap+1 を返す)。
-    total = await _capped_count(db, where)
-
     # ORDER BY を Movie.title (索引無し) から Movie.primary_date DESC (索引あり) に変更。
-    # title には B-tree index が無いため、`q=巨乳` のような数千件マッチするキーワードでは
-    # 全マッチ行を読み込んでメモリ上で sort してから LIMIT 20 する形になり、API 全体の
-    # レイテンシが 2 秒前後になる主因だった。
     # primary_date は単独 index + 複合 index (ix_movies_visible_primary_date) を持つので、
     # planner は「primary_date index を新しい順に走査し、WHERE にマッチした行を 20 件
     # 集まるまで読む」プランを選べる (top-K 早期打ち切り)。
-    # ソート順としても新しい作品が先頭に来る方が ショート動画 UI の体験として自然なため、
-    # advanced search の sort=new と挙動が揃う形になる。
     stmt = (
         select(Movie)
         .where(where)
@@ -186,11 +139,17 @@ async def search_movies(
     )
     if offset:
         stmt = stmt.offset(offset)
+    # limit=None の場合は全件取得 (旧来の挙動互換)。
     if limit is not None:
-        stmt = stmt.limit(limit)
+        stmt = stmt.limit(limit + 1)
 
     result = await db.execute(stmt)
-    return list(result.scalars().unique().all()), int(total)
+    rows = list(result.scalars().unique().all())
+    has_more = limit is not None and len(rows) > limit
+    if has_more:
+        rows = rows[:limit]
+    total = offset + len(rows) + (1 if has_more else 0)
+    return rows, int(total)
 
 
 async def search_movies_by_exact_field(
@@ -226,21 +185,23 @@ async def search_movies_by_exact_field(
     if not conditions:
         return [], 0
 
-    # 完全一致でもメーカー大手などは数千件ヒットするので、フリーワード検索同様
-    # cap 付きカウントで早期打ち切りする。
-    total = await _capped_count(db, conditions)
-
-    # items 取得 (delivery_date 降順、同日内は id で安定ソート)
+    # `total` は next_cursor の has_more 判定にしか使わないため、別 COUNT クエリを
+    # 投げずに limit+1 件取って has_more を導出する (search_movies と同じ手)。
     stmt = select(Movie).where(*conditions).order_by(
         Movie.delivery_date.desc().nullslast(), Movie.id
     )
     if offset:
         stmt = stmt.offset(offset)
     if limit is not None:
-        stmt = stmt.limit(limit)
+        stmt = stmt.limit(limit + 1)
 
     result = await db.execute(stmt)
-    return list(result.scalars().unique().all()), int(total)
+    rows = list(result.scalars().unique().all())
+    has_more = limit is not None and len(rows) > limit
+    if has_more:
+        rows = rows[:limit]
+    total = offset + len(rows) + (1 if has_more else 0)
+    return rows, int(total)
 
 
 # ----------------------------------------------------------------------
@@ -476,13 +437,12 @@ async def advanced_search_movies(
         ng_words=ng_words or [],
     )
 
-    # total は items 取得とは別クエリで先に取る (next_cursor 判定に使う)。
-    # 全 WHERE 条件は Movie へのスカラー比較か Movie.id.in_(subquery) のみで
-    # 行数を膨張させないので COUNT(*) で OK。さらに `q=巨乳` のような
-    # 広くマッチするキーワードでも cap+1 件で打ち切ることでレイテンシを抑える。
-    total = await _capped_count(db, conditions)
-
-    # items: ソート種別に応じてサブクエリを組み立てる
+    # items: ソート種別に応じてサブクエリを組み立てる。
+    # `total` は client 側で next_cursor 判定 (has_more) にしか使わないので
+    # 別 COUNT クエリを撤去し、items を limit+1 件取って has_more を導出する。
+    # 高頻度キーワード × ng_words など、WHERE が広くマッチする条件で
+    # COUNT(*) 用に 1001 行スキャンしていた分のレイテンシを丸ごと削減できる
+    # (ORDER BY top-K の items クエリと統合)。
     stmt = select(Movie).where(*conditions)
 
     if sort == "new":
@@ -543,10 +503,15 @@ async def advanced_search_movies(
     if offset:
         stmt = stmt.offset(offset)
     if limit is not None:
-        stmt = stmt.limit(limit)
+        stmt = stmt.limit(limit + 1)
 
     result = await db.execute(stmt)
-    return list(result.scalars().unique().all()), int(total)
+    rows = list(result.scalars().unique().all())
+    has_more = limit is not None and len(rows) > limit
+    if has_more:
+        rows = rows[:limit]
+    total = offset + len(rows) + (1 if has_more else 0)
+    return rows, int(total)
 
 
 async def get_advanced_movie_ids(

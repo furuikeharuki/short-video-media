@@ -247,24 +247,15 @@ def test_keyword_where_uses_or_with_correlated_exists() -> None:
     assert "movies.description ILIKE" in sql
 
 
-def test_capped_count_uses_limit_inside_subquery() -> None:
-    """`_capped_count` が SELECT count(*) FROM (SELECT 1 ... LIMIT N+1) sub の
-    形になっていることを保証する。高頻度語で全行 COUNT(*) を踏まないための回帰防止。
+def test_repository_no_longer_uses_capped_count_helper() -> None:
+    """has_more 判定は items の limit+1 から導出するので、別 COUNT クエリは
+    使わない。`_capped_count` / `_COUNT_CAP` が再復活して 2 本目のスキャンが
+    走るような回帰を防ぐ。
     """
-    from sqlalchemy import select as sa_select
+    import app.repositories.search_repository as repo
 
-    from app.db.models.movie import Movie
-    from app.repositories.search_repository import _COUNT_CAP, _build_keyword_where
-
-    where = _build_keyword_where("alpha")
-    # _capped_count と同じ SQL を組み立てて検証 (実 DB 不要)
-    inner = sa_select(1).select_from(Movie).where(where).limit(_COUNT_CAP + 1).subquery()
-    from sqlalchemy import func as sa_func
-
-    stmt = sa_select(sa_func.count()).select_from(inner)
-    sql = _compile(stmt)
-    assert "count(*)" in sql.lower()
-    assert f"LIMIT {_COUNT_CAP + 1}" in sql or f"LIMIT {_COUNT_CAP + 1}\n" in sql
+    assert not hasattr(repo, "_capped_count")
+    assert not hasattr(repo, "_COUNT_CAP")
 
 
 def test_advanced_conditions_uses_in_subquery_not_join_for_series() -> None:

@@ -135,6 +135,25 @@ export default function BottomNav() {
   // pushState によって pathname が /movies/<slug> に変わっても、BottomNav は
   // フィード視聴中と同じ振る舞い (表示 + シークバー + ショートアクティブ) を維持する。
   const [isFeedModalOpen, setIsFeedModalOpen] = useState(false);
+  // ホーム "/" は app/page.tsx で `revalidate = 30` の ISR + loading.tsx で
+  // 配信されており、prerender HTML の中で usePathname() が "/" を返さない
+  // ケースがあった (Next.js 15 の streaming/loading boundary との組合せで、
+  // 静的 HTML 内の Client Component から見ると pathname が空文字相当になる)。
+  // その結果、サーバ HTML では全ナビ項目が <a class="bottom-nav-item"> (非 active) で
+  // レンダされる一方、ハイドレーション直後のクライアントでは pathname="/" になって
+  // ホーム項目が <span class="bottom-nav-item--active" aria-current="page"> に
+  // 切り替わる。タグ種別 (a → span) と class / aria が全て変わるため React 19 が
+  // #418 (text content does not match) を吐く ("/" → / の text node 差分も生じる)。
+  //
+  // 対策: 初回レンダーは「active 状態を確定させない」(全項目を <Link> として描画) に
+  // 揃え、マウント完了後に hasMounted を true へ立ててから active 表示にする。
+  // 視覚側は data-nav-freeze-active-href の CSS スナップショット (前ページ滞在中に
+  // sessionStorage へ書き出した active href を first paint で再現する) が引き続き
+  // 担うため、フルページ遷移直後の "active が一瞬消える" 体感は出ない。
+  const [hasMounted, setHasMounted] = useState(false);
+  useEffect(() => {
+    setHasMounted(true);
+  }, []);
 
   useEffect(() => {
     // 同値の setState は React がスケジューラ段階で bail-out するが、
@@ -150,7 +169,14 @@ export default function BottomNav() {
     };
   }, []);
 
-  const isShortPage = pathname === "/feed" || pathname.startsWith("/search/feed") || isFeedModalOpen;
+  // hasMounted 前は pathname が prerender 由来でクライアント側の現在地と
+  // 食い違うことがあるため、ハイドレーション中は "ショートページ判定" を必ず
+  // false で揃える。クライアントマウント後に正しい値へ更新する (= 視覚的には
+  // active state や seekbar の解禁が 1 フレーム遅れるだけ。元々 seekbar は
+  // video-progress 到達まで非表示なので体感差は無い)。
+  const isShortPage =
+    hasMounted &&
+    (pathname === "/feed" || pathname.startsWith("/search/feed") || isFeedModalOpen);
   // フルページ遷移を起こす瞬間に sessionStorage へ書き出す「離脱直前のアクティブ href」。
   // 着地ページ側で BottomNavFreezeBootstrap がこれを読んで <html> に
   // data-nav-freeze-active-href として乗せ、first paint を「直前の見た目」に固定する。
@@ -303,10 +329,17 @@ export default function BottomNav() {
 
 
       {NAV_ITEMS.map((item) => {
+        // hasMounted 前 (SSR と初回ハイドレーション) は active を常に false に
+        // して、サーバ HTML / クライアント初回レンダーで必ず <a> (Link) を返す。
+        // ハイドレーションが終わってから setHasMounted(true) で再レンダーされ、
+        // 実際の pathname に応じた active 項目だけが <span aria-current="page"> に
+        // 切り替わる。これにより tag (a→span) / class / aria-current が一気に
+        // 差し替わる #418 ハイドレーションミスマッチを起こさない。
         const isActive =
-          (item.href === "/" ? pathname === "/" : pathname.startsWith(item.href)) ||
-          item.extraActive.some((p) => pathname.startsWith(p)) ||
-          (item.href === "/feed" && pathname === "/feed");
+          hasMounted &&
+          ((item.href === "/" ? pathname === "/" : pathname.startsWith(item.href)) ||
+            item.extraActive.some((p) => pathname.startsWith(p)) ||
+            (item.href === "/feed" && pathname === "/feed"));
 
         // 「active / inactive で DOM 構造が異なる」と、freeze CSS で見た目だけ
         // 切り替えることが出来ない。両方のアイコンを常に DOM に置き、CSS の

@@ -118,6 +118,12 @@ export default function FeedItem({ item, isActive, isAdjacent = false, isFirst, 
   // この slug については canPromote=false に倒し、JSX <video> を強制マウントする。
   // 解除は slug 変更 / 非 active 化のときに行う。
   const [forceFallbackSlug, setForceFallbackSlug] = useState<string | null>(null);
+  // tryClaim から ref ベースで参照するための forceFallbackSlug ミラー。
+  // force-fallback が engage した直後 (= 同じ task tick) に subscribe コールバック
+  // 経由で tryClaim が呼ばれるケースで、最新値を同期的に読み取れるようにする。
+  // 後方の useEffect でも flush するが、setForceFallbackSlug の場と同じ場所で
+  // 同期的に更新するのが late-rebind 抑止の鍵。
+  const forceFallbackSlugRef = useRef<string | null>(null);
   // force-fallback が発火した回数。FeedItemVideo の key に混ぜることで
   // JSX <video> を確実に unmount→remount し、src 再 attach / load() / play() を
   // 強制する。canPromote が true→false に倒れただけでは React は同じ
@@ -166,6 +172,23 @@ export default function FeedItem({ item, isActive, isAdjacent = false, isFirst, 
           // eslint-disable-next-line no-console
           console.debug(
             `vt byte-prefetch promote skipped slug=${item.slug} reason=already-playing`,
+          );
+        }
+        return false;
+      }
+      // force-fallback engage 直後 (= 数 ms〜数十 ms 後) に pool entry が canplay に
+      // 到達するケースでは、ここで late-rebind すると JSX <video> 経路で走り始めた
+      // play() promise が videoRef 差し替えで stale 化し
+      // `active autoplay abort reason=stale-active trigger=force-fallback` の往復に
+      // なる (= 観測ログの主因)。force-fallback 経路は既に「救済再生」を選択した
+      // 状態なので、ここで pool element に乗り換える価値は無い (どちらも canplay
+      // 到達後にすぐ再生開始する)。fallback session 中は late-rebind を抑止し、
+      // 次の slug session でリセットされてから claim 経路に戻す。
+      if (forceFallbackSlugRef.current === item.slug) {
+        if (isVideoTimingEnabled()) {
+          // eslint-disable-next-line no-console
+          console.debug(
+            `vt byte-prefetch promote skipped slug=${item.slug} reason=force-fallback-active`,
           );
         }
         return false;
@@ -392,6 +415,11 @@ export default function FeedItem({ item, isActive, isAdjacent = false, isFirst, 
         nextEpoch = prev + 1;
         return nextEpoch;
       });
+      // ref も同期的に更新して、同 task tick 内で fire される subscribe →
+      // tryClaim 経路から最新値を読めるようにする。React の state 反映 (passive
+      // useEffect での ref sync) を待つと、grace expiry 直後に到達する canplay の
+      // 取り込みが間に合わず late-rebind → stale-active になっていた。
+      forceFallbackSlugRef.current = item.slug;
       setForceFallbackSlug((prev) => (prev === item.slug ? prev : item.slug));
       // remount に備えて videoReady / spinner / settled をリセットしておく。
       // 新しい <video> は loadstart からやり直すので、旧要素由来の ready 状態を
@@ -678,10 +706,12 @@ export default function FeedItem({ item, isActive, isAdjacent = false, isFirst, 
   // 結果として canplay 済みの promoted <video> が rs=0 にリセットされ、次の src 同期
   // useEffect で load() が再度走り、active autoplay promote force-load → loadeddata
   // +3〜5s / canplay +5〜12s という大きな遅延が発生する。
-  const forceFallbackSlugRef = useRef<string | null>(null);
   const fallbackEpochRef = useRef(0);
   const itemSlugRef = useRef(item.slug);
   const isActiveRef = useRef(isActive);
+  // forceFallbackSlugRef は上の方で宣言済み (tryClaim から早期に参照する必要があるため)。
+  // ここではコミット後の整合のためにもう一度同期する (force-fallback listener 内で
+  // 同期更新しているので通常はすでに最新値になっている)。
   useEffect(() => {
     forceFallbackSlugRef.current = forceFallbackSlug;
   }, [forceFallbackSlug]);

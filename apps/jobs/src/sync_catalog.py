@@ -1561,13 +1561,76 @@ async def _process_items(
                     )
         # ここで session.begin() の __aexit__ で commit が走る
     except Exception as outer:  # noqa: BLE001
-        # トランザクション末尾の commit そのものが失敗 (DB 切断等)
+        # 想定される失敗:
+        #   - DB 切断 / lock 等で commit そのものが失敗
+        #   - 何らかの理由で session が autobegin 状態のまま `session.begin()` を
+        #     呼んでしまった ("A transaction is already begun on this Session.")
+        # いずれにせよ rollback + キャッシュの ORM オブジェクトを完全に捨てる必要がある。
+        # rollback すると session.identity_map 上の persistent オブジェクトはすべて
+        # expire 状態になるため、後続バッチで `cached_genre.id` 等の属性を読むだけで
+        # sync 経路の SELECT を発火させ greenlet_spawn エラーを引き起こす。
+        # → キャッシュ辞書から expire 済みインスタンスを取り除き、再度 warm し直す。
         print(f"    [ERROR] batch commit failed floor={floor}: {outer}")
         counters.errors += len(items)
         try:
             await session.rollback()
         except Exception:  # noqa: BLE001
             pass
+        await _rewarm_caches_after_outer_rollback(
+            session,
+            genre_cache=genre_cache,
+            actress_cache=actress_cache,
+            series_cache=series_cache,
+            link_cache=link_cache,
+        )
+
+
+async def _rewarm_caches_after_outer_rollback(
+    session: AsyncSession,
+    *,
+    genre_cache: GenreCache | None,
+    actress_cache: ActressCache | None,
+    series_cache: SeriesCache | None,
+    link_cache: MovieLinkCache | None,
+) -> None:
+    """バッチ全体のロールバック後に、キャッシュをリセットして DB から再 warm する。
+
+    session.rollback() は identity_map 上のすべての ORM オブジェクトを expire する。
+    expire 済みオブジェクトはどの属性 (`.id` 含む) に触っても sync 経路の SELECT を
+    発火させ、async コンテキスト外からの IO となって greenlet_spawn エラーになる。
+    キャッシュ辞書から ORM 参照を完全に捨て、まっさらな状態から SELECT し直して
+    後続バッチが安全に動くようにする。
+    """
+    if genre_cache is not None:
+        genre_cache.by_name = {}
+        genre_cache.warmed = False
+    if actress_cache is not None:
+        actress_cache.by_content_id = {}
+        actress_cache.by_name = {}
+        actress_cache.by_slug = {}
+        actress_cache.warmed = False
+    if series_cache is not None:
+        series_cache.by_content_id = {}
+        series_cache.by_slug = {}
+        series_cache.warmed = False
+    if link_cache is not None:
+        # MovieLinkCache は PK (str/int) のみを保持し ORM オブジェクトを保持しないため
+        # expire の影響は受けないが、トランザクションが失敗したバッチで追加された
+        # link entry も整合性のために捨てる。
+        link_cache.genres = {}
+        link_cache.actresses = {}
+    try:
+        async with session.begin():
+            if genre_cache is not None:
+                await genre_cache.warm(session)
+            if actress_cache is not None:
+                await actress_cache.warm(session)
+            if series_cache is not None:
+                await series_cache.warm(session)
+    except Exception as e:  # noqa: BLE001
+        # 再 warm 失敗時は ORM オブジェクトが入っていない空辞書のままにしておく。
+        # 次バッチで get_or_create が DB lookup → INSERT に乗るのでジョブ自体は継続できる。
+        print(f"    [WARN] cache re-warm failed: {e}")
 
 
 def _invalidate_caches_after_rollback(
@@ -1766,10 +1829,20 @@ async def main(
             actress_cache = ActressCache()
             series_cache = SeriesCache()
             link_cache = MovieLinkCache()
+            # SQLAlchemy 2.0 では `session.execute(SELECT)` が autobegin する。
+            # 明示的に `async with session.begin():` で囲むことで、
+            #   - warm 後にトランザクションが clean commit される
+            #   - 後続の `_process_items` 内 `async with session.begin():` が
+            #     "A transaction is already begun on this Session." で失敗しない
+            # ようにする。autobegin'ed transaction が開きっぱなしのまま `begin()` を
+            # 呼ぶと InvalidRequestError → 後段で rollback → キャッシュ内 ORM
+            # オブジェクトが expire され、次バッチで属性アクセスが sync IO を
+            # 引き起こし greenlet_spawn エラーになる。
             if not dry_run:
-                await genre_cache.warm(session)
-                await actress_cache.warm(session)
-                await series_cache.warm(session)
+                async with session.begin():
+                    await genre_cache.warm(session)
+                    await actress_cache.warm(session)
+                    await series_cache.warm(session)
                 print(
                     f"[sync_catalog] warmed caches: genres={len(genre_cache.by_name)} "
                     f"actresses={len(actress_cache.by_name)} "
@@ -1782,7 +1855,9 @@ async def main(
                 if not dry_run:
                     db_actress_names = actress_cache.names()
                 else:
-                    db_actress_names = await _load_db_actress_names(session)
+                    # dry_run でも autobegin を残さないようトランザクションを閉じる
+                    async with session.begin():
+                        db_actress_names = await _load_db_actress_names(session)
                 print(f"[sync_catalog] loaded {len(db_actress_names)} actress names for goods filter")
 
             for site, service, floor, prefix in targets:

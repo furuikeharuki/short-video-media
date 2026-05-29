@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import asyncio
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
@@ -78,6 +78,7 @@ async def _insert_event(
     feed_session_id: str | None = None,
     progress_milestone: int | None = None,
     progress_ratio: float | None = None,
+    created_at: datetime | None = None,
 ) -> None:
     await s.execute(
         text(
@@ -92,7 +93,11 @@ async def _insert_event(
             "fsid": feed_session_id,
             "ms": progress_milestone,
             "pr": progress_ratio,
-            "created_at": datetime.now(timezone.utc).replace(tzinfo=None),
+            "created_at": (
+                created_at
+                if created_at is not None
+                else datetime.now(timezone.utc).replace(tzinfo=None)
+            ),
         },
     )
 
@@ -430,6 +435,214 @@ def test_watch_count_ranking_skips_below_50_threshold() -> None:
                     s, limit=10
                 )
                 assert ranked == [("slug-b", 1)]
+        finally:
+            await engine.dispose()
+
+    asyncio.run(run())
+
+
+# ─────────────────────────────────────────────
+# 期間付き watch_count ランキング (daily / weekly / monthly)
+# ─────────────────────────────────────────────
+
+
+def _naive_utc_now() -> datetime:
+    return datetime.now(timezone.utc).replace(tzinfo=None)
+
+
+def test_period_window_excludes_old_events_daily() -> None:
+    """daily ランキングは 24 時間より古い watch event を除外する。"""
+
+    async def run() -> None:
+        engine, Session = await _make_engine_and_session()
+        try:
+            now = _naive_utc_now()
+            async with Session() as s:
+                await _insert_movie(s, "slug-fresh")
+                await _insert_movie(s, "slug-old")
+                # daily 内 (12h 前)
+                await _insert_event(
+                    s,
+                    slug="slug-fresh",
+                    event_name="play_progress",
+                    feed_session_id="f1",
+                    progress_milestone=50,
+                    created_at=now - timedelta(hours=12),
+                )
+                # daily 外 (48h 前) → 除外される
+                await _insert_event(
+                    s,
+                    slug="slug-old",
+                    event_name="play_progress",
+                    feed_session_id="o1",
+                    progress_milestone=50,
+                    created_at=now - timedelta(hours=48),
+                )
+                await s.commit()
+                ranked = await iev_repo.aggregate_watch_count_ranking(
+                    s, period="daily", limit=10
+                )
+                assert ranked == [("slug-fresh", 1)]
+        finally:
+            await engine.dispose()
+
+    asyncio.run(run())
+
+
+def test_period_window_includes_weekly_but_excludes_monthly_boundary() -> None:
+    """weekly は 7 日以内、monthly は 30 日以内のみを集計対象とする。"""
+
+    async def run() -> None:
+        engine, Session = await _make_engine_and_session()
+        try:
+            now = _naive_utc_now()
+            async with Session() as s:
+                await _insert_movie(s, "slug-day1")
+                await _insert_movie(s, "slug-day10")
+                await _insert_movie(s, "slug-day40")
+                # 1 日前 (weekly / monthly どちらにも入る)
+                await _insert_event(
+                    s,
+                    slug="slug-day1",
+                    event_name="play_progress",
+                    feed_session_id="d1",
+                    progress_milestone=50,
+                    created_at=now - timedelta(days=1),
+                )
+                # 10 日前 (weekly 圏外 / monthly 圏内)
+                await _insert_event(
+                    s,
+                    slug="slug-day10",
+                    event_name="play_progress",
+                    feed_session_id="d10",
+                    progress_milestone=50,
+                    created_at=now - timedelta(days=10),
+                )
+                # 40 日前 (どちらも圏外)
+                await _insert_event(
+                    s,
+                    slug="slug-day40",
+                    event_name="play_progress",
+                    feed_session_id="d40",
+                    progress_milestone=50,
+                    created_at=now - timedelta(days=40),
+                )
+                await s.commit()
+
+                weekly = await iev_repo.aggregate_watch_count_ranking(
+                    s, period="weekly", limit=10
+                )
+                assert [slug for slug, _ in weekly] == ["slug-day1"]
+
+                monthly = await iev_repo.aggregate_watch_count_ranking(
+                    s, period="monthly", limit=10
+                )
+                # monthly は day1 と day10 を含む。順番は last_watch 降順なので
+                # 直近 (day1) → やや古め (day10)。
+                assert [slug for slug, _ in monthly] == ["slug-day1", "slug-day10"]
+        finally:
+            await engine.dispose()
+
+    asyncio.run(run())
+
+
+def test_period_window_dedupes_within_period() -> None:
+    """期間ウィンドウ内でも (slug, feed_session_id) によるデデュープが効くこと。"""
+
+    async def run() -> None:
+        engine, Session = await _make_engine_and_session()
+        try:
+            now = _naive_utc_now()
+            async with Session() as s:
+                await _insert_movie(s, "slug-a")
+                # 同一 feed_session が daily 期間内に複数回 watch event を吐く
+                for ms in (50, 75):
+                    await _insert_event(
+                        s,
+                        slug="slug-a",
+                        event_name="play_progress",
+                        feed_session_id="dup",
+                        progress_milestone=ms,
+                        created_at=now - timedelta(hours=1),
+                    )
+                await _insert_event(
+                    s,
+                    slug="slug-a",
+                    event_name="video_complete",
+                    feed_session_id="dup",
+                    created_at=now - timedelta(minutes=30),
+                )
+                # 同期間内の別セッション
+                await _insert_event(
+                    s,
+                    slug="slug-a",
+                    event_name="play_progress",
+                    feed_session_id="other",
+                    progress_milestone=50,
+                    created_at=now - timedelta(hours=2),
+                )
+                await s.commit()
+                ranked = await iev_repo.aggregate_watch_count_ranking(
+                    s, period="daily", limit=10
+                )
+                assert ranked == [("slug-a", 2)]
+        finally:
+            await engine.dispose()
+
+    asyncio.run(run())
+
+
+def test_period_window_skips_below_50_threshold() -> None:
+    """期間ランキングでも 25% 止まりは watch にカウントされない。"""
+
+    async def run() -> None:
+        engine, Session = await _make_engine_and_session()
+        try:
+            now = _naive_utc_now()
+            async with Session() as s:
+                await _insert_movie(s, "slug-25")
+                await _insert_movie(s, "slug-50")
+                await _insert_event(
+                    s,
+                    slug="slug-25",
+                    event_name="play_progress",
+                    feed_session_id="a",
+                    progress_milestone=25,
+                    created_at=now - timedelta(hours=1),
+                )
+                await _insert_event(
+                    s,
+                    slug="slug-50",
+                    event_name="play_progress",
+                    feed_session_id="b",
+                    progress_milestone=50,
+                    created_at=now - timedelta(hours=1),
+                )
+                await s.commit()
+                ranked = await iev_repo.aggregate_watch_count_ranking(
+                    s, period="weekly", limit=10
+                )
+                assert ranked == [("slug-50", 1)]
+        finally:
+            await engine.dispose()
+
+    asyncio.run(run())
+
+
+def test_period_invalid_raises() -> None:
+    """未知の period は ValueError。"""
+
+    async def run() -> None:
+        engine, Session = await _make_engine_and_session()
+        try:
+            async with Session() as s:
+                try:
+                    await iev_repo.aggregate_watch_count_ranking(
+                        s, period="yearly", limit=10
+                    )
+                except ValueError:
+                    return
+                raise AssertionError("expected ValueError for unknown period")
         finally:
             await engine.dispose()
 

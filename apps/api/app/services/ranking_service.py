@@ -17,6 +17,7 @@ from app.repositories.event_repository import (
 )
 from app.repositories.goods_repository import get_popular_goods
 from app.repositories.interaction_event_repository import (
+    aggregate_watch_count_ranking,
     aggregate_watch_count_ranking_all_time,
 )
 from app.repositories.movie_repository import (
@@ -47,8 +48,24 @@ async def get_ranking(
     limit: int = 20,
     offset: int = 0,
 ) -> list[MovieCard]:
-    """期間ランキング。offset/limit は SQL レベルで適用されるため、
-    データ量がどれだけ増えても 1 ページあたりの計算量は limit 件に収まる。
+    """期間ランキング (daily / weekly / monthly)。
+
+    主指標 (一次キー) は **watch_count** (50% 以上再生に到達したユニーク
+    feed_session 数を期間内で集計したもの)。`get_popular_all_time` と同じ
+    canonical 定義 (`aggregate_watch_count_ranking`) を、期間ウィンドウ
+    付きで使う。
+
+    watch_count が薄い間 (interaction_events がまだ十分に貯まっていない
+    初期段階) の挙動を保つため、不足分は次の順でフォールバックする:
+
+      1. watch_count ランキング (期間内, daily=24h / weekly=7d / monthly=30d)
+      2. 既存の raw view イベントランキング (同じ期間ウィンドウ)
+      3. 期間ごとに窓幅を変えた汎用フォールバック (`_FALLBACK_WINDOW_DAYS`)
+
+    並び順は watch_count 由来 → view 由来 → 汎用フォールバック由来、と
+    水平方向に上から積まれる。重複は `seen_ids` で抑止する。
+    offset/limit は SQL レベルで適用されるため、データ量がどれだけ増えても
+    1 ページあたりの計算量は limit 件に収まる。
     """
     if period not in VALID_PERIODS:
         raise ValueError(f"period must be one of {VALID_PERIODS}")
@@ -56,7 +73,8 @@ async def get_ranking(
     cards: list[MovieCard] = []
     seen_ids: set[str] = set()
 
-    ranked = await aggregate_view_ranking(
+    # 1) watch_count (期間内) を主指標として使う
+    ranked = await aggregate_watch_count_ranking(
         db, period=period, limit=limit, offset=offset
     )
     slugs = [s for s, _ in ranked if s]
@@ -71,21 +89,38 @@ async def get_ranking(
     if len(cards) >= limit:
         return cards[:limit]
 
-    # 期間内 view イベントだけでは limit に満たないときは、期間ごとに
-    # 異なる窓幅 (_FALLBACK_WINDOW_DAYS) のフォールバックで穴埋めする。
-    # こうすると view イベントが少なくて daily/weekly/monthly の上位が
-    # 同じになるケースでも、フォールバック側の窓 (7/30/90日) の差で
-    # 自然に並びが分かれる。
+    # 2) watch_count が薄い間は、既存の raw view イベントランキング (同じ
+    #    期間ウィンドウ) で穴埋め。これにより interaction_events が貯まる
+    #    までの移行期間も上位がほぼ空にならない。
     #
-    # フォールバック側に渡す offset:
-    #   - イベント由来で 1 件でも取れている場合は 0 から取り直し、
-    #     重複は seen_ids で除外する (ページ送り中の二重表示を防ぐ)。
-    #   - イベント由来がゼロのときは元の offset を渡してフォールバック
-    #     単独のページ送りに切り替わる (従来挙動と同じ)。
+    #    フォールバック側に渡す offset:
+    #     - watch_count 由来で 1 件でも取れている場合は 0 から取り直して
+    #       seen_ids で重複除去 (ページ送り中の二重表示を防ぐ)。
+    #     - watch_count 由来がゼロのときは元の offset を渡して raw view
+    #       単独のページ送りに切り替わる (従来挙動と同じ)。
+    need = limit - len(cards)
+    view_ranked = await aggregate_view_ranking(
+        db, period=period, limit=need * 2, offset=0 if cards else offset
+    )
+    view_slugs = [s for s, _ in view_ranked if s]
+    if view_slugs:
+        view_movies = await get_movies_by_slugs_ordered(db, view_slugs)
+        for m in view_movies:
+            if len(cards) >= limit:
+                break
+            if m.id in seen_ids:
+                continue
+            cards.append(_to_card(m))
+            seen_ids.add(m.id)
+
+    if len(cards) >= limit:
+        return cards[:limit]
+
+    # 3) 期間ごとに異なる窓幅 (_FALLBACK_WINDOW_DAYS) の汎用フォールバック。
+    #    watch_count / view ともに足りないときの最終手段。
     need = limit - len(cards)
     fallback = await get_fallback_ranking_movies(
         db,
-        # 重複除去で枯れるリスクを下げるため少し多めに取得。
         limit=need * 2,
         window_days=_FALLBACK_WINDOW_DAYS[period],
         offset=0 if cards else offset,

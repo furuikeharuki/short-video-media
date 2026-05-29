@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from sqlalchemy import case, desc, func, or_, select
@@ -9,6 +10,29 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.models.interaction_event import InteractionEvent
 from app.db.models.movie import Movie
+
+
+# 期間ランキング用のウィンドウ幅。event_repository._since と揃え、
+# raw view 由来のランキングと watch_count 由来のランキングが同じ「期間」
+# の定義 (UTC, naive) で動作するようにする。
+_PERIOD_DAYS: dict[str, int] = {
+    "daily": 1,
+    "weekly": 7,
+    "monthly": 30,
+}
+
+
+def _since_for_period(period: str) -> datetime:
+    """daily=24h, weekly=7d, monthly=30d 前の naive UTC 閾値。
+
+    interaction_events.created_at は (events と同様) TIMESTAMP WITHOUT TIME ZONE
+    なので、比較オペランドも naive UTC で揃える必要がある。aware を渡すと
+    asyncpg が「offset-naive と offset-aware の差を取れない」と例外を出す。
+    """
+    if period not in _PERIOD_DAYS:
+        raise ValueError(f"unknown period: {period}")
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    return now - timedelta(days=_PERIOD_DAYS[period])
 
 
 # クライアントから受け付ける event_name の語彙。schemas 側の Pydantic で
@@ -168,6 +192,52 @@ async def aggregate_watch_count_ranking_all_time(
         )
         .group_by(InteractionEvent.slug)
         .order_by(desc("c"), InteractionEvent.slug)
+        .offset(offset)
+        .limit(limit)
+    )
+    result = await db.execute(stmt)
+    return [(row[0], int(row[1])) for row in result.all()]
+
+
+async def aggregate_watch_count_ranking(
+    db: AsyncSession,
+    *,
+    period: str,
+    limit: int = 20,
+    offset: int = 0,
+) -> list[tuple[str, int]]:
+    """期間 (daily=24h / weekly=7d / monthly=30d) 内の watch_count を slug 単位で
+    集計し、(slug, count) を降順で返す。
+
+    canonical 定義は全期間版と同じ:
+      - event_name='video_complete' か、
+        event_name='play_progress' で 50% 以上に到達した行を watch event とみなし、
+      - (slug, feed_session_id) で COUNT(DISTINCT) によりデデュープ。
+      - feed_session_id が NULL の行は interaction_event.id でデデュープ。
+
+    違いは「期間ウィンドウを `created_at >= now - N日` で絞る」だけ。
+
+    Tie-break:
+      - 一次キー: watch_count desc
+      - 二次キー: 期間内で最後に起きた watch event の時刻 (last_watch desc)
+        全期間 raw view 由来ランキング (`aggregate_view_ranking`) と方針を揃え、
+        count tie のとき daily/weekly/monthly が完全に同じ並びになるのを避ける。
+      - 三次キー: slug (ページネーション安定化)
+    """
+    since = _since_for_period(period)
+    c = _distinct_watch_count_expr().label("c")
+    last_watch = func.max(InteractionEvent.created_at).label("last_watch")
+    stmt = (
+        select(InteractionEvent.slug, c, last_watch)
+        .join(Movie, Movie.slug == InteractionEvent.slug)
+        .where(
+            InteractionEvent.slug.is_not(None),
+            _watch_event_filter(),
+            InteractionEvent.created_at >= since,
+            Movie.is_visible.is_(True),
+        )
+        .group_by(InteractionEvent.slug)
+        .order_by(desc("c"), desc("last_watch"), InteractionEvent.slug)
         .offset(offset)
         .limit(limit)
     )

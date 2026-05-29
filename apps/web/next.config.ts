@@ -47,6 +47,9 @@ const cspReportOnly = [
     "https://a.magsrv.com https://a.pemsrv.com",
     "https://*.exoclick.com https://*.exosrv.com",
     "https://*.dmm.co.jp https://*.dmm.com",
+    // 本番 API ホスト (NEXT_PUBLIC_API_BASE_URL)。現在 CSP は Report-Only なので
+    // 違反でもブロックされないが、enforcing 化に備えて明示的に許可する。
+    "https://av-shorts-api.com",
   ].join(" "),
   [
     "frame-src 'self'",

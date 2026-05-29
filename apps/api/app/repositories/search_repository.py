@@ -4,7 +4,7 @@ import re
 from datetime import date
 from typing import Literal
 
-from sqlalchemy import and_, func, or_, select
+from sqlalchemy import and_, func, or_, select, union_all
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.models.actress import Actress
@@ -17,6 +17,49 @@ from app.db.models.user import Bookmark
 
 SortKey = Literal["new", "popular", "rating", "views", "bookmarks"]
 SuggestField = Literal["actress", "series", "director", "maker", "label", "genre"]
+
+
+# `total` を計算する際の上限。WHERE が広くマッチする (例: `q=巨乳` のような
+# 高頻度語) と、純粋な COUNT(*) でも全マッチ行をスキャンしないと総数が出ない。
+# UI では正確な総数は使っておらず (`next_cursor` の has_more 判定に使うだけ)、
+# ページングは offset+limit が cap を超えない範囲で動けば十分。
+# よって SELECT count(*) FROM (SELECT 1 FROM ... WHERE ... LIMIT cap+1) で
+# cap+1 件目に達した時点で打ち切る。
+#
+# cap = 1000 なら limit=20 で 50 ページまでページング可能。
+# 「もっと絞ってください」と UX 上促す前提でも十分な深さ。
+_COUNT_CAP = 1000
+
+
+async def _capped_count(
+    db: AsyncSession,
+    where_clauses,
+    *,
+    cap: int = _COUNT_CAP,
+) -> int:
+    """`SELECT count(*) FROM (SELECT 1 FROM movies WHERE ... LIMIT cap+1)` で
+    打ち切り付きカウントを返す。
+
+    フリーワード検索のように WHERE が広くマッチする場合に、
+    巨大な行数を最後まで数え上げないようにするための補助関数。
+    返り値が cap+1 の場合「ヒット件数は cap+1 件以上 (実数不明)」を意味するが、
+    呼び出し側ではこの値を `total` としてそのまま使えば has_more 判定は
+    `offset + limit < total` で正しく回る。
+    """
+    inner = select(1).select_from(Movie)
+    # where_clauses はリスト / 単一式 / and_() などのいずれもあり得る。
+    # SQLAlchemy 側は where() に複数引数を渡せば AND になるので、
+    # 受け取り側で正規化しておく。
+    if isinstance(where_clauses, (list, tuple)):
+        if where_clauses:
+            inner = inner.where(*where_clauses)
+    else:
+        inner = inner.where(where_clauses)
+    inner = inner.limit(cap + 1).subquery()
+
+    stmt = select(func.count()).select_from(inner)
+    total = (await db.execute(stmt)).scalar_one()
+    return int(total)
 
 
 # 半角スペース / 全角スペース (U+3000) / タブ / 改行など、Unicode 的な空白すべてで分割する。
@@ -40,46 +83,64 @@ def _split_keyword_tokens(query: str) -> list[str]:
 
 
 def _build_token_where(token: str):
-    """単一トークンに対する OR 条件 (title / description / director / maker / label /
+    """単一トークンに対する WHERE 条件 (title / description / director / maker / label /
     女優名 / ジャンル名 / シリーズ名 の部分一致いずれか) を返す。
 
-    女優 / ジャンル / シリーズは IN (...) の代わりに EXISTS を使う。
-    pg_trgm GIN index と組み合わせた時に planner が選択しやすく、
-    行数が多くなっても IN マテリアライズを避けられる。
+    実装は **「マッチする movie_id を 8 本の SELECT で UNION ALL したサブクエリへの IN」** に
+    なっている。OR (or_) を直接書くと PostgreSQL の planner は 1 つのスキャン上で
+    8 列ぶんの ILIKE 条件をまとめて評価しようとして BitmapOr or Seq Scan に
+    倒れがちで、`q=巨乳` のような高頻度 2 文字キーワードでは:
+
+      - description (長文 Text) ILIKE がほぼ全行ヒットしてしまい索引が役に立たない
+      - bitmap heap recheck で結局全マッチ行を再フェッチして遅い
+      - actress/genre/series 側の相関 EXISTS が OR の中に入ると semi-join 化されず
+        movie 行ごとに評価される
+
+    UNION ALL でまず候補 movie_id 集合だけを作っておくと:
+      - 各 SELECT は 1 列の pg_trgm GIN index を直接使った Bitmap Index Scan で済む
+      - actress/genre/series は子テーブル側 (行数が小さい) を先に絞り込んでから
+        movie_id を引くので、相関サブクエリと違い対象 movie 行数に依存しない
+      - 重複は外側 IN が暗黙に除去する (UNION ALL でいいので集約コスト不要)
     """
     pat = f"%{token}%"
 
-    actress_exists = (
-        select(1)
-        .select_from(MovieActress)
+    # フリーワードがどの movie_id にマッチするかを 8 本の SELECT で UNION ALL する。
+    # 各 SELECT は 1 列の pg_trgm GIN index を独立に使える。
+    # UNION ALL の列名は最初の SELECT のものに揃うため、actress/genre 側は
+    # `MovieActress.movie_id.label("id")` のように明示的にラベルを揃える。
+    cand_title = select(Movie.id.label("id")).where(Movie.title.ilike(pat))
+    cand_desc = select(Movie.id.label("id")).where(Movie.description.ilike(pat))
+    cand_director = select(Movie.id.label("id")).where(Movie.director_name.ilike(pat))
+    cand_maker = select(Movie.id.label("id")).where(Movie.maker_name.ilike(pat))
+    cand_label = select(Movie.id.label("id")).where(Movie.label_name.ilike(pat))
+    cand_actress = (
+        select(MovieActress.movie_id.label("id"))
         .join(Actress, Actress.id == MovieActress.actress_id)
-        .where(MovieActress.movie_id == Movie.id, Actress.name.ilike(pat))
-        .exists()
+        .where(Actress.name.ilike(pat))
     )
-    genre_exists = (
-        select(1)
-        .select_from(MovieGenre)
+    cand_genre = (
+        select(MovieGenre.movie_id.label("id"))
         .join(Genre, Genre.id == MovieGenre.genre_id)
-        .where(MovieGenre.movie_id == Movie.id, Genre.name.ilike(pat))
-        .exists()
+        .where(Genre.name.ilike(pat))
     )
-    series_exists = (
-        select(1)
-        .select_from(Series)
-        .where(Series.id == Movie.series_id, Series.name.ilike(pat))
-        .exists()
+    cand_series = (
+        select(Movie.id.label("id"))
+        .join(Series, Series.id == Movie.series_id)
+        .where(Series.name.ilike(pat))
     )
 
-    return or_(
-        Movie.title.ilike(pat),
-        Movie.description.ilike(pat),
-        Movie.director_name.ilike(pat),
-        Movie.maker_name.ilike(pat),
-        Movie.label_name.ilike(pat),
-        actress_exists,
-        genre_exists,
-        series_exists,
-    )
+    candidates = union_all(
+        cand_title,
+        cand_desc,
+        cand_director,
+        cand_maker,
+        cand_label,
+        cand_actress,
+        cand_genre,
+        cand_series,
+    ).subquery()
+
+    return Movie.id.in_(select(candidates.c.id))
 
 
 def _build_keyword_where(query: str):
@@ -116,10 +177,10 @@ async def search_movies(
     """
     where = _build_keyword_where(query)
 
-    # WHERE は EXISTS / 直接カラム比較のみで Movie をマルチプライしないので
-    # DISTINCT を取らずに COUNT(*) で十分 (DISTINCT は大規模データでソート/ハッシュが入って遅い)。
-    count_stmt = select(func.count()).select_from(Movie).where(where)
-    total = (await db.execute(count_stmt)).scalar_one()
+    # `total` は frontend の has_more 判定 (next_cursor 計算) にしか使われていない。
+    # `q=巨乳` のような高頻度語では純粋な COUNT(*) でも全マッチ行をスキャンして
+    # 1〜2 秒かかるため、cap+1 件で打ち切る (cap 件以下なら正確、超えていれば cap+1 を返す)。
+    total = await _capped_count(db, where)
 
     stmt = (
         select(Movie)
@@ -168,9 +229,9 @@ async def search_movies_by_exact_field(
     if not conditions:
         return [], 0
 
-    # Movie に対する直値比較 / IN サブクエリしか無いので COUNT(*) で OK。
-    count_stmt = select(func.count()).select_from(Movie).where(*conditions)
-    total = (await db.execute(count_stmt)).scalar_one()
+    # 完全一致でもメーカー大手などは数千件ヒットするので、フリーワード検索同様
+    # cap 付きカウントで早期打ち切りする。
+    total = await _capped_count(db, conditions)
 
     # items 取得 (delivery_date 降順、同日内は id で安定ソート)
     stmt = select(Movie).where(*conditions).order_by(
@@ -334,9 +395,9 @@ async def advanced_search_movies(
 
     # total は items 取得とは別クエリで先に取る (next_cursor 判定に使う)。
     # 全 WHERE 条件は Movie へのスカラー比較か Movie.id.in_(subquery) のみで
-    # 行数を膨張させないので COUNT(*) で OK (DISTINCT 不要)。
-    count_stmt = select(func.count()).select_from(Movie).where(*conditions)
-    total = (await db.execute(count_stmt)).scalar_one()
+    # 行数を膨張させないので COUNT(*) で OK。さらに `q=巨乳` のような
+    # 広くマッチするキーワードでも cap+1 件で打ち切ることでレイテンシを抑える。
+    total = await _capped_count(db, conditions)
 
     # items: ソート種別に応じてサブクエリを組み立てる
     stmt = select(Movie).where(*conditions)

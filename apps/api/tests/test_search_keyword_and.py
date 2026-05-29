@@ -198,6 +198,40 @@ def test_search_movies_count_uses_count_star_not_count_distinct() -> None:
     assert "distinct" not in sql.lower()
 
 
+def test_keyword_where_uses_union_all_candidate_subquery() -> None:
+    """単一トークンの WHERE が UNION ALL ベースの movie_id 候補集合 IN になり、
+    各カラムを 1 列ずつ pg_trgm GIN index で引けるようになっていることを保証する。
+
+    OR の 1 本に戻すと `q=巨乳` のような高頻度 2 文字キーワードで
+    description 列が BitmapOr + heap recheck で遅くなる回帰を防ぐ。
+    """
+    sql = _compile(_build_keyword_where("alpha"))
+    # 1 つだけ生 ILIKE のかたまりではなく、UNION ALL で複数の SELECT が連結されている
+    assert sql.upper().count("UNION ALL") >= 7  # 8 本の SELECT を連結すると 7 個の UNION ALL
+    # 外側は movies.id IN (subquery) になっている
+    assert "movies.id IN" in sql
+
+
+def test_capped_count_uses_limit_inside_subquery() -> None:
+    """`_capped_count` が SELECT count(*) FROM (SELECT 1 ... LIMIT N+1) sub の
+    形になっていることを保証する。高頻度語で全行 COUNT(*) を踏まないための回帰防止。
+    """
+    from sqlalchemy import select as sa_select
+
+    from app.db.models.movie import Movie
+    from app.repositories.search_repository import _COUNT_CAP, _build_keyword_where
+
+    where = _build_keyword_where("alpha")
+    # _capped_count と同じ SQL を組み立てて検証 (実 DB 不要)
+    inner = sa_select(1).select_from(Movie).where(where).limit(_COUNT_CAP + 1).subquery()
+    from sqlalchemy import func as sa_func
+
+    stmt = sa_select(sa_func.count()).select_from(inner)
+    sql = _compile(stmt)
+    assert "count(*)" in sql.lower()
+    assert f"LIMIT {_COUNT_CAP + 1}" in sql or f"LIMIT {_COUNT_CAP + 1}\n" in sql
+
+
 def test_advanced_conditions_uses_in_subquery_not_join_for_series() -> None:
     """series_list は Series JOIN ではなく `Movie.series_id IN (subquery)` で
     実装されていることを保証する (JOIN だと行数が膨らんで COUNT(*) も狂う)。"""

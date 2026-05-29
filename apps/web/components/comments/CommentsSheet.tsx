@@ -14,6 +14,7 @@
 import {
   type KeyboardEvent as ReactKeyboardEvent,
   type ReactNode,
+  type TouchEvent as ReactTouchEvent,
   useCallback,
   useEffect,
   useMemo,
@@ -30,6 +31,11 @@ import {
 } from "@/lib/api/comments";
 
 const DEFAULT_DISPLAY_NAME = "名無しのユーザー";
+
+// シートを閉じるためのスワイプ判定。リスト先頭で下方向に
+// SWIPE_CLOSE_THRESHOLD_PX 以上引っ張られたら閉じる。
+// 横方向の方が大きい (テキスト選択や横スクロール) の場合は無視する。
+const SWIPE_CLOSE_THRESHOLD_PX = 80;
 
 interface Props {
   slug: string;
@@ -67,6 +73,18 @@ export default function CommentsSheet({
   const [replyTo, setReplyTo] = useState<CommentItem | null>(null);
   const [posting, setPosting] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  // スクロール領域とドラッグ判定。先頭で下に引っ張ったときのみ閉じる。
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const sheetRef = useRef<HTMLDivElement>(null);
+  const dragStartYRef = useRef<number | null>(null);
+  const dragStartXRef = useRef<number | null>(null);
+  const dragDyRef = useRef(0);
+  const dragActiveRef = useRef(false);
+  // popstate / cleanup から常に最新の onClose を呼ぶための ref。
+  const onCloseRef = useRef(onClose);
+  useEffect(() => {
+    onCloseRef.current = onClose;
+  }, [onClose]);
 
   // open ↔ slug 変更で fetch する。slug が同じならキャッシュは持たず必ず取り直し。
   useEffect(() => {
@@ -113,6 +131,106 @@ export default function CommentsSheet({
       textareaRef.current.focus();
     }
   }, [replyTo]);
+
+  // ブラウザバックでシートを閉じる。MovieDetailModal と同じ pushState/popstate 方式:
+  //   - open になった瞬間に sentinel state を push。
+  //   - popstate が来たら onClose を呼ぶ (URL は既に巻き戻っているので何もしない)。
+  //   - ✕ / 動画切替 / 上端スワイプで閉じた場合は cleanup で history.back() を呼んで
+  //     push した sentinel を消す。これで URL バーが残らない。
+  useEffect(() => {
+    if (!open) return;
+    if (typeof window === "undefined") return;
+    let poppedByUser = false;
+    try {
+      window.history.pushState({ commentsSheet: true }, "");
+    } catch {
+      /* ignore */
+    }
+    const onPop = () => {
+      poppedByUser = true;
+      onCloseRef.current();
+    };
+    window.addEventListener("popstate", onPop);
+    return () => {
+      window.removeEventListener("popstate", onPop);
+      if (!poppedByUser) {
+        try {
+          const st = window.history.state as { commentsSheet?: boolean } | null;
+          if (st && st.commentsSheet) {
+            window.history.back();
+          }
+        } catch {
+          /* ignore */
+        }
+      }
+    };
+  }, [open]);
+
+  // スクロール先頭で下方向にスワイプされたときだけ閉じる。
+  //   - touchstart 時点で scrollRef.scrollTop === 0 のときだけドラッグ判定を開始。
+  //   - 横スクロール / 横スワイプが優位な場合は無視。
+  //   - 中身を上にスクロールしている (scrollTop > 0) 状態では一切閉じない。
+  const handleListTouchStart = useCallback((e: ReactTouchEvent<HTMLDivElement>) => {
+    const el = scrollRef.current;
+    if (!el) return;
+    if (el.scrollTop > 0) {
+      dragActiveRef.current = false;
+      dragStartYRef.current = null;
+      dragStartXRef.current = null;
+      return;
+    }
+    const t = e.touches[0];
+    dragStartYRef.current = t.clientY;
+    dragStartXRef.current = t.clientX;
+    dragDyRef.current = 0;
+    dragActiveRef.current = true;
+  }, []);
+
+  const handleListTouchMove = useCallback((e: ReactTouchEvent<HTMLDivElement>) => {
+    if (!dragActiveRef.current) return;
+    if (dragStartYRef.current == null || dragStartXRef.current == null) return;
+    const t = e.touches[0];
+    const dy = t.clientY - dragStartYRef.current;
+    const dx = t.clientX - dragStartXRef.current;
+    // 横方向の方が大きい動きは横スクロール / 単なるタップずれとして扱い、close 判定から外す。
+    if (Math.abs(dx) > Math.abs(dy) + 4) {
+      dragActiveRef.current = false;
+      if (sheetRef.current) {
+        sheetRef.current.style.transition = "";
+        sheetRef.current.style.transform = "";
+      }
+      return;
+    }
+    // 上方向にスワイプしたら閉じない (通常のリストスクロール扱い)。
+    if (dy <= 0) {
+      dragDyRef.current = 0;
+      if (sheetRef.current) {
+        sheetRef.current.style.transform = "";
+      }
+      return;
+    }
+    dragDyRef.current = dy;
+    if (sheetRef.current) {
+      sheetRef.current.style.transform = `translateY(${dy}px)`;
+      sheetRef.current.style.transition = "none";
+    }
+  }, []);
+
+  const handleListTouchEnd = useCallback(() => {
+    const dy = dragDyRef.current;
+    const wasActive = dragActiveRef.current;
+    dragActiveRef.current = false;
+    dragStartYRef.current = null;
+    dragStartXRef.current = null;
+    dragDyRef.current = 0;
+    if (sheetRef.current) {
+      sheetRef.current.style.transition = "";
+      sheetRef.current.style.transform = "";
+    }
+    if (wasActive && dy >= SWIPE_CLOSE_THRESHOLD_PX) {
+      onClose();
+    }
+  }, [onClose]);
 
   const handlePost = useCallback(async () => {
     const trimmed = body.trim();
@@ -193,7 +311,6 @@ export default function CommentsSheet({
       role="dialog"
       aria-modal="true"
       aria-label="コメント"
-      onClick={onClose}
       style={{
         position: "fixed",
         inset: 0,
@@ -205,6 +322,7 @@ export default function CommentsSheet({
       }}
     >
       <div
+        ref={sheetRef}
         onClick={(e) => e.stopPropagation()}
         onTouchStart={(e) => e.stopPropagation()}
         onTouchMove={(e) => e.stopPropagation()}
@@ -257,6 +375,11 @@ export default function CommentsSheet({
 
         {/* リスト */}
         <div
+          ref={scrollRef}
+          onTouchStart={handleListTouchStart}
+          onTouchMove={handleListTouchMove}
+          onTouchEnd={handleListTouchEnd}
+          onTouchCancel={handleListTouchEnd}
           style={{
             flex: 1,
             overflowY: "auto",

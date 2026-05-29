@@ -21,6 +21,11 @@ function dispatchNavLoadingShow() {
   }
 }
 
+// 表示名のクライアントキャッシュキー。ドロワーを開いた瞬間にサーバ取得が
+// 終わっていない場合でも、前回取得値を即時に出して flicker を防ぐ。
+const DISPLAY_NAME_CACHE_KEY = "hm:displayName:v1";
+const DEFAULT_DISPLAY_NAME = "名無しのユーザー";
+
 const MENU_ITEMS = [
   { label: "ホーム", href: "/" },
   { label: "おすすめフィード", href: "/feed" },
@@ -52,27 +57,49 @@ export default function HamburgerMenu() {
   const pathname = usePathname();
   // 表示名 (コメント機能で使う公開名)。サーバ側 (User.display_name) を SoT として
   // 取得する。未ログイン or 未設定なら「名無しのユーザー」。
-  const [displayName, setDisplayName] = useState<string>("名無しのユーザー");
+  // null = 未取得 (ローディング)。flicker 防止のため、取得完了までは fallback を出さない。
+  const [displayName, setDisplayName] = useState<string | null>(null);
   const [editingName, setEditingName] = useState<string>("");
   const [nameStatus, setNameStatus] = useState<"idle" | "saving" | "saved" | "error">("idle");
   // 「アカウント名」項目から開く編集モーダル。
   const [nameModalOpen, setNameModalOpen] = useState(false);
 
   // ドロワーを開いた瞬間に表示名を再取得する (別タブで変更されていた場合に追従)。
+  // 取得が走っている間は前回取得値 (localStorage キャッシュ) を出して flicker を消す。
+  // キャッシュが無い場合だけ短時間スケルトンを出す。
   useEffect(() => {
     if (!open) return;
     if (status !== "authenticated") {
-      setDisplayName("名無しのユーザー");
+      setDisplayName(DEFAULT_DISPLAY_NAME);
       setEditingName("");
       return;
+    }
+    // 先に localStorage のキャッシュを反映 (前回値を即時に出す)。
+    if (typeof window !== "undefined") {
+      try {
+        const cached = window.localStorage.getItem(DISPLAY_NAME_CACHE_KEY);
+        if (cached != null) {
+          setDisplayName(cached);
+          setEditingName(cached === DEFAULT_DISPLAY_NAME ? "" : cached);
+        }
+      } catch {
+        /* ignore */
+      }
     }
     let cancelled = false;
     void (async () => {
       const name = await getDisplayName();
       if (cancelled) return;
       setDisplayName(name);
-      setEditingName(name === "名無しのユーザー" ? "" : name);
+      setEditingName(name === DEFAULT_DISPLAY_NAME ? "" : name);
       setNameStatus("idle");
+      if (typeof window !== "undefined") {
+        try {
+          window.localStorage.setItem(DISPLAY_NAME_CACHE_KEY, name);
+        } catch {
+          /* ignore */
+        }
+      }
     })();
     return () => {
       cancelled = true;
@@ -81,7 +108,7 @@ export default function HamburgerMenu() {
 
   // モーダルを開く時に「現在の表示名」をプリフィルする (未設定なら「名無しのユーザー」)。
   const openNameModal = () => {
-    setEditingName(displayName || "名無しのユーザー");
+    setEditingName(displayName || DEFAULT_DISPLAY_NAME);
     setNameStatus("idle");
     setNameModalOpen(true);
   };
@@ -97,6 +124,13 @@ export default function HamburgerMenu() {
     setDisplayName(saved);
     setEditingName(saved);
     setNameStatus("saved");
+    if (typeof window !== "undefined") {
+      try {
+        window.localStorage.setItem(DISPLAY_NAME_CACHE_KEY, saved);
+      } catch {
+        /* ignore */
+      }
+    }
     // 保存に成功したら少し待ってモーダルを閉じる。
     setTimeout(() => {
       setNameStatus("idle");
@@ -237,16 +271,32 @@ export default function HamburgerMenu() {
               }}
             >
               アカウント名
-              <span
-                style={{
-                  display: "block",
-                  fontSize: "12px",
-                  color: "rgba(255,255,255,0.55)",
-                  marginTop: "2px",
-                }}
-              >
-                {displayName}
-              </span>
+              {displayName == null ? (
+                // 取得完了前。fallback「名無しのユーザー」を一瞬出して上書きされる
+                // flicker を避けるため、スケルトンで領域だけ確保する。
+                <span
+                  aria-hidden="true"
+                  style={{
+                    display: "block",
+                    marginTop: "6px",
+                    width: "120px",
+                    height: "12px",
+                    borderRadius: "4px",
+                    background: "rgba(255,255,255,0.08)",
+                  }}
+                />
+              ) : (
+                <span
+                  style={{
+                    display: "block",
+                    fontSize: "12px",
+                    color: "rgba(255,255,255,0.55)",
+                    marginTop: "2px",
+                  }}
+                >
+                  {displayName}
+                </span>
+              )}
             </button>
           )}
           {MENU_ITEMS.map((item) => {

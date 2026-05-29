@@ -229,10 +229,25 @@ _COMPACT_QUALITY_RANK: tuple[tuple[str, int], ...] = (
     ("sm", 10),
 )
 
-# basename 末尾の `<tier>.mp4` を捕捉。直前は文字列頭 or 非小文字英字に限定し、
-# `smhb.mp4` (= `mhb` が `s` に続く偽パターン) を弾く。
+# basename 末尾の `<tier>.mp4` を捕捉。
+#
+# DMM のサンプル動画 basename は `<cid><tier>.mp4` 形式で、cid は
+# **英字 + 数字** の混在 (例: `sone00614`, `1sun00052a`, `yrnkmtndvaj00703b`)。
+# cid の最後の文字が英字のときも対応する必要があるため、tier の直前が
+# 「文字列頭 or 非小文字英字」という条件は厳しすぎる (PR #286 の bug)。
+#
+# 代わりに「basename のどこかに数字が出現してから tier に到達する」を条件にする。
+# DMM cid は必ず数字 (連番) を含むため、純文字列の偽 basename
+# (例: `prism.mp4`, `wrongsmhb.mp4`) を弾けつつ、cid 末尾が英字でも tier を拾える:
+#
+#   - sone00614sm.mp4         → \d=`4`, [a-z]*=``, tier=`sm` → 一致 (sm)
+#   - yrnkmtndvaj00703bsm.mp4 → \d=`3`, [a-z]*=`b`, tier=`sm` → 一致 (sm)
+#   - 1sun00052amhb.mp4       → \d=`2`, [a-z]*=`a`, tier=`mhb` → 一致 (mhb)
+#   - prism.mp4               → \d なし → 不一致 (other)
+#
+# tier は longest-first (`mhb|dmb|dm|sm`) で並べ、`xxxdmb.mp4` を `dm` に誤判定しない。
 _COMPACT_SUFFIX_RE = re.compile(
-    r"(?:^|[^a-z])(mhb|dmb|dm|sm)\.mp4$",
+    r"\d[a-z]*(mhb|dmb|dm|sm)\.mp4$",
     re.IGNORECASE,
 )
 

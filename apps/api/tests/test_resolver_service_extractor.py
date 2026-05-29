@@ -836,22 +836,112 @@ def test_suffix_rank_unit_known_and_compact() -> None:
     assert _suffix_rank("https://cdn/pv/x/y_dmb_w.mp4") == 60
     assert _suffix_rank("https://cdn/pv/x/y_mhb_w.mp4") == 90
 
-    # コンパクト形 (basename 末尾だけ)。
+    # コンパクト形 (basename 末尾だけ、cid 末尾が数字のケース)。
     assert _suffix_rank("https://cdn/pv/so/sone00614sm.mp4") == 10
     assert _suffix_rank("https://cdn/pv/so/sone00614dm.mp4") == 30
     assert _suffix_rank("https://cdn/pv/so/sone00614dmb.mp4") == 60
     assert _suffix_rank("https://cdn/pv/so/sone00614mhb.mp4") == 90
 
+    # コンパクト形 + cid 末尾が英字のケース (本番 yrnkmtndvaj00703b の再発防止)。
+    # PR #286 の `(?:^|[^a-z])` 制約はこのパターンを落としていた。
+    assert _suffix_rank("https://cdn/pv/yr/yrnkmtndvaj00703bsm.mp4") == 10
+    assert _suffix_rank("https://cdn/pv/yr/yrnkmtndvaj00703bdm.mp4") == 30
+    assert _suffix_rank("https://cdn/pv/yr/yrnkmtndvaj00703bdmb.mp4") == 60
+    assert _suffix_rank("https://cdn/pv/yr/yrnkmtndvaj00703bmhb.mp4") == 90
+
+    # `1sun00052a` のような cid 末尾英字 + コンパクト形 (実 DMM で観測されうる形)。
+    assert _suffix_rank("https://cdn/pv/abc/1sun00052amhb.mp4") == 90
+    assert _suffix_rank("https://cdn/pv/abc/1sun00052asm.mp4") == 10
+
     # クエリ付き basename も同じく判定可能。
     assert _suffix_rank("https://cdn/pv/so/sone00614mhb.mp4?token=xxx") == 90
+    assert _suffix_rank("https://cdn/pv/yr/yrnkmtndvaj00703bsm.mp4?t=abc") == 10
 
     # 既存挙動互換チェック: `_mhb_w.mp4` の前に小文字英字 (例 `amhb_w.mp4`) が
     # ある古 DMM 命名は、substring `_mhb_w.mp4` にも regex `(mhb)\.mp4$` にも
-    # マッチしないので 50 のまま (既存挙動を変えない)。
+    # マッチしないので 50 のまま (basename 末尾が `w.mp4` であって `<tier>.mp4`
+    # ではないため)。既存挙動を変えない。
     assert _suffix_rank("https://cdn/pv/abc/1sun00052amhb_w.mp4") == 50
 
     # 完全未知のサフィックスは 50 (既存挙動)。
     assert _suffix_rank("https://cdn/pv/x/y_w1080.mp4") == 50
-    # `smhb.mp4` のような `mhb` の直前が小文字英字のケースは偽陽性を避け 50。
-    # (DMM では発生しないが正規表現の安全性チェック)
+    # 数字を含まない純文字列 basename はコンパクト regex が `\d[a-z]*` を要求
+    # するため 50 のまま。`prism.mp4` のような偽 basename を弾く保険。
+    assert _suffix_rank("https://cdn/pv/x/prism.mp4") == 50
     assert _suffix_rank("https://cdn/pv/x/wrongsmhb.mp4") == 50
+
+    # `dmb` を `dm` に誤判定しないこと (longest-first 順序の保証)。
+    # 同じ basename を 2 度評価して固定的に 60 を返すか確認。
+    for _ in range(2):
+        assert _suffix_rank("https://cdn/pv/x/abc123dmb.mp4") == 60
+        assert _suffix_rank("https://cdn/pv/x/abc123dm.mp4") == 30
+
+
+@pytest.mark.asyncio
+async def test_extract_compact_suffix_cid_ends_with_letter(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """cid 末尾が英字 (`yrnkmtndvaj00703b`) のコンパクト形でも mhb を high に選ぶ。
+
+    本番 build-id 57f8418 で `basename=yrnkmtndvaj00703bsm.mp4` が high として
+    選ばれていたケースの再発防止。PR #286 の `(?:^|[^a-z])` 制約は cid 末尾英字
+    を弾いており、tier の直前が `b` (lowercase) で regex が落ちていた。
+    """
+    raw_html = (
+        '<script>var args = {'
+        '"src": "https://cc3001.dmm.co.jp/pv/yr/yrnkmtndvaj00703bsm.mp4",'
+        '"bitrates": ['
+        '{"src": "//cc3001.dmm.co.jp/pv/yr/yrnkmtndvaj00703bsm.mp4"},'
+        '{"src": "//cc3001.dmm.co.jp/pv/yr/yrnkmtndvaj00703bdm.mp4"},'
+        '{"src": "//cc3001.dmm.co.jp/pv/yr/yrnkmtndvaj00703bdmb.mp4"},'
+        '{"src": "//cc3001.dmm.co.jp/pv/yr/yrnkmtndvaj00703bmhb.mp4"}'
+        ']};</script>'
+    )
+    handler = _two_stage_handler(
+        litevideo_body=_litevideo_html(),
+        player_body=raw_html,
+    )
+    _install_transport(monkeypatch, handler)
+
+    result = await extract_mp4_url("yrnkmtndvaj00703b", "affi-001")
+    assert result.low_mp4_url == (
+        "https://cc3001.dmm.co.jp/pv/yr/yrnkmtndvaj00703bsm.mp4"
+    )
+    assert result.high_mp4_url == (
+        "https://cc3001.dmm.co.jp/pv/yr/yrnkmtndvaj00703bmhb.mp4"
+    )
+
+
+@pytest.mark.asyncio
+async def test_extract_compact_suffix_cid_ends_with_letter_input_order_sm_last(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """cid 末尾英字 + bitrates が sm を最後に持つ降順入力でも high=mhb を堅持する。
+
+    本番 yrnkmtndvaj00703b の元バグ条件 (= 全候補が辞書外で同ランク 50 になり、
+    安定ソートの末尾 = 入力順最後 = sm が high) を直接再現する回帰テスト。
+    """
+    raw_html = (
+        '<script>var args = {'
+        '"src": "https://cc3001.dmm.co.jp/pv/yr/yrnkmtndvaj00703bmhb.mp4",'
+        '"bitrates": ['
+        '{"src": "//cc3001.dmm.co.jp/pv/yr/yrnkmtndvaj00703bmhb.mp4"},'
+        '{"src": "//cc3001.dmm.co.jp/pv/yr/yrnkmtndvaj00703bdmb.mp4"},'
+        '{"src": "//cc3001.dmm.co.jp/pv/yr/yrnkmtndvaj00703bdm.mp4"},'
+        '{"src": "//cc3001.dmm.co.jp/pv/yr/yrnkmtndvaj00703bsm.mp4"}'
+        ']};</script>'
+    )
+    handler = _two_stage_handler(
+        litevideo_body=_litevideo_html(),
+        player_body=raw_html,
+    )
+    _install_transport(monkeypatch, handler)
+
+    result = await extract_mp4_url("yrnkmtndvaj00703b_desc", "affi-001")
+    # 入力順に関わらず high=mhb / low=sm。
+    assert result.high_mp4_url == (
+        "https://cc3001.dmm.co.jp/pv/yr/yrnkmtndvaj00703bmhb.mp4"
+    )
+    assert result.low_mp4_url == (
+        "https://cc3001.dmm.co.jp/pv/yr/yrnkmtndvaj00703bsm.mp4"
+    )

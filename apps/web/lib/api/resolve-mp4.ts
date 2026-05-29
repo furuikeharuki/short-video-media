@@ -65,13 +65,20 @@ export function pickPlaybackUrl(res: {
  *
  * コンパクト形 (近年 DMM が併用):
  *   <cid>sm.mp4 / <cid>dm.mp4 / <cid>dmb.mp4 / <cid>mhb.mp4
- * 例: `sone00614sm.mp4`, `sone00614mhb.mp4`。
- * basename 末尾の `<tier>.mp4` を判定し、直前は **小文字英字以外** に限定して
- * `smhb.mp4` のような偽陽性を避ける。
+ * 例: `sone00614sm.mp4`, `yrnkmtndvaj00703bsm.mp4`, `1sun00052amhb.mp4`。
+ *
+ * DMM cid は **英字 + 数字** の混在で、末尾が英字のケースが普通にある
+ * (`yrnkmtndvaj00703b` 等)。tier 直前が「非小文字英字」を必須にすると cid
+ * 末尾英字パターンが落ちる (PR #286 の bug)。代わりに「basename のどこかに
+ * 数字が出現してから tier に到達する」を条件にして、純文字列の偽 basename
+ * (`prism.mp4` 等) を弾きつつ cid 末尾英字を許容する。
+ *
+ * tier は longest-first (`mhb|dmb|dm|sm`) で並べ、`...dmb.mp4` を `dm` に
+ * 誤判定しない。
  *
  * vt ログ用の安全な短いラベル。トークン付きクエリは含まない。
  */
-const COMPACT_SUFFIX_RE = /(?:^|[^a-z])(mhb|dmb|dm|sm)\.mp4$/i;
+const COMPACT_SUFFIX_RE = /\d[a-z]*(mhb|dmb|dm|sm)\.mp4$/i;
 
 function basenameOf(url: string): string {
   let s = url;

@@ -2,6 +2,7 @@ from fastapi import APIRouter
 
 from app.api.v1.endpoints.actresses import router as actresses_router
 from app.api.v1.endpoints.auth import router as auth_router
+from app.api.v1.endpoints.comments import router as comments_router
 from app.api.v1.endpoints.events import router as events_router
 from app.api.v1.endpoints.feed import router as feed_router
 from app.api.v1.endpoints.health import router as health_router
@@ -26,3 +27,4 @@ api_router.include_router(auth_router, tags=["auth"])
 api_router.include_router(me_router, tags=["me"])
 api_router.include_router(actresses_router, tags=["actresses"])
 api_router.include_router(sitemap_router, tags=["sitemap"])
+api_router.include_router(comments_router, tags=["comments"])

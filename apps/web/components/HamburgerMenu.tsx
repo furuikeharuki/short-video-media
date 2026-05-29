@@ -7,6 +7,7 @@ import { signIn, signOut, useSession } from "next-auth/react";
 import { markFeedStartUnmuted } from "@/lib/feedNav";
 import { buildFeedHrefFromSavedPref } from "@/lib/savedSearchPrefs";
 import { writeBottomNavFreezeSnapshot } from "@/lib/bottomNavFreeze";
+import { getDisplayName, putDisplayName } from "@/lib/api/comments";
 
 // /feed (フィード上モーダル経由で /movies/<slug> になっているケースも含む) から
 // ハンバーガー経由で別ルートへ遷移する瞬間、ヘッダーとボトムナビの間だけ
@@ -49,6 +50,47 @@ export default function HamburgerMenu() {
   const btnRef = useRef<HTMLButtonElement>(null);
   const { status } = useSession();
   const pathname = usePathname();
+  // 表示名 (コメント機能で使う公開名)。サーバ側 (User.display_name) を SoT として
+  // 取得する。未ログイン or 未設定なら「名無しのユーザー」。
+  const [displayName, setDisplayName] = useState<string>("名無しのユーザー");
+  const [editingName, setEditingName] = useState<string>("");
+  const [nameStatus, setNameStatus] = useState<"idle" | "saving" | "saved" | "error">("idle");
+
+  // ドロワーを開いた瞬間に表示名を再取得する (別タブで変更されていた場合に追従)。
+  useEffect(() => {
+    if (!open) return;
+    if (status !== "authenticated") {
+      setDisplayName("名無しのユーザー");
+      setEditingName("");
+      return;
+    }
+    let cancelled = false;
+    void (async () => {
+      const name = await getDisplayName();
+      if (cancelled) return;
+      setDisplayName(name);
+      setEditingName(name === "名無しのユーザー" ? "" : name);
+      setNameStatus("idle");
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [open, status]);
+
+  const saveDisplayName = async () => {
+    setNameStatus("saving");
+    const next = editingName.trim();
+    const saved = await putDisplayName(next === "" ? null : next);
+    if (saved == null) {
+      setNameStatus("error");
+      return;
+    }
+    setDisplayName(saved);
+    setEditingName(saved === "名無しのユーザー" ? "" : saved);
+    setNameStatus("saved");
+    // 2 秒で `saved` 表示を消す。
+    setTimeout(() => setNameStatus("idle"), 2000);
+  };
   // /feed および /search/feed、フィード上で開く /movies/<slug> モーダル中まで含めて
   // 「ショート視聴中」とみなす。BottomNav の onShortFeed と揃える。
   const onShortFeed =
@@ -223,6 +265,81 @@ export default function HamburgerMenu() {
               </Link>
             );
           })}
+
+          {/* 表示名エディタ (ログイン中のみ表示) */}
+          {status === "authenticated" && (
+            <div
+              style={{
+                padding: "12px 24px 8px",
+                borderTop: "1px solid rgba(255,255,255,0.08)",
+                marginTop: "8px",
+              }}
+            >
+              <label
+                style={{
+                  display: "block",
+                  fontSize: "12px",
+                  color: "rgba(255,255,255,0.7)",
+                  marginBottom: "6px",
+                }}
+              >
+                コメントで使う表示名
+              </label>
+              <div style={{ display: "flex", gap: 6 }}>
+                <input
+                  type="text"
+                  value={editingName}
+                  onChange={(e) => setEditingName(e.target.value)}
+                  placeholder="名無しのユーザー"
+                  maxLength={32}
+                  style={{
+                    flex: 1,
+                    background: "#1a1a1a",
+                    color: "#fff",
+                    border: "1px solid rgba(255,255,255,0.1)",
+                    borderRadius: "8px",
+                    padding: "8px 10px",
+                    fontSize: "13px",
+                    fontFamily: "inherit",
+                  }}
+                />
+                <button
+                  type="button"
+                  onClick={saveDisplayName}
+                  disabled={nameStatus === "saving"}
+                  style={{
+                    background: "#e91e63",
+                    color: "#fff",
+                    border: "none",
+                    borderRadius: "8px",
+                    padding: "0 12px",
+                    fontSize: "13px",
+                    fontWeight: 700,
+                    cursor: "pointer",
+                    opacity: nameStatus === "saving" ? 0.5 : 1,
+                  }}
+                >
+                  保存
+                </button>
+              </div>
+              <div
+                style={{
+                  fontSize: "11px",
+                  color: "rgba(255,255,255,0.5)",
+                  marginTop: "6px",
+                  minHeight: "14px",
+                }}
+              >
+                {nameStatus === "saving"
+                  ? "保存中..."
+                  : nameStatus === "saved"
+                    ? "保存しました"
+                    : nameStatus === "error"
+                      ? "保存に失敗しました"
+                      : `現在の表示名: ${displayName}`}
+              </div>
+            </div>
+          )}
 
           {/* ログイン / ログアウト */}
           <div style={{ padding: "16px 24px 8px", borderTop: "1px solid rgba(255,255,255,0.08)", marginTop: "8px" }}>

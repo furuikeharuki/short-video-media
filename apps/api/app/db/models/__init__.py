@@ -1,4 +1,5 @@
 from app.db.models.actress import Actress
+from app.db.models.comment import Comment
 from app.db.models.event import Event
 from app.db.models.genre import Genre
 from app.db.models.goods import ActressGoods, Goods
@@ -29,4 +30,5 @@ __all__ = [
     "ViewHistory",
     "UserNgWord",
     "UserSearchPref",
+    "Comment",
 ]

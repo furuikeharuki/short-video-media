@@ -33,6 +33,10 @@ class User(Base):
         default=_utcnow_naive,
         server_default=func.now(),
     )
+    # 公開表示名。コメント等で「名無しのユーザー」以外を名乗りたいユーザーが
+    # ハンバーガーメニューから上書きする。NULL のときはアプリ側で
+    # 「名無しのユーザー」を返す。32 文字までに切り詰めるのは API レイヤで行う。
+    display_name: Mapped[str | None] = mapped_column(String(32), default=None)
 
     identities: Mapped[list["Identity"]] = relationship(
         back_populates="user", cascade="all, delete-orphan"

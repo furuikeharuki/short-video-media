@@ -254,19 +254,34 @@ def _ng_word_condition(word: str):
     タイトル / 説明 / 監督 / メーカー / レーベル / 女優名 / ジャンル名 / シリーズ名の
     いずれにも部分一致しないこと (case-insensitive)。NULL を含むカラムは
     coalesce で空文字に倒して安全に ilike できるようにする。
+
+    女優 / ジャンル / シリーズの除外は、`NOT IN (大きな subquery)` ではなく
+    `NOT EXISTS (相関 subquery)` で表現する。`NOT IN` は planner が hash anti-join
+    + materialize に倒れがちで、`ng_words=熟女` のように subquery が数千件返す
+    ケースで遅くなる。`NOT EXISTS` は `movies.id` と相関しているため anti-semi-join
+    + (actress_id, movie_id) 逆方向 index で個別行ずつ判定できる。
     """
     pat = f"%{word}%"
-    ng_actress_sub = (
-        select(MovieActress.movie_id)
+    ng_actress_exists = (
+        select(1)
+        .select_from(MovieActress)
         .join(Actress, Actress.id == MovieActress.actress_id)
-        .where(Actress.name.ilike(pat))
+        .where(MovieActress.movie_id == Movie.id, Actress.name.ilike(pat))
+        .exists()
     )
-    ng_genre_sub = (
-        select(MovieGenre.movie_id)
+    ng_genre_exists = (
+        select(1)
+        .select_from(MovieGenre)
         .join(Genre, Genre.id == MovieGenre.genre_id)
-        .where(Genre.name.ilike(pat))
+        .where(MovieGenre.movie_id == Movie.id, Genre.name.ilike(pat))
+        .exists()
     )
-    ng_series_sub = select(Series.id).where(Series.name.ilike(pat))
+    ng_series_exists = (
+        select(1)
+        .select_from(Series)
+        .where(Series.id == Movie.series_id, Series.name.ilike(pat))
+        .exists()
+    )
 
     return and_(
         ~func.coalesce(Movie.title, "").ilike(pat),
@@ -274,11 +289,50 @@ def _ng_word_condition(word: str):
         ~func.coalesce(Movie.director_name, "").ilike(pat),
         ~func.coalesce(Movie.maker_name, "").ilike(pat),
         ~func.coalesce(Movie.label_name, "").ilike(pat),
-        ~Movie.id.in_(ng_actress_sub),
-        ~Movie.id.in_(ng_genre_sub),
-        # series_id が NULL の作品は OK (シリーズ無しなので除外対象になり得ない)
-        or_(Movie.series_id.is_(None), ~Movie.series_id.in_(ng_series_sub)),
+        ~ng_actress_exists,
+        ~ng_genre_exists,
+        # series_id が NULL の作品は EXISTS 自体が false なので NOT EXISTS は true。
+        # コードレベルで or_() を残す必要は無いが、可読性のため明示的に書く。
+        ~ng_series_exists,
     )
+
+
+def _q_token_is_redundant_with_filters(
+    token: str,
+    *,
+    genres: list[str],
+    actresses: list[str],
+    series_list: list[str],
+    directors: list[str],
+    makers: list[str],
+    labels: list[str],
+) -> bool:
+    """`q` の単一トークンが、同時指定された構造化フィルタ値と完全一致するか判定する。
+
+    キーワード OR は title/description/director/maker/label/女優名/ジャンル名/
+    シリーズ名 のいずれかに部分一致すること、を意味する。一方、構造化フィルタが
+    (例: genres=["巨乳"]) 指定された作品は必ず genre 名 "巨乳" を持つので、
+    キーワードの "genre 名に部分一致" 枝が常に true になる → OR 全体が true →
+    キーワード条件が AND の中で常に満たされる = 冗長。
+
+    "完全一致" を要求するのは、例えば `q=巨` と `genres=["巨乳"]` のように
+    トークンが genres 値の一部だけの場合、キーワードは genre "巨乳" 以外の枝
+    (title="巨人...")  にも有意にマッチし得るため、これは冗長ではないから。
+    case-insensitive で照合する。
+
+    対象フィールド:
+      - genres → キーワード OR の `genre_exists (Genre.name ilike pat)` を満たす
+      - actresses → `actress_exists (Actress.name ilike pat)` を満たす
+      - series_list → `series_exists (Series.name ilike pat)` を満たす
+      - directors → `Movie.director_name ilike pat` を満たす
+      - makers → `Movie.maker_name ilike pat` を満たす
+      - labels → `Movie.label_name ilike pat` を満たす
+    """
+    lt = token.casefold()
+    candidates = (
+        genres + actresses + series_list + directors + makers + labels
+    )
+    return any(v is not None and v.casefold() == lt for v in candidates)
 
 
 def _build_advanced_conditions(
@@ -297,9 +351,41 @@ def _build_advanced_conditions(
     """advanced_search の WHERE 条件を組み立てる。"""
     conditions: list = [Movie.is_visible.is_(True)]
 
-    # キーワード (既存の全文部分一致と同じロジックを AND で合流)
+    # キーワード (既存の全文部分一致と同じロジックを AND で合流)。
+    #
+    # 構造化フィルタ (genres/actresses/series_list/directors/makers/labels) と q が
+    # 同時指定され、かつ q トークンの一部が「構造化フィルタの値そのもの」と完全一致
+    # するときは、そのトークンに対応するキーワード OR 枝が必ず true となるため、
+    # トークン条件 (OR グループ) は AND の中で常に true ⇒ 完全に冗長になる。
+    # 例: `q=巨乳 genres=巨乳` では「巨乳」トークンは genre 名 "巨乳" を持つ作品で
+    # 常にマッチ → 全 OR が常に true → 落としてよい。
+    # この最適化により、高頻度 2 文字キーワード (`巨乳` 等) が引き起こす広域 OR を
+    # planner から外せるため、構造化フィルタ単体での selectivity に倒し込める。
+    #
+    # 冗長でないトークンが残ればそれだけを AND し直す。全トークンが冗長になれば q ごと落とす。
     if q:
-        conditions.append(_build_keyword_where(q))
+        tokens = _split_keyword_tokens(q)
+        if not tokens:
+            tokens = [q]
+        non_redundant = [
+            t
+            for t in tokens
+            if not _q_token_is_redundant_with_filters(
+                t,
+                genres=genres,
+                actresses=actresses,
+                series_list=series_list,
+                directors=directors,
+                makers=makers,
+                labels=labels,
+            )
+        ]
+        if non_redundant:
+            if len(non_redundant) == 1:
+                conditions.append(_build_token_where(non_redundant[0]))
+            else:
+                conditions.append(and_(*(_build_token_where(t) for t in non_redundant)))
+        # else: 全トークンが構造化フィルタで冗長 → q 条件は付けない
 
     # ジャンル AND: 指定された全ジャンルを含む作品のみ。
     # HAVING COUNT(DISTINCT genre_name) = N で「N 個全部マッチした movie_id」を出す。

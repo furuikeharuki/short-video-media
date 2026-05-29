@@ -290,3 +290,341 @@ def test_advanced_conditions_uses_in_subquery_not_join_for_series() -> None:
     # IN (SELECT ... FROM series ...) 形式になっている
     assert "series_id IN" in sql or "movies.series_id IN" in sql
     assert "MySeries" in sql
+
+
+# ---------------- 冗長 q トークンの除去 ----------------
+
+
+def test_q_equals_genre_value_is_dropped_from_conditions() -> None:
+    """`q="巨乳" genres=["巨乳"]` のように q が genres 値と完全一致する場合、
+    キーワード OR 全体が genre フィルタにより常に true になるため落とす。
+
+    実本番で `q=巨乳&genres=巨乳&ng_words=...` のリクエストが 10 秒前後かかる
+    主因はこの広域 OR (5 ILIKE + 3 相関 EXISTS) が planner を惑わせて
+    全件スキャン気味のプランを選ぶこと。
+    """
+    from sqlalchemy import and_
+
+    from app.repositories.search_repository import _build_advanced_conditions
+
+    conds = _build_advanced_conditions(
+        q="巨乳",
+        genres=["巨乳"],
+        actresses=[],
+        series_list=[],
+        directors=[],
+        makers=[],
+        labels=[],
+        date_from=None,
+        date_to=None,
+        ng_words=[],
+    )
+    sql = _compile(and_(*conds))
+    # genres フィルタは残る
+    assert "movie_genres" in sql
+    assert "巨乳" in sql
+    # キーワード OR の中核 (title/description ILIKE) が SQL に現れていない
+    # = q ブランチごと丸ごと除去された
+    assert "movies.title ILIKE" not in sql
+    assert "movies.description ILIKE" not in sql
+
+
+def test_q_equals_actress_value_is_dropped() -> None:
+    """`q=女優A actresses=["女優A"]` で q は冗長 → 落ちる。"""
+    from sqlalchemy import and_
+
+    from app.repositories.search_repository import _build_advanced_conditions
+
+    conds = _build_advanced_conditions(
+        q="女優A",
+        genres=[],
+        actresses=["女優A"],
+        series_list=[],
+        directors=[],
+        makers=[],
+        labels=[],
+        date_from=None,
+        date_to=None,
+        ng_words=[],
+    )
+    sql = _compile(and_(*conds))
+    assert "movie_actresses" in sql
+    assert "女優A" in sql
+    assert "movies.title ILIKE" not in sql
+
+
+def test_q_equals_label_value_is_dropped() -> None:
+    """labels も同様。"""
+    from sqlalchemy import and_
+
+    from app.repositories.search_repository import _build_advanced_conditions
+
+    conds = _build_advanced_conditions(
+        q="MyLabel",
+        genres=[],
+        actresses=[],
+        series_list=[],
+        directors=[],
+        makers=[],
+        labels=["MyLabel"],
+        date_from=None,
+        date_to=None,
+        ng_words=[],
+    )
+    sql = _compile(and_(*conds))
+    # labels フィルタは残る
+    assert "MyLabel" in sql
+    assert "label_name IN" in sql
+    # q のキーワード OR は除去されている
+    assert "movies.title ILIKE" not in sql
+
+
+def test_q_partial_match_to_genre_value_is_kept() -> None:
+    """`q=巨 genres=["巨乳"]` のように q がフィルタ値の部分文字列でしかない場合、
+    キーワード OR は不冗長 → 残す。
+
+    "巨" は genre 名 "巨乳" の部分文字列なので genre フィルタを満たす作品では
+    genre_exists 枝が true になるが、それは genres=巨乳 を持つ作品では常に
+    そうとは限らない (genre "巨乳" を持つ作品の中で title が "巨" を含むものは
+    title 枝でもマッチするが、含まないものは genre 枝のみでマッチ)。
+    安全側として「q トークンと完全一致した時のみ落とす」ルールにしているため、
+    部分一致では q は残る。
+    """
+    from sqlalchemy import and_
+
+    from app.repositories.search_repository import _build_advanced_conditions
+
+    conds = _build_advanced_conditions(
+        q="巨",
+        genres=["巨乳"],
+        actresses=[],
+        series_list=[],
+        directors=[],
+        makers=[],
+        labels=[],
+        date_from=None,
+        date_to=None,
+        ng_words=[],
+    )
+    sql = _compile(and_(*conds))
+    # genre フィルタ + キーワード OR の両方が残る
+    assert "movie_genres" in sql
+    assert "movies.title ILIKE" in sql
+
+
+def test_q_mixed_redundant_and_unique_tokens_keeps_unique_only() -> None:
+    """`q="巨乳 アイドル"` + `genres=["巨乳"]` で「巨乳」は冗長、「アイドル」は不冗長
+    → 「アイドル」だけ残る AND になる。"""
+    from sqlalchemy import and_
+
+    from app.repositories.search_repository import _build_advanced_conditions
+
+    conds = _build_advanced_conditions(
+        q="巨乳 アイドル",
+        genres=["巨乳"],
+        actresses=[],
+        series_list=[],
+        directors=[],
+        makers=[],
+        labels=[],
+        date_from=None,
+        date_to=None,
+        ng_words=[],
+    )
+    sql = _compile(and_(*conds))
+    # 「アイドル」のキーワード OR は残る
+    assert "%アイドル%" in sql
+    # 「巨乳」のキーワード OR は消える (巨乳 はキーワード OR ではなく genre フィルタ側にだけ現れる)
+    assert "%巨乳%" not in sql
+    # genres フィルタの SQL 内では 巨乳 は IN リテラルとして存在する
+    assert "'巨乳'" in sql
+
+
+def test_q_redundant_case_insensitive_match() -> None:
+    """case-insensitive で比較する: q='ALPHA' genres=['alpha'] でも冗長判定。"""
+    from sqlalchemy import and_
+
+    from app.repositories.search_repository import _build_advanced_conditions
+
+    conds = _build_advanced_conditions(
+        q="ALPHA",
+        genres=["alpha"],
+        actresses=[],
+        series_list=[],
+        directors=[],
+        makers=[],
+        labels=[],
+        date_from=None,
+        date_to=None,
+        ng_words=[],
+    )
+    sql = _compile(and_(*conds))
+    # q のキーワード OR は除去されている (case-insensitive 完全一致なので)
+    assert "movies.title ILIKE" not in sql
+
+
+def test_q_no_overlap_with_filters_keeps_q() -> None:
+    """`q="別ワード"` + `genres=["巨乳"]` のように q がどのフィルタ値とも一致しない時は
+    キーワード OR を残す。"""
+    from sqlalchemy import and_
+
+    from app.repositories.search_repository import _build_advanced_conditions
+
+    conds = _build_advanced_conditions(
+        q="別ワード",
+        genres=["巨乳"],
+        actresses=[],
+        series_list=[],
+        directors=[],
+        makers=[],
+        labels=[],
+        date_from=None,
+        date_to=None,
+        ng_words=[],
+    )
+    sql = _compile(and_(*conds))
+    assert "%別ワード%" in sql
+    assert "movies.title ILIKE" in sql
+
+
+# ---------------- NG ワードは NOT EXISTS で評価される ----------------
+
+
+def test_ng_word_uses_not_exists_for_actress_genre_series() -> None:
+    """NG ワード除外の女優 / ジャンル / シリーズ判定が
+    `NOT IN (subquery)` ではなく `NOT (EXISTS ...)` で書かれていることを保証する。
+
+    `NOT IN` は planner が hash anti-join + materialize に倒れがちで
+    subquery が大きいときに遅い。`NOT EXISTS` は相関 anti-semi-join + 逆方向
+    index で個別行ずつ判定でき、`ng_words=熟女` のように subquery が数千件返す
+    ケースで安定して速い。回帰防止。
+    """
+    from sqlalchemy import and_
+
+    from app.repositories.search_repository import _build_advanced_conditions
+
+    conds = _build_advanced_conditions(
+        q=None,
+        genres=[],
+        actresses=[],
+        series_list=[],
+        directors=[],
+        makers=[],
+        labels=[],
+        date_from=None,
+        date_to=None,
+        ng_words=["レズ"],
+    )
+    sql = _compile(and_(*conds))
+    # NOT EXISTS が現れている (相関 sub)
+    upper = sql.upper()
+    assert "NOT (EXISTS" in upper or "NOT EXISTS" in upper
+    # ng の subquery が `Movie.id` と相関している (movie_id = movies.id の形)
+    assert "movie_genres.movie_id = movies.id" in sql
+    assert "movie_actresses.movie_id = movies.id" in sql
+    # series は series_id = movies.series_id で相関
+    assert "series.id = movies.series_id" in sql
+
+
+def test_ng_word_no_longer_uses_not_in_for_join_tables() -> None:
+    """`movie_id IN (SELECT movie_id FROM movie_genres ...)` の NOT IN 形が
+    残っていないこと。NOT IN は anti-join planner を惑わせる回帰の元。"""
+    from sqlalchemy import and_
+
+    from app.repositories.search_repository import _build_advanced_conditions
+
+    conds = _build_advanced_conditions(
+        q=None,
+        genres=[],
+        actresses=[],
+        series_list=[],
+        directors=[],
+        makers=[],
+        labels=[],
+        date_from=None,
+        date_to=None,
+        ng_words=["熟女"],
+    )
+    sql = _compile(and_(*conds))
+    # 「movies.id NOT IN (SELECT ... movie_genres ...)」のような形が存在しないこと
+    assert "movies.id NOT IN" not in sql
+
+
+def test_ng_word_with_q_and_genres_combined() -> None:
+    """本番リクエストと同形 (q + genres + ng_words 4 件) で
+    全条件が組み上がることをスモーク。"""
+    from sqlalchemy import and_
+
+    from app.repositories.search_repository import _build_advanced_conditions
+
+    conds = _build_advanced_conditions(
+        q="巨乳",
+        genres=["巨乳"],
+        actresses=[],
+        series_list=[],
+        directors=[],
+        makers=[],
+        labels=[],
+        date_from=None,
+        date_to=None,
+        ng_words=["レズ", "熟女", "スカトロ", "近親相姦"],
+    )
+    sql = _compile(and_(*conds))
+    # q は genres に冗長で落ちる
+    assert "movies.title ILIKE" not in sql
+    # genres フィルタは残る
+    assert "movie_genres" in sql
+    # NG ワード 4 件分の NOT EXISTS が乗っている
+    upper = sql.upper()
+    assert upper.count("NOT (EXISTS") + upper.count("NOT EXISTS") >= 4 * 3  # 4 ワード × 3 サブ (actress/genre/series)
+
+
+def test_q_redundant_with_directors_value() -> None:
+    """directors の値と q が一致する場合も冗長 → 落ちる。"""
+    from sqlalchemy import and_
+
+    from app.repositories.search_repository import _build_advanced_conditions
+
+    conds = _build_advanced_conditions(
+        q="監督X",
+        genres=[],
+        actresses=[],
+        series_list=[],
+        directors=["監督X"],
+        makers=[],
+        labels=[],
+        date_from=None,
+        date_to=None,
+        ng_words=[],
+    )
+    sql = _compile(and_(*conds))
+    # directors フィルタ (director_name IN) は残る
+    assert "director_name IN" in sql
+    assert "監督X" in sql
+    # q のキーワード OR は除去
+    assert "movies.title ILIKE" not in sql
+
+
+def test_q_redundant_with_series_value() -> None:
+    """series_list の値と q が一致する場合も冗長 → 落ちる。"""
+    from sqlalchemy import and_
+
+    from app.repositories.search_repository import _build_advanced_conditions
+
+    conds = _build_advanced_conditions(
+        q="MySeries",
+        genres=[],
+        actresses=[],
+        series_list=["MySeries"],
+        directors=[],
+        makers=[],
+        labels=[],
+        date_from=None,
+        date_to=None,
+        ng_words=[],
+    )
+    sql = _compile(and_(*conds))
+    assert "series_id IN" in sql or "movies.series_id IN" in sql
+    assert "MySeries" in sql
+    # q のキーワード OR は除去
+    assert "movies.title ILIKE" not in sql

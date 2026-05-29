@@ -60,6 +60,12 @@ export default function FeedItem({ item, isActive, isAdjacent = false, isFirst, 
   const [commentCount, setCommentCount] = useState(0);
   const { isAuthenticated, isBookmarked, toggle } = useBookmarks();
 
+  // 別の動画にスワイプ移動した瞬間にコメントシートを閉じる。戻ってきたときに
+  // 開きっぱなしで残らないようにする (要望)。
+  useEffect(() => {
+    if (!isActive) setCommentsOpen(false);
+  }, [isActive]);
+
   // active になった瞬間にコメント件数を 1 度だけ取得してバッジに表示する。
   // ヘッダーの number だけ知りたいので limit=1 で投げて total を読む。
   useEffect(() => {

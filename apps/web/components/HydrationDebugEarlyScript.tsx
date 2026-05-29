@@ -36,6 +36,31 @@ export default function HydrationDebugEarlyScript() {
     var MAX_FIRES = 3;
     var dumping = false;
 
+    // text snippet 採取ヘルパ。
+    // - ownText: 直接の子 (TextNode) を集めた値。タグの直下のテキストだけが
+    //   分かるので、どの要素で text mismatch が起きているか特定しやすい。
+    // - allText: 子孫含む textContent。ownText が空なケース (子要素にラップされた
+    //   text) のフォールバック。
+    // どちらも 80 char で打ち切り、改行・連続スペースは 1 個に潰す。
+    function snippet(s) {
+      if (s == null) return undefined;
+      s = String(s).replace(/[\\s\\u3000]+/g, ' ').replace(/^\\s+|\\s+$/g, '');
+      if (!s) return undefined;
+      if (s.length > 80) s = s.slice(0, 80) + '…';
+      return s;
+    }
+    function ownTextOf(el) {
+      var t = '';
+      var nodes = el.childNodes || [];
+      for (var i = 0; i < nodes.length; i++) {
+        var n = nodes[i];
+        if (n && n.nodeType === 3 /* TEXT_NODE */) {
+          t += n.nodeValue || '';
+        }
+      }
+      return t;
+    }
+
     function summarize(el, depth) {
       if (!el || depth < 0) return null;
       var attrs = {};
@@ -56,14 +81,31 @@ export default function HydrationDebugEarlyScript() {
       }
       var kids = [];
       var children = el.children || [];
-      var max = Math.min(children.length, 8);
+      // 12 まで広げる: ホームの横スクロール内カード列 / 検索ドロップダウンの
+      // タグなど、兄弟要素が 8 を超えるところで text mismatch が起きていると
+      // 切り捨てられて見えなくなるため、もう少し広めに採る。
+      var max = Math.min(children.length, 12);
       for (var j = 0; j < max; j++) {
         kids.push(summarize(children[j], depth - 1));
       }
+      var own = snippet(ownTextOf(el));
+      // 葉ノード or ownText が空のケースで、子孫テキストの断片もみたい。
+      // ただし所要全文 (textContent) を渡すと巨大化するので長さ + 先頭 80 char
+      // のみ。React の text mismatch では実際の text node を持つ要素だけが原因
+      // になるので ownText の方が決定打になりやすい。
+      var allRaw = '';
+      try {
+        allRaw = el.textContent || '';
+      } catch (_) { allRaw = ''; }
+      var allLen = allRaw.length;
+      var all = snippet(allRaw);
       return {
         tag: el.tagName ? el.tagName.toLowerCase() : '?',
         attrs: attrs,
         childCount: children.length,
+        ownText: own,
+        allTextLen: allLen,
+        allText: all,
         children: kids.length > 0 ? kids : undefined,
       };
     }

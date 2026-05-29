@@ -83,6 +83,52 @@ export default function FeedItemVideo({
   // host から外して破棄するために覚えておく。
   const adoptedRef = useRef<HTMLVideoElement | null>(null);
 
+  // ハンドラ props を ref に常時同期する。これにより event listener 側は
+  // 「呼び出し時点で最新の handler を読む」だけで済み、handler identity が
+  // 変わってもリスナを付け直す必要が無くなる。
+  //
+  // 旧実装は adopt/destroy + listener attach を 1 つの useLayoutEffect にまとめ、
+  // その依存配列に handler props を含めていた。FeedItem 側で handleVideoError や
+  // handleLoadStart の identity が isActive / forceFallbackSlug / fallbackEpoch /
+  // item.slug の変化で変わるたびに effect が再実行され、cleanup で promoted
+  // <video> を pause + removeAttribute('src') + load() + removeChild してしまい、
+  // canplay 済みだった要素が rs=0 に巻き戻る → src 同期 useEffect が再 load →
+  // useFeedPlayback の active autoplay promote force-load + hardResetActiveLoad
+  // が走って `loadedmetadata +3〜5s / canplay +5〜12s` の遅延が観測されていた。
+  // adopt/destroy と listener attach を独立 effect に分け、listener attach 側は
+  // ref 経由で handler を読むことで、handler identity 変動の影響を完全に切り離す。
+  const onLoadStartRef = useRef(onLoadStart);
+  const onLoadedMetadataRef = useRef(onLoadedMetadata);
+  const onLoadedDataRef = useRef(onLoadedData);
+  const onCanPlayRef = useRef(onCanPlay);
+  const onSeekedRef = useRef(onSeeked);
+  const onPlayingRef = useRef(onPlaying);
+  const onErrorRef = useRef(onError);
+  useEffect(() => {
+    onLoadStartRef.current = onLoadStart;
+  }, [onLoadStart]);
+  useEffect(() => {
+    onLoadedMetadataRef.current = onLoadedMetadata;
+  }, [onLoadedMetadata]);
+  useEffect(() => {
+    onLoadedDataRef.current = onLoadedData;
+  }, [onLoadedData]);
+  useEffect(() => {
+    onCanPlayRef.current = onCanPlay;
+  }, [onCanPlay]);
+  useEffect(() => {
+    onSeekedRef.current = onSeeked;
+  }, [onSeeked]);
+  useEffect(() => {
+    onPlayingRef.current = onPlaying;
+  }, [onPlaying]);
+  useEffect(() => {
+    onErrorRef.current = onError;
+  }, [onError]);
+
+  // (A) adopt / destroy lifecycle。promotedElement が実際に変わった (= 別要素に
+  // rebind された、または null になった) ときだけ走る。preload や handler 変動では
+  // 走らない。
   useLayoutEffect(() => {
     if (!promotedElement) return;
     const host = hostRef.current;
@@ -112,6 +158,7 @@ export default function FeedItemVideo({
     promotedElement.loop = true;
     promotedElement.playsInline = true;
     promotedElement.controls = false;
+    // 初期 preload はマウント時点の prop で設定する。以降の変動は別 useEffect が同期。
     promotedElement.preload = preload;
     promotedElement.setAttribute(
       "controlsList",
@@ -127,24 +174,6 @@ export default function FeedItemVideo({
     // videoRef を promoted 要素に向ける。
     (videoRef as { current: HTMLVideoElement | null }).current = promotedElement;
 
-    const ls = () => onLoadStart();
-    const lm = () => onLoadedMetadata();
-    const ld = () => onLoadedData();
-    const cp = () => onCanPlay();
-    const sk = () => onSeeked();
-    const pl = () => onPlaying?.();
-    const er = (e: Event) => onError?.(e);
-    const cm = (e: Event) => e.preventDefault();
-
-    promotedElement.addEventListener("loadstart", ls);
-    promotedElement.addEventListener("loadedmetadata", lm);
-    promotedElement.addEventListener("loadeddata", ld);
-    promotedElement.addEventListener("canplay", cp);
-    promotedElement.addEventListener("seeked", sk);
-    promotedElement.addEventListener("playing", pl);
-    promotedElement.addEventListener("error", er);
-    promotedElement.addEventListener("contextmenu", cm);
-
     // 既に canplay/loadeddata/loadedmetadata 到達済みのはずなので、合成イベント
     // として手動で通知して親の videoReady を立てる (新規 listener では二度と
     // 発火しない可能性あり)。
@@ -155,12 +184,15 @@ export default function FeedItemVideo({
     // thumbnail-cover + spinner が残り続ける」状態を誘発していた (P5)。
     // adopt は同期で完了しており adoptedRef はこの直後の return まで確実に
     // promotedElement を指すため、microtask に遅延させずこの場で直接呼ぶ。
+    //
+    // ref 経由で最新の handler を読む (この時点では useEffect で同期される
+    // タイミングより前だが、ref には初期値として最新 prop が入っている)。
     if (promotedElement.readyState >= 3) {
-      onCanPlay();
+      onCanPlayRef.current();
     } else if (promotedElement.readyState >= 2) {
-      onLoadedData();
+      onLoadedDataRef.current();
     } else if (promotedElement.readyState >= 1) {
-      onLoadedMetadata();
+      onLoadedMetadataRef.current();
     }
     // adopt 時点で既に再生中 (promote 元の prefetch buffer が play() させていた
     // ケース、または rapid swipe 後の rebind ケース) なら、playing イベントは
@@ -171,19 +203,12 @@ export default function FeedItemVideo({
     // 存在し、その後 canplay event が再発火しないと thumbnail-cover が残る。
     // onPlaying を経由すれば次の playing event でも復帰できる。
     if (!promotedElement.paused && !promotedElement.ended) {
-      onPlaying?.();
+      onPlayingRef.current?.();
     }
 
     return () => {
-      promotedElement.removeEventListener("loadstart", ls);
-      promotedElement.removeEventListener("loadedmetadata", lm);
-      promotedElement.removeEventListener("loadeddata", ld);
-      promotedElement.removeEventListener("canplay", cp);
-      promotedElement.removeEventListener("seeked", sk);
-      promotedElement.removeEventListener("playing", pl);
-      promotedElement.removeEventListener("error", er);
-      promotedElement.removeEventListener("contextmenu", cm);
-      // host からのデタッチと完全破棄。
+      // host からのデタッチと完全破棄。本当に promotedElement が変わった or null
+      // になった (= unmount) ときだけ走る。handler identity 変動では走らない。
       try {
         promotedElement.pause();
       } catch {
@@ -205,18 +230,48 @@ export default function FeedItemVideo({
         (videoRef as { current: HTMLVideoElement | null }).current = null;
       }
     };
-  }, [
-    promotedElement,
-    preload,
-    onLoadStart,
-    onLoadedMetadata,
-    onLoadedData,
-    onCanPlay,
-    onSeeked,
-    onPlaying,
-    onError,
-    videoRef,
-  ]);
+    // 依存配列は意図的に promotedElement / videoRef のみ。handler や preload の
+    // 変動で adopt/destroy を再走させないこと。preload の追従は別 useEffect、
+    // handler はリスナ側 useEffect (B) で別管理する。
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [promotedElement, videoRef]);
+
+  // (B) promoted 要素へのイベントリスナ attach。adopt が完了した promoted 要素に
+  // 対してのみ走る。中身は ref 経由で最新 handler を呼ぶだけなので、handler
+  // identity が変わっても再 attach は不要。adoptedRef を見ることで「destroy
+  // cleanup と同 commit で adopt が走る」レースを避けつつ、promoted 自体が
+  // 変わったときだけ listener も付け替える。
+  useEffect(() => {
+    if (!promotedElement) return;
+    const ls = () => onLoadStartRef.current();
+    const lm = () => onLoadedMetadataRef.current();
+    const ld = () => onLoadedDataRef.current();
+    const cp = () => onCanPlayRef.current();
+    const sk = () => onSeekedRef.current();
+    const pl = () => onPlayingRef.current?.();
+    const er = (e: Event) => onErrorRef.current?.(e);
+    const cm = (e: Event) => e.preventDefault();
+
+    promotedElement.addEventListener("loadstart", ls);
+    promotedElement.addEventListener("loadedmetadata", lm);
+    promotedElement.addEventListener("loadeddata", ld);
+    promotedElement.addEventListener("canplay", cp);
+    promotedElement.addEventListener("seeked", sk);
+    promotedElement.addEventListener("playing", pl);
+    promotedElement.addEventListener("error", er);
+    promotedElement.addEventListener("contextmenu", cm);
+
+    return () => {
+      promotedElement.removeEventListener("loadstart", ls);
+      promotedElement.removeEventListener("loadedmetadata", lm);
+      promotedElement.removeEventListener("loadeddata", ld);
+      promotedElement.removeEventListener("canplay", cp);
+      promotedElement.removeEventListener("seeked", sk);
+      promotedElement.removeEventListener("playing", pl);
+      promotedElement.removeEventListener("error", er);
+      promotedElement.removeEventListener("contextmenu", cm);
+    };
+  }, [promotedElement]);
 
   // preload 属性の変化 (active になった後など) を促す。
   useEffect(() => {

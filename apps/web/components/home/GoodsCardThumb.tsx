@@ -49,7 +49,12 @@ export default function GoodsCardThumb({ goods, rank }: Props) {
           {goods.title}
         </p>
         {goods.price_min != null && (
-          <p className="gct-price">¥{goods.price_min.toLocaleString()}</p>
+          // Number.prototype.toLocaleString() は引数を渡さないと SSR (Node)
+          // とクライアント (ブラウザ) で参照するデフォルト locale が異なり、
+          // 数値の区切りが server "1,234" / client "1234" や逆になって
+          // React #418 (text content mismatch) を起こすことがある。
+          // 価格は常に日本円表記で固定したいので、明示的に ja-JP に固定する。
+          <p className="gct-price">¥{goods.price_min.toLocaleString("ja-JP")}</p>
         )}
       </div>
       <style>{styles}</style>

@@ -7,6 +7,7 @@ import SessionProvider from "@/components/SessionProvider";
 import SavedFilterEnforcer from "@/components/SavedFilterEnforcer";
 import FullpageInterstitial from "@/components/ads/FullpageInterstitial";
 import BuildIdLogger from "@/components/BuildIdLogger";
+import HydrationDebugEarlyScript from "@/components/HydrationDebugEarlyScript";
 import {
   SITE_NAME,
   SITE_URL,
@@ -118,6 +119,14 @@ export default function RootLayout({
     <html lang="ja">
       <head>
         <meta name="x-build-id" content={BUILD_ID} />
+        {/*
+         * React #418 (hydration mismatch) を「listener が走り始める前」に
+         * 取り逃がさないための同期 <script>。useEffect 版は hydration 完了後に
+         * しか listener を貼れず本番で空振りしたため、<head> 内 inline に移動。
+         * ?vt=1 か NEXT_PUBLIC_HYDRATION_DEBUG=1 のときだけ実装が走る。
+         * 詳細は components/HydrationDebugEarlyScript.tsx。
+         */}
+        <HydrationDebugEarlyScript />
         {/*
          * BottomNav の Chrome 限定フルページ遷移チラつき対策。
          * 同期スクリプトとして <head> に置き、ハイドレーション以前 / first paint

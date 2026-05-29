@@ -86,7 +86,14 @@ class Movie(Base):
 
 class MovieGenre(Base):
     __tablename__ = "movie_genres"
-    __table_args__ = (UniqueConstraint("movie_id", "genre_id"),)
+    # PK (movie_id, genre_id) は「ある作品のジャンルを引く」用途には最適だが、
+    # 逆方向 (「あるジャンルを持つ作品を引く」) の leading-column index が無いと
+    # Seq Scan に倒れるため、(genre_id, movie_id) の逆方向 index を追加する。
+    # マイグレーション 5e1c8b2a90f4 と一致させること。
+    __table_args__ = (
+        UniqueConstraint("movie_id", "genre_id"),
+        Index("ix_movie_genres_genre_id", "genre_id", "movie_id"),
+    )
 
     movie_id: Mapped[str] = mapped_column(ForeignKey("movies.id", ondelete="CASCADE"), primary_key=True)
     genre_id: Mapped[int] = mapped_column(ForeignKey("genres.id", ondelete="CASCADE"), primary_key=True)
@@ -94,7 +101,12 @@ class MovieGenre(Base):
 
 class MovieActress(Base):
     __tablename__ = "movie_actresses"
-    __table_args__ = (UniqueConstraint("movie_id", "actress_id"),)
+    # PK (movie_id, actress_id) と同じ理由で (actress_id, movie_id) の
+    # 逆方向 index を追加する。マイグレーション 5e1c8b2a90f4 と一致させること。
+    __table_args__ = (
+        UniqueConstraint("movie_id", "actress_id"),
+        Index("ix_movie_actresses_actress_id", "actress_id", "movie_id"),
+    )
 
     movie_id: Mapped[str] = mapped_column(ForeignKey("movies.id", ondelete="CASCADE"), primary_key=True)
     actress_id: Mapped[int] = mapped_column(ForeignKey("actresses.id", ondelete="CASCADE"), primary_key=True)

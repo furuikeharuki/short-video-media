@@ -7,7 +7,6 @@ import SimpleBackButton from "@/components/SimpleBackButton";
 import MovieCardThumb from "@/components/home/MovieCardThumb";
 import { getGenreMovies } from "@/lib/api/genres";
 import { SITE_NAME, SITE_URL, SITE_LOCALE } from "@/lib/config/seo";
-import GenreSavedFilterRedirect from "./GenreSavedFilterRedirect";
 
 // ISR: ジャンル集約ページは 1 時間キャッシュ。クローラ/初回表示で DB に負荷を
 // かけないようにしつつ、新作の取り込みに合わせて緩やかに更新する。
@@ -133,11 +132,6 @@ export default async function GenrePage({ params }: PageProps) {
           <SimpleBackButton fallbackHref="/" />
         </div>
       </div>
-
-      {/* 保存済み詳細検索条件があれば、現在ジャンルを AND 固定したまま
-          /search?genre=<genre>&... へ遷移して条件適用済みの結果を表示する。
-          条件が無いユーザーはこの LP にそのまま留まる。 */}
-      <GenreSavedFilterRedirect genre={decoded} />
 
       <div style={styles.body}>
         <header style={styles.header}>

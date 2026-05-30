@@ -1,8 +1,12 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
 
 import type { MovieCard } from "@/lib/api/feed";
+import {
+  shouldDeferPrefetch,
+  subscribeActivePlayback,
+} from "@/lib/activePlayback";
 import {
   extractBasename,
   extractHost,
@@ -229,6 +233,19 @@ export function usePrefetchVideoBytes(
   handleSlotCanPlay: (slug: string) => void;
 } {
   const [slots, setSlots] = useState<PrefetchSlot[]>([]);
+  // 現在再生中 (中央 active) の <video> がまだ安定再生していない (再生開始前 /
+  // waiting / stalled) 間は byte-prefetch を遅らせる。隠し <video preload="auto">
+  // が active の Range request と帯域を取り合って「現在動画が止まる」のを防ぐ。
+  // active が playing に入ったら false に戻り、prefetch (次の 1〜2 本) が解禁される。
+  const deferForActive = useSyncExternalStore(
+    subscribeActivePlayback,
+    shouldDeferPrefetch,
+    // SSR / 初期値: active 動画はまだ無いので抑制しない。
+    () => false,
+  );
+  // rapid swipe と「現在動画バッファリング中」を統合した抑制フラグ。
+  // どちらの状態でも中央 <video> の帯域を最優先するため byte-prefetch を絞る。
+  const suppressPrefetch = isRapidSwiping || deferForActive;
   // effect 内から最新 slots を sync 読みするための ref (state 反映前に
   // 同 effect サイクルで複数 target を判定するため)。
   const slotsRef = useRef<PrefetchSlot[]>(slots);
@@ -453,13 +470,23 @@ export function usePrefetchVideoBytes(
     const inFlight = inFlightRef.current;
     const slugToId = slugToIdRef.current;
 
-    // rapid swipe 中は current+1 のみを許可し、+2/+3 は targets から外して
-    // slot を確実に +1 用に解放する。policy.aheadCount=0 (Save-Data / 2g) の
-    // ときは targets が空のままなのでこの分岐でも何も足さない。
-    const activeTargets =
-      isRapidSwiping && targets.length > 0
-        ? targets.filter((t) => t.offset === PREFETCH_START_OFFSET)
-        : targets;
+    // 抑制ロジック (現在動画優先):
+    //   - 現在動画がバッファリング中 (deferForActive): byte-prefetch を全停止する。
+    //     隠し <video> を全てアンマウントし、active の Range 取得に帯域を集中させる。
+    //     active が playing に入ると deferForActive=false に戻り prefetch が解禁される。
+    //   - rapid swipe 中 (deferForActive ではない): current+1 のみ許可し、+2/+3/-1 は
+    //     targets から外して slot を +1 用に解放する (次に確実に表示される 1 本は温める)。
+    //   - 通常時: targets をそのまま使う。
+    // policy.aheadCount=0 (Save-Data / 2g) のときは targets が空のままなので
+    // いずれの分岐でも何も足さない。
+    let activeTargets: Target[];
+    if (deferForActive) {
+      activeTargets = [];
+    } else if (isRapidSwiping && targets.length > 0) {
+      activeTargets = targets.filter((t) => t.offset === PREFETCH_START_OFFSET);
+    } else {
+      activeTargets = targets;
+    }
 
     // slug -> id 逆引きを更新 (activeTargets ベース)
     slugToId.clear();
@@ -662,10 +689,12 @@ export function usePrefetchVideoBytes(
     return () => {
       if (upcomingTimer) clearTimeout(upcomingTimer);
     };
-    // targetsKey / isRapidSwiping / policy.preload・aheadCount が変わったときに走り直す。
-    // targets は毎レンダー新オブジェクトなので key 化した文字列を使う。
+    // targetsKey / isRapidSwiping / deferForActive / policy.preload・aheadCount が
+    // 変わったときに走り直す。deferForActive が true→false に戻った瞬間に prefetch を
+    // 再開させるため、依存に含める。targets は毎レンダー新オブジェクトなので key 化した
+    // 文字列を使う。
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [targetsKey, isRapidSwiping, policy.preload, policy.aheadCount, currentIndex]);
+  }, [targetsKey, isRapidSwiping, deferForActive, policy.preload, policy.aheadCount, currentIndex]);
 
   // アンマウント時に全 resolve を abort
   useEffect(() => {

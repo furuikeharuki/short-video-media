@@ -140,6 +140,31 @@ export default async function GenrePage({ params }: PageProps) {
             ジャンル「{decoded}」のAVショート動画
             {total > 0 ? ` ${total.toLocaleString()}件` : ""}。新作順で試し見できます。
           </p>
+          {/* このジャンルを固定したまま、女優 / メーカー / 期間などで AND 絞り込みできる導線。
+              遷移先 (/search?genre=...) でヘッダーのフィルターから詳細条件を追加すると、
+              genre を AND に保ったまま掛け合わせ検索になる。 */}
+          <Link
+            href={`/search?genre=${encodeURIComponent(decoded)}`}
+            style={styles.refineLink}
+            prefetch={false}
+          >
+            <svg
+              width="15"
+              height="15"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+              strokeLinecap="round"
+              aria-hidden="true"
+              style={{ flexShrink: 0 }}
+            >
+              <line x1="4" y1="6" x2="20" y2="6" />
+              <line x1="4" y1="12" x2="20" y2="12" />
+              <line x1="4" y1="18" x2="20" y2="18" />
+            </svg>
+            このジャンル内を詳細検索
+          </Link>
         </header>
 
         <div className="genre-grid">
@@ -228,6 +253,20 @@ const styles: Record<string, React.CSSProperties> = {
     color: "rgba(255,255,255,0.55)",
     lineHeight: 1.6,
     marginTop: "8px",
+  },
+  refineLink: {
+    display: "inline-flex",
+    alignItems: "center" as const,
+    gap: "6px",
+    marginTop: "12px",
+    padding: "8px 14px",
+    background: "rgba(124,183,255,0.12)",
+    border: "1px solid rgba(124,183,255,0.3)",
+    color: "#7cb7ff",
+    fontSize: "13px",
+    fontWeight: 600,
+    borderRadius: "999px",
+    textDecoration: "none",
   },
   moreWrap: {
     marginTop: "20px",

@@ -4,6 +4,7 @@ import BottomNav from "@/components/BottomNav";
 import BottomNavFreezeBootstrap from "@/components/BottomNavFreezeBootstrap";
 import NavigationLoadingOverlay from "@/components/NavigationLoadingOverlay";
 import SessionProvider from "@/components/SessionProvider";
+import Ga4UserIdBinder from "@/components/analytics/Ga4UserIdBinder";
 import SavedFilterEnforcer from "@/components/SavedFilterEnforcer";
 import FullpageInterstitial from "@/components/ads/FullpageInterstitial";
 import BuildIdLogger from "@/components/BuildIdLogger";
@@ -163,6 +164,10 @@ export default function RootLayout({
       </head>
       <body>
         <SessionProvider>
+          {/* Auth.js のセッションから内部 user_id を取り出して GA4 に流すバインダ。
+              GA_ID 未設定 / 未ログイン / SSR では no-op。詳細は
+              components/analytics/Ga4UserIdBinder.tsx 冒頭コメント参照。 */}
+          <Ga4UserIdBinder />
           {/* /feed と /search 表示時に保存済みフィルターを URL に自動注入し、
               children に対して enforce ステータス (pending/ready) を Context で共有する。
               FeedClient / SearchInfiniteGrid はこの値が ready になるまで

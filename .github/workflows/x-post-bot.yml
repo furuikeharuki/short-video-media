@@ -1,0 +1,118 @@
+# ============================================================================
+# .github/workflows/x-post-bot.yml
+# ----------------------------------------------------------------------------
+# AV Shorts の流入施策として、自分の X (旧 Twitter) アカウントへ定期投稿する
+# ボットを GitHub Actions の cron で実行する。
+#
+# 設計 / 安全策 (重要):
+#   - 投稿するのは自アカウントへの通常ポストのみ。
+#     他人への自動リプライ / メンション / DM / フォローは一切行わない
+#     (apps/jobs/src/x_client.py が POST /2/tweets だけを叩く実装)。
+#   - 投稿候補はサイトの公開 API (/api/v1/home) から取得するため、DB / SSH /
+#     DMM の Secrets は不要。X の認証情報だけで完結する。
+#   - X の認証情報 (Secrets) が未設定なら投稿せず dry-run にフォールバックする。
+#   - 投稿頻度は控えめ (1 日 2 回)。
+#
+# スケジュール (頻度は控えめに。JST 基準でコメント):
+#   - 03:10 UTC = 12:10 JST (昼)   slot=0
+#   - 12:10 UTC = 21:10 JST (夜)   slot=1
+#   slot は本文・誘導先 (女優/ジャンル/作品) の決定的ローテーションに使う。
+#
+# 手動実行:
+#   workflow_dispatch から dry_run を選んで本文だけ確認できる
+#   (デフォルト true = 安全側)。
+#
+# 必要な GitHub Secrets (本番投稿時。未設定なら dry-run になる):
+#   X_API_KEY               : X Developer Portal の API Key (Consumer Key)
+#   X_API_SECRET            : API Key Secret (Consumer Secret)
+#   X_ACCESS_TOKEN          : Access Token (自アカウントに紐付けて発行)
+#   X_ACCESS_TOKEN_SECRET   : Access Token Secret
+# 任意 Secrets / Variables:
+#   X_BOT_API_BASE_URL      : 公開 API のベース URL (未設定なら https://av-shorts-api.com)
+# ============================================================================
+name: X Post Bot
+
+on:
+  schedule:
+    - cron: "10 3 * * *"    # 12:10 JST (昼)
+    - cron: "10 12 * * *"   # 21:10 JST (夜)
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "true で投稿せず本文だけ出力 (安全側のデフォルト)"
+        type: boolean
+        required: false
+        default: true
+      slot:
+        description: "投稿スロット番号 (種別/文面ローテーション用、空なら 0)"
+        required: false
+        default: ""
+
+concurrency:
+  group: x-post-bot
+  cancel-in-progress: false
+
+jobs:
+  post:
+    name: post to X (own account only)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    env:
+      # X 認証情報 (未設定なら post_to_x が自動で dry-run に切替)
+      X_API_KEY: ${{ secrets.X_API_KEY }}
+      X_API_SECRET: ${{ secrets.X_API_SECRET }}
+      X_ACCESS_TOKEN: ${{ secrets.X_ACCESS_TOKEN }}
+      X_ACCESS_TOKEN_SECRET: ${{ secrets.X_ACCESS_TOKEN_SECRET }}
+      X_BOT_API_BASE_URL: ${{ secrets.X_BOT_API_BASE_URL }}
+      PYTHONUNBUFFERED: "1"
+      PIP_DISABLE_PIP_VERSION_CHECK: "1"
+
+    defaults:
+      run:
+        working-directory: apps/jobs
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+          cache-dependency-path: |
+            apps/jobs/pyproject.toml
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          # post_to_x は apps/api のモデルを import しないため jobs 単体で足りる
+          pip install -e .
+
+      - name: Resolve run parameters
+        id: params
+        run: |
+          set -euo pipefail
+          # schedule トリガでは inputs が無いため cron の時刻で slot を決める。
+          # workflow_dispatch では inputs を優先する。
+          EVENT="${{ github.event_name }}"
+          if [ "$EVENT" = "workflow_dispatch" ]; then
+            DRY_RUN="${{ github.event.inputs.dry_run }}"
+            SLOT="${{ github.event.inputs.slot }}"
+          else
+            DRY_RUN="false"
+            # cron の時刻 (UTC hour) で slot を割り当てる: 03時→0 / それ以外→1
+            HOUR="$(date -u +%H)"
+            if [ "$HOUR" = "03" ]; then SLOT="0"; else SLOT="1"; fi
+          fi
+          echo "dry_run=${DRY_RUN:-true}" >> "$GITHUB_OUTPUT"
+          echo "slot=${SLOT:-0}" >> "$GITHUB_OUTPUT"
+          echo "resolved dry_run=${DRY_RUN:-true} slot=${SLOT:-0} event=$EVENT"
+
+      - name: Run X post bot
+        run: |
+          set -euo pipefail
+          ARGS=""
+          if [ "${{ steps.params.outputs.dry_run }}" = "true" ]; then
+            ARGS="--dry-run"
+          fi
+          python -m src.post_to_x $ARGS --slot "${{ steps.params.outputs.slot }}"

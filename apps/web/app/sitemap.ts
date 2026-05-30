@@ -3,9 +3,11 @@ import { SITE_URL } from "@/lib/config/seo";
 
 type MovieSitemapEntry = { slug: string; last_modified: string | null };
 type ActressSitemapEntry = { name: string; last_modified: string | null };
+type GenreSitemapEntry = { name: string; last_modified: string | null };
 type SitemapUrls = {
   movies: MovieSitemapEntry[];
   actresses: ActressSitemapEntry[];
+  genres?: GenreSitemapEntry[];
 };
 
 const API_BASE_URL =
@@ -29,18 +31,18 @@ async function fetchSitemapUrls(): Promise<SitemapUrls> {
       next: { revalidate: 3600 },
     });
     if (!res.ok) {
-      return { movies: [], actresses: [] };
+      return { movies: [], actresses: [], genres: [] };
     }
     return (await res.json()) as SitemapUrls;
   } catch {
     // ビルド時に API に到達できない場合 (CI など) は静的 URL だけで生成する。
-    return { movies: [], actresses: [] };
+    return { movies: [], actresses: [], genres: [] };
   }
 }
 
 export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
   const now = new Date();
-  const { movies, actresses } = await fetchSitemapUrls();
+  const { movies, actresses, genres = [] } = await fetchSitemapUrls();
 
   // 静的ページ。/age-gate は middleware と metadata で noindex を明示しているため
   // sitemap に載せない。/search?genre=... 等のカテゴリページも `robots: { index: false }`
@@ -125,5 +127,19 @@ export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
     priority: 0.5,
   }));
 
-  return [...staticEntries, ...actressEntries, ...movieEntries];
+  // ジャンル集約ページ (/genres/[genre])。/search?genre=... は noindex のままで、
+  // index 対象はこちらの集約ページに寄せる。
+  const genreEntries: MetadataRoute.Sitemap = genres.map((g) => ({
+    url: `${SITE_URL}/genres/${encodeURIComponent(g.name)}`,
+    lastModified: parseLastModified(g.last_modified, now),
+    changeFrequency: "daily",
+    priority: 0.6,
+  }));
+
+  return [
+    ...staticEntries,
+    ...genreEntries,
+    ...actressEntries,
+    ...movieEntries,
+  ];
 }

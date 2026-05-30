@@ -28,15 +28,17 @@ class _FakeSession:
     sitemap エンドポイントは
       1. SELECT movies (Movie.slug, Movie.primary_date)
       2. SELECT actresses (Actress.name, MAX(Movie.primary_date))
-    の 2 回しか SELECT を走らせない前提で、それぞれの結果を順番に返す。
+      3. SELECT genres (Genre.name, MAX(Movie.primary_date))
+    の 3 回しか SELECT を走らせない前提で、それぞれの結果を順番に返す。
     """
 
     def __init__(
         self,
         movie_rows: list[tuple],
         actress_rows: list[tuple],
+        genre_rows: list[tuple],
     ) -> None:
-        self._queue: list[list[tuple]] = [movie_rows, actress_rows]
+        self._queue: list[list[tuple]] = [movie_rows, actress_rows, genre_rows]
 
     async def execute(self, statement: Any):  # type: ignore[no-untyped-def]
         rows = self._queue.pop(0) if self._queue else []
@@ -44,9 +46,11 @@ class _FakeSession:
 
 
 def _make_client(
-    movie_rows: list[tuple], actress_rows: list[tuple]
+    movie_rows: list[tuple],
+    actress_rows: list[tuple],
+    genre_rows: list[tuple] | None = None,
 ) -> TestClient:
-    session = _FakeSession(movie_rows, actress_rows)
+    session = _FakeSession(movie_rows, actress_rows, genre_rows or [])
 
     async def _fake_get_db():  # type: ignore[no-untyped-def]
         yield session
@@ -71,7 +75,11 @@ def test_sitemap_urls_returns_movies_and_actresses() -> None:
         ("Aoi Yuki", date(2026, 5, 1)),
         ("Hanako", None),
     ]
-    client = _make_client(movie_rows, actress_rows)
+    genre_rows = [
+        ("巨乳", date(2026, 5, 1)),
+        ("人妻", None),
+    ]
+    client = _make_client(movie_rows, actress_rows, genre_rows)
 
     resp = client.get("/api/v1/sitemap/urls")
     assert resp.status_code == 200
@@ -90,13 +98,17 @@ def test_sitemap_urls_returns_movies_and_actresses() -> None:
     assert body["actresses"][0]["last_modified"] == "2026-05-01"
     assert body["actresses"][1]["last_modified"] is None
 
+    assert [g["name"] for g in body["genres"]] == ["巨乳", "人妻"]
+    assert body["genres"][0]["last_modified"] == "2026-05-01"
+    assert body["genres"][1]["last_modified"] is None
+
 
 def test_sitemap_urls_returns_empty_lists_when_no_rows() -> None:
-    client = _make_client([], [])
+    client = _make_client([], [], [])
 
     resp = client.get("/api/v1/sitemap/urls")
     assert resp.status_code == 200
-    assert resp.json() == {"movies": [], "actresses": []}
+    assert resp.json() == {"movies": [], "actresses": [], "genres": []}
 
 
 def test_sitemap_urls_respects_limit_query_params() -> None:

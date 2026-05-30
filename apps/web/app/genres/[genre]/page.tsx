@@ -5,6 +5,7 @@ import { notFound } from "next/navigation";
 import AdSlot from "@/components/ads/AdSlot";
 import SimpleBackButton from "@/components/SimpleBackButton";
 import MovieCardThumb from "@/components/home/MovieCardThumb";
+import GenreFilteredView from "./GenreFilteredView";
 import { getGenreMovies } from "@/lib/api/genres";
 import { SITE_NAME, SITE_URL, SITE_LOCALE } from "@/lib/config/seo";
 
@@ -133,7 +134,7 @@ export default async function GenrePage({ params }: PageProps) {
         </div>
       </div>
 
-      <div style={styles.body}>
+      <div className="genre-lp-default" style={styles.body}>
         <header style={styles.header}>
           <h1 style={styles.title}>#{decoded}</h1>
           <p style={styles.desc}>ジャンル「{decoded}」のAVショート動画</p>
@@ -173,6 +174,11 @@ export default async function GenrePage({ params }: PageProps) {
           <AdSlot zone="mobileBanner300x250" />
         </div>
       </div>
+
+      {/* 詳細検索条件がある場合のみ、クライアントで「genre AND 条件」の結果に差し替える。
+          条件が無ければ何も描画せず、上の LP がそのまま見える (SEO 向け親 LP を維持)。 */}
+      <GenreFilteredView genre={decoded} />
+
       <style>{pageCSS}</style>
     </main>
   );

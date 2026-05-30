@@ -2,7 +2,9 @@
 # .github/workflows/jobs-bootstrap.yml
 # ----------------------------------------------------------------------------
 # 一括取り直しジョブ (旧 scheduler.py の SCHEDULER_BOOTSTRAP=true 相当)。
-# matrix で年並列に sync_catalog --mode full を走らせる。
+# matrix で「年 × 四半期 (Q1-Q4)」並列に sync_catalog --mode full を走らせる。
+# 1 年単位だと 1 ジョブが 4h timeout を超えるため、四半期に分割して
+# 1 ジョブあたりの実行時間を ~1/4 に抑える (timeout-minutes も 240 → 350 に引き上げ)。
 #
 # ホスティングの判断:
 #   incremental (sync_catalog / sync_actress) は VPS 上で実行する
@@ -37,8 +39,9 @@
 #     - default: 2018-2026 / videoa,videoc
 #
 # 注意:
-#   - matrix で年×フロアを並列実行する。Free プランの同時並列数は 20、月 2000 分。
-#   - 1 年あたり ~30-90 分。9 年で並列 9 走らせれば 1 時間ちょっとで完走する想定。
+#   - matrix で年×四半期を並列実行する。Free プランの同時並列数は 20、月 2000 分。
+#   - 9 年 × 4 四半期 = 36 ジョブ。max-parallel: 8 で DMM API / VPS への負荷を抑える。
+#   - 1 四半期あたり ~15-30 分想定 (1 年分を 1/4 に分割)。
 #   - sync_actress_profiles / goods は別ワークフロー (後続ステップ) で直列に走らせる。
 # ============================================================================
 name: Jobs - bootstrap (full re-sync)
@@ -78,41 +81,62 @@ jobs:
   # 1. 動画フロアを年並列で full 取得
   # ─────────────────────────────────────────────────────────────────
   prepare-matrix:
-    name: prepare year matrix
+    name: prepare year x quarter matrix
     runs-on: ubuntu-latest
     outputs:
-      years: ${{ steps.gen.outputs.years }}
+      periods: ${{ steps.gen.outputs.periods }}
     steps:
-      - name: Generate year list as JSON
+      - name: Generate year x quarter list as JSON
         id: gen
         env:
           START: ${{ github.event.inputs.start_year }}
           END: ${{ github.event.inputs.end_year }}
         run: |
           set -euo pipefail
+          # 1 年単位の full sync は重く 4h timeout を超えるため、
+          # 年 × 四半期 (Q1-Q4) に分割して 1 ジョブあたりの実行時間を ~1/4 に抑える。
+          # 各四半期の開始/終了日は固定 (Q1: 01-01..03-31 等) なので閏年の特別扱いは不要。
+          # sync_catalog 内部で更に月スライスに分解するため Feb の日数差も自動で吸収される。
           python3 - <<PY >> "$GITHUB_OUTPUT"
           import json, os
           s = int(os.environ["START"])
           e = int(os.environ["END"])
           assert s <= e, "start_year must be <= end_year"
-          years = list(range(s, e + 1))
-          print(f"years={json.dumps(years)}")
+          quarters = [
+              (1, "01-01", "03-31"),
+              (2, "04-01", "06-30"),
+              (3, "07-01", "09-30"),
+              (4, "10-01", "12-31"),
+          ]
+          periods = []
+          for year in range(s, e + 1):
+              for q, start_md, end_md in quarters:
+                  periods.append({
+                      "year": year,
+                      "quarter": q,
+                      "label": f"{year}Q{q}",
+                      "start_date": f"{year}-{start_md}",
+                      "end_date": f"{year}-{end_md}",
+                  })
+          print(f"periods={json.dumps(periods)}")
           PY
 
   sync-year:
-    name: "sync_catalog full ${{ matrix.year }}"
+    name: "sync_catalog full ${{ matrix.period.label }}"
     needs: prepare-matrix
     runs-on: ubuntu-latest
-    timeout-minutes: 240
+    # 年 × 四半期に分割したので 1 ジョブの想定実行時間は ~1h だが、
+    # DMM API の throttling や日米間 RTT で伸びる余地を見て 350 分に設定 (旧 240 分)。
+    timeout-minutes: 350
     environment: production
     strategy:
-      # 1 年失敗しても他年は続けたい。
+      # 1 期間失敗しても他は続けたい。
       fail-fast: false
-      # 同時並列度。Free プランは同一 repo で同時 20 ジョブまでなので、
-      # 9 年 (2018-2026) なら全部並列でも問題ない。
-      max-parallel: 9
+      # 年 × 四半期 = 9 年なら 36 ジョブに展開される。Free プランの同時 20 ジョブ
+      # 上限と、DMM API / VPS Postgres (RAM 1.9GB) への負荷を考え 8 並列に抑える。
+      max-parallel: 8
       matrix:
-        year: ${{ fromJson(needs.prepare-matrix.outputs.years) }}
+        period: ${{ fromJson(needs.prepare-matrix.outputs.periods) }}
 
     steps:
       - name: Checkout
@@ -180,7 +204,7 @@ jobs:
             sleep 1
           done
 
-      - name: Run sync_catalog full for ${{ matrix.year }}
+      - name: Run sync_catalog full for ${{ matrix.period.label }}
         env:
           # asyncpg は postgresql+asyncpg:// プレフィクスを受け取る (sqlalchemy 側)。
           DATABASE_URL: "postgresql+asyncpg://${{ secrets.XSERVER_DB_USER }}:${{ secrets.XSERVER_DB_PASSWORD }}@127.0.0.1:15432/${{ secrets.XSERVER_DB_NAME }}"
@@ -190,15 +214,16 @@ jobs:
           APP_ENV: production
           DEPLOY_TARGET: xserver
           FLOORS: ${{ github.event.inputs.floors }}
-          YEAR: ${{ matrix.year }}
+          START_DATE: ${{ matrix.period.start_date }}
+          END_DATE: ${{ matrix.period.end_date }}
         working-directory: apps/jobs
         run: |
           set -euo pipefail
           python -m src.sync_catalog \
             --mode full \
             --floors "${FLOORS}" \
-            --start-date "${YEAR}-01-01" \
-            --end-date "${YEAR}-12-31"
+            --start-date "${START_DATE}" \
+            --end-date "${END_DATE}"
 
       - name: Close SSH tunnel
         if: always()
@@ -219,7 +244,7 @@ jobs:
     needs: sync-year
     if: ${{ github.event.inputs.run_actress == 'true' }}
     runs-on: ubuntu-latest
-    timeout-minutes: 240
+    timeout-minutes: 350
     environment: production
 
     steps:
@@ -288,21 +313,22 @@ jobs:
   # 3. (optional) goods フロアを年並列で取得 (actress に依存)
   # ─────────────────────────────────────────────────────────────────
   sync-goods:
-    name: "sync_catalog goods ${{ matrix.year }}"
+    name: "sync_catalog goods ${{ matrix.period.label }}"
     needs:
+      - prepare-matrix
       - sync-year
       - sync-actress
     # actress を skip しても goods だけ走らせたいケースもあるが、
     # 仕様 (goods は DB の女優名でフィルタ) 上 actress 後にしか走らせない。
     if: ${{ github.event.inputs.run_goods == 'true' && (github.event.inputs.run_actress == 'true' || always()) }}
     runs-on: ubuntu-latest
-    timeout-minutes: 240
+    timeout-minutes: 350
     environment: production
     strategy:
       fail-fast: false
-      max-parallel: 9
+      max-parallel: 8
       matrix:
-        year: ${{ fromJson(needs.prepare-matrix.outputs.years) }}
+        period: ${{ fromJson(needs.prepare-matrix.outputs.periods) }}
 
     steps:
       - name: Checkout
@@ -364,7 +390,7 @@ jobs:
             sleep 1
           done
 
-      - name: Run sync_catalog goods full for ${{ matrix.year }}
+      - name: Run sync_catalog goods full for ${{ matrix.period.label }}
         env:
           DATABASE_URL: "postgresql+asyncpg://${{ secrets.XSERVER_DB_USER }}:${{ secrets.XSERVER_DB_PASSWORD }}@127.0.0.1:15432/${{ secrets.XSERVER_DB_NAME }}"
           DMM_API_ID: ${{ secrets.DMM_API_ID }}
@@ -372,15 +398,16 @@ jobs:
           DMM_LINK_AFFILIATE_ID: ${{ secrets.DMM_LINK_AFFILIATE_ID }}
           APP_ENV: production
           DEPLOY_TARGET: xserver
-          YEAR: ${{ matrix.year }}
+          START_DATE: ${{ matrix.period.start_date }}
+          END_DATE: ${{ matrix.period.end_date }}
         working-directory: apps/jobs
         run: |
           set -euo pipefail
           python -m src.sync_catalog \
             --mode full \
             --floors "goods" \
-            --start-date "${YEAR}-01-01" \
-            --end-date "${YEAR}-12-31"
+            --start-date "${START_DATE}" \
+            --end-date "${END_DATE}"
 
       - name: Close SSH tunnel
         if: always()

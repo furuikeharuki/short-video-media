@@ -29,7 +29,16 @@ from dataclasses import dataclass
 
 import httpx
 
-X_TWEETS_ENDPOINT = "https://api.twitter.com/2/tweets"
+# X API v2 のツイート作成エンドポイント。
+# 必ず公式 API ホスト (api.x.com) を使う。通常 Web ホスト (x.com) や、
+# Cloudflare 保護下に置かれた古いホストへ向けると 403 + "Just a moment..."
+# という Cloudflare のボットチャレンジ HTML が返り、投稿が失敗する。
+X_API_HOST = "https://api.x.com"
+X_TWEETS_ENDPOINT = f"{X_API_HOST}/2/tweets"
+
+# Cloudflare はデフォルトの `python-httpx/x.y.z` User-Agent をボットとみなして
+# チャレンジページを返すことがあるため、明示的に UA を付与する。
+X_USER_AGENT = "short-video-media-x-bot/1.0"
 
 # X のポスト本文上限 (通常アカウント)。これを超えると 403 になるため事前に弾く。
 MAX_TWEET_LENGTH = 280
@@ -138,6 +147,7 @@ def post_tweet(creds: XCredentials, text: str, *, client: httpx.Client | None = 
     headers = {
         "Authorization": header,
         "Content-Type": "application/json",
+        "User-Agent": X_USER_AGENT,
     }
     payload = {"text": text}
 

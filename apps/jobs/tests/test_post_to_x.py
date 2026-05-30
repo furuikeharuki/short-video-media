@@ -28,7 +28,14 @@ from src.post_candidates import (  # noqa: E402
     rotate_kind,
 )
 from src.post_templates import render_post, sanitize_text  # noqa: E402
-from src.x_client import XCredentials, _build_oauth1_header  # noqa: E402
+from src.x_client import (  # noqa: E402
+    X_TWEETS_ENDPOINT,
+    X_USER_AGENT,
+    PostResult,
+    XCredentials,
+    _build_oauth1_header,
+    post_tweet,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -281,10 +288,85 @@ def test_oauth1_header_format():
         api_key="ck", api_secret="cs", access_token="at", access_token_secret="ats"
     )
     header = _build_oauth1_header(
-        creds, "POST", "https://api.twitter.com/2/tweets",
+        creds, "POST", X_TWEETS_ENDPOINT,
         nonce="abc", timestamp="1700000000",
     )
     assert header.startswith("OAuth ")
     assert 'oauth_consumer_key="ck"' in header
     assert "oauth_signature=" in header
     assert 'oauth_signature_method="HMAC-SHA1"' in header
+
+
+# ---------------------------------------------------------------------------
+# 投稿エンドポイント: 必ず公式 API ホスト (api.x.com) を使う
+#
+# 通常 Web ホスト (https://x.com/...) に向けると Cloudflare のボット保護で
+# 403 + "Just a moment..." HTML が返り投稿が失敗するため、ホストを検証する。
+# ---------------------------------------------------------------------------
+
+def test_endpoint_uses_official_api_host():
+    assert X_TWEETS_ENDPOINT == "https://api.x.com/2/tweets"
+
+
+def test_endpoint_is_not_web_host():
+    # 通常 Web ホスト (x.com / www.x.com / twitter.com の Web 側) は使わない。
+    assert not X_TWEETS_ENDPOINT.startswith("https://x.com/")
+    assert not X_TWEETS_ENDPOINT.startswith("https://www.x.com/")
+    assert not X_TWEETS_ENDPOINT.startswith("https://twitter.com/")
+    # api. サブドメインの公式ホストであること。
+    assert X_TWEETS_ENDPOINT.startswith("https://api.")
+
+
+class _FakeResponse:
+    def __init__(self, status_code: int, json_body=None, text: str = ""):
+        self.status_code = status_code
+        self._json = json_body or {}
+        self.text = text
+
+    def json(self):
+        return self._json
+
+
+class _FakeClient:
+    """post 先 URL / headers を記録するだけのスタブ。"""
+
+    def __init__(self, response: _FakeResponse):
+        self._response = response
+        self.last_url: str | None = None
+        self.last_headers: dict | None = None
+
+    def post(self, url, headers=None, json=None):
+        self.last_url = url
+        self.last_headers = headers
+        return self._response
+
+
+def test_post_tweet_posts_to_official_api_host():
+    creds = XCredentials(
+        api_key="ck", api_secret="cs", access_token="at", access_token_secret="ats"
+    )
+    client = _FakeClient(_FakeResponse(201, {"data": {"id": "123"}}))
+    result = post_tweet(creds, "hello", client=client)
+
+    assert isinstance(result, PostResult)
+    assert result.ok is True
+    assert result.tweet_id == "123"
+    # 実際に叩いた URL が公式 API ホストであること。
+    assert client.last_url == "https://api.x.com/2/tweets"
+    assert client.last_url.startswith("https://api.x.com/")
+    assert "://x.com/" not in client.last_url
+
+
+def test_post_tweet_sets_browser_like_user_agent():
+    # Cloudflare がデフォルト python-httpx UA をチャレンジするのを避けるため、
+    # 明示的な User-Agent を送る。
+    creds = XCredentials(
+        api_key="ck", api_secret="cs", access_token="at", access_token_secret="ats"
+    )
+    client = _FakeClient(_FakeResponse(201, {"data": {"id": "1"}}))
+    post_tweet(creds, "hi", client=client)
+
+    assert client.last_headers is not None
+    ua = client.last_headers.get("User-Agent")
+    assert ua == X_USER_AGENT
+    assert "python-httpx" not in (ua or "")

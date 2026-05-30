@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useCallback, useEffect, useLayoutEffect, useRef } from "react";
+import { useState, useCallback, useEffect, useLayoutEffect, useRef, useSyncExternalStore } from "react";
 import type { MovieCard } from "@/lib/api/feed";
 import { useBookmarks } from "@/components/auth/BookmarksProvider";
 import { signIn } from "next-auth/react";
@@ -35,6 +35,8 @@ import {
   markActiveBuffering,
   markActiveIdle,
   markActivePlaying,
+  shouldDeferPrefetch,
+  subscribeActivePlayback,
 } from "@/lib/activePlayback";
 
 interface Props {
@@ -719,19 +721,32 @@ export default function FeedItem({ item, isActive, isAdjacent = false, isFirst, 
     isActive,
   });
 
+  // 中央 (active) 動画がまだ安定再生していない (再生開始前 / waiting / stalled)
+  // 間は true。byte-prefetch (隠し <video>) と同じ activePlayback ストアを購読し、
+  // 隣接スライドの <video preload="auto"> も同時に絞ることで、中央動画の Range
+  // request と帯域を取り合って「現在動画が止まる」のを防ぐ。
+  // 自分自身が active のときは抑制対象外 (中央動画の resolve / 再生が最優先)。
+  const deferForActiveBuffering = useSyncExternalStore(
+    subscribeActivePlayback,
+    shouldDeferPrefetch,
+    // SSR / 初期値: active 動画はまだ無いので抑制しない。
+    () => false,
+  );
+
   // preload 戦略:
   //  - isActive (中央): 常に "auto"。中央動画の resolve / 再生は最優先。
   //  - isAdjacent (隣接) 通常時: "auto" でメディアバイトを先読み。
-  //  - isAdjacent + 高速スワイプ中: "metadata" に弱める。
+  //  - isAdjacent + 高速スワイプ中 or 中央動画バッファリング中: "metadata" に弱める。
   //  - isFirst / isSecond の初期マウント: "auto" でファーストビューを早める。
+  //    ただし中央動画がバッファリング中なら "metadata" に弱める。
   //  - その他: "metadata"。
   let preloadAttr: "auto" | "metadata";
   if (isActive) {
     preloadAttr = "auto";
   } else if (isAdjacent) {
-    preloadAttr = isRapidSwiping ? "metadata" : "auto";
+    preloadAttr = isRapidSwiping || deferForActiveBuffering ? "metadata" : "auto";
   } else if (isFirst || isSecond) {
-    preloadAttr = "auto";
+    preloadAttr = deferForActiveBuffering ? "metadata" : "auto";
   } else {
     preloadAttr = "metadata";
   }

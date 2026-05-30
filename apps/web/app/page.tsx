@@ -43,7 +43,8 @@ const RANKING_KEYS = new Set([
 
 function buildMoreHref(section: { key: string; genre: string | null }): string {
   if (section.genre) {
-    return `/search?genre=${encodeURIComponent(section.genre)}`;
+    // index 対象のジャンル集約ページへ誘導 (/search?genre=... は noindex のフィルタ用途)。
+    return `/genres/${encodeURIComponent(section.genre)}`;
   }
   return `/list/${encodeURIComponent(section.key)}`;
 }

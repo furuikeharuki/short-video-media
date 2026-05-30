@@ -198,7 +198,7 @@ export default async function ActressDetailPage({ params }: PageProps) {
                   {stats.top_genres.map((g) => (
                     <Link
                       key={g}
-                      href={`/search?genre=${encodeURIComponent(g)}`}
+                      href={`/genres/${encodeURIComponent(g)}`}
                       style={styles.tag}
                       prefetch={false}
                     >

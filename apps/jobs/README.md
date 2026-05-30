@@ -138,6 +138,78 @@ python -m src.sync_catalog --dry-run
 
 `.github/workflows/sync-catalog.yml` で 1 時間ごとに実行。
 
+## post_to_x.py (X 自動投稿ボット)
+
+AV Shorts の流入施策として、自分の X (旧 Twitter) アカウントへ定期的に
+誘導ポストを投稿する。`.github/workflows/x-post-bot.yml` が cron で叩く。
+
+### 何を投稿するか
+
+公開 API (`GET /api/v1/home`) からサイト内の人気・新着コンテンツを取得し、
+以下のいずれかへの誘導ポストを 1 回の実行で **1 件だけ** 投稿する:
+
+| 種別 | 誘導先 (canonical URL) |
+|------|------------------------|
+| 作品 (movie)   | `https://av-shorts.com/movies/{slug}` |
+| 女優 (actress) | `https://av-shorts.com/actresses/{name}` |
+| ジャンル (genre) | `https://av-shorts.com/genres/{name}` |
+
+種別は日付 + スロット番号で決定的にローテーションし、女優・ジャンル・作品を
+バランス良く回す (`post_candidates.rotate_kind`)。本文テンプレートも種別ごとに
+複数用意し、同じく決定的に選ぶことで同一文面・同一 URL の連投を避ける
+(永続ストレージ不要)。
+
+### 安全策
+
+- **自アカウントへの通常ポストのみ**。リプライ / メンション / DM / フォロー等、
+  他人に作用する操作は実装していない (`x_client.py` は `POST /2/tweets` だけ)。
+- 本文に半角 `@` を入れない。女優名等に `@` が含まれても全角 `＠` に置換する
+  (`post_templates.sanitize_text`)。
+- ハッシュタグは乱用しない (初期実装では一切付けない)。
+- URL は必ず canonical な `https://av-shorts.com/...`。軽量 UTM
+  (`utm_source=x&utm_medium=social&utm_campaign=bot`) のみ付与。
+- 末尾に `※18歳未満閲覧禁止` を付ける。
+- 280 文字を超える本文は投稿前に弾く。
+
+### 環境変数 (GitHub Secrets)
+
+本番投稿時は以下 4 点を設定する。**1 つでも欠けていれば自動で dry-run** に
+切り替わり、本文だけログ出力する (静かな失敗ではなく明示ログを出す)。
+
+| 変数 | 説明 |
+|------|------|
+| `X_API_KEY` | X Developer Portal の API Key (Consumer Key) |
+| `X_API_SECRET` | API Key Secret (Consumer Secret) |
+| `X_ACCESS_TOKEN` | Access Token (自アカウントに Read and Write 権限で発行) |
+| `X_ACCESS_TOKEN_SECRET` | Access Token Secret |
+
+任意:
+
+| 変数 | デフォルト | 説明 |
+|------|----------|------|
+| `X_BOT_API_BASE_URL` | `https://av-shorts-api.com` | 公開 API のベース URL |
+| `X_BOT_DRY_RUN` | `0` | `1`/`true` で投稿せず本文だけ出力 |
+| `X_BOT_SLOT` | `0` | その日の投稿スロット番号 (ローテーション用) |
+
+### スケジュール
+
+`x-post-bot.yml` の cron は控えめに 1 日 2 回:
+
+- `10 3 * * *`  = 12:10 JST (昼、slot=0)
+- `10 12 * * *` = 21:10 JST (夜、slot=1)
+
+`workflow_dispatch` から手動実行でき、`dry_run` 入力 (デフォルト `true`) で
+投稿せず本文だけ確認できる。
+
+### 使い方
+
+```bash
+cd apps/jobs
+python -m src.post_to_x --dry-run           # 投稿せず本文だけ表示
+python -m src.post_to_x --slot 1 --dry-run  # スロット 1 の候補を確認
+python -m src.post_to_x                       # Secrets が揃っていれば実投稿
+```
+
 ## 定期実行が増えたら
 
 - `sync_catalog`: 1 時間ごと (新着取得)

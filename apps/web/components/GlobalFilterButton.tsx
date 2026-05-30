@@ -148,14 +148,30 @@ function countActive(init: AdvancedFormInitial): number {
   );
 }
 
-/** 適用先のパス判定。`/search` 以下 / `/feed` 以下 のときだけアイコンを出す。
+/** `/genres/<genre>` のとき、URL デコード済みのジャンル名を返す。それ以外は null。
+ *  ジャンル一覧 (`/genres` 単独) は対象外。 */
+function genreFromPath(pathname: string): string | null {
+  const m = pathname.match(/^\/genres\/([^/]+)\/?$/);
+  if (!m) return null;
+  try {
+    const g = decodeURIComponent(m[1]).trim();
+    return g || null;
+  } catch {
+    return null;
+  }
+}
+
+/** 適用先のパス判定。`/search` 以下 / `/feed` 以下 / `/genres/<genre>` のときだけアイコンを出す。
  *  ただし `/feed?playlist=<key>` (ブックマーク / 視聴履歴 / ホーム各セクション /
  *  女優詳細 / 検索結果カードからの再生) はプレイリスト順をそのまま再生する経路なので
- *  フィルターアイコンは出さず、フィルター自体も効かせない。 */
+ *  フィルターアイコンは出さず、フィルター自体も効かせない。
+ *  ジャンルページ (index 可能な LP) では、詳細検索を適用すると現在のジャンルを
+ *  AND 固定したまま `/search?genre=<genre>&...` へ遷移する (page.tsx が AND 合成する)。 */
 function isFilterablePath(pathname: string, sp: URLSearchParams | null): boolean {
   const isFeed = pathname === "/feed" || pathname.startsWith("/feed/");
   const isSearch = pathname === "/search" || pathname.startsWith("/search/");
-  if (!isFeed && !isSearch) return false;
+  const isGenre = genreFromPath(pathname) !== null;
+  if (!isFeed && !isSearch && !isGenre) return false;
   if (isFeed) {
     const playlist = (sp?.get("playlist") ?? "").trim();
     if (playlist) return false;
@@ -296,6 +312,11 @@ function GlobalFilterButtonInner() {
           const v = (currentParams.get(key) ?? "").trim();
           if (v && !params.has(key)) params.set(key, v);
         }
+        // ジャンルページ (`/genres/<genre>`) から適用した場合は、そのジャンルを
+        // genre 文脈クエリとして注入する。/search?genre=<genre>&... の形になり、
+        // page.tsx 側で「genre を AND 固定したまま詳細検索条件を AND」する。
+        const pageGenre = genreFromPath(pathname);
+        if (pageGenre && !params.has("genre")) params.set("genre", pageGenre);
         // 単独 q (キーワード文脈)。payload.q が空のときだけ復元する。
         if (!params.get("q")) {
           const ctxQ = (currentParams.get("q") ?? "").trim();

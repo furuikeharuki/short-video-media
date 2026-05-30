@@ -46,18 +46,14 @@ export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
   // sitemap に載せない。/search?genre=... 等のカテゴリページも `robots: { index: false }`
   // が付いており検索結果ページとして意図的に noindex なので、sitemap には含めない。
   // /mypage, /auth/*, /api/* は robots.ts で Disallow 済み。
+  // /feed は force-dynamic な client 専用ページで SSR HTML が実質空のため
+  // metadata で noindex を付与した。sitemap からも除外して整合させる。
   const staticEntries: MetadataRoute.Sitemap = [
     {
       url: SITE_URL,
       lastModified: now,
       changeFrequency: "hourly",
       priority: 1,
-    },
-    {
-      url: `${SITE_URL}/feed`,
-      lastModified: now,
-      changeFrequency: "hourly",
-      priority: 0.9,
     },
     {
       url: `${SITE_URL}/list/popular`,

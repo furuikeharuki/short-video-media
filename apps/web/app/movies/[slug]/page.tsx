@@ -116,8 +116,13 @@ export default async function MovieDetailPage({ params }: PageProps) {
       thumbnailUrl: imgSrc || undefined,
       uploadDate,
       duration: movie.volume ? `PT${movie.volume}M` : undefined,
-      contentUrl: canonical,
-      embedUrl: canonical,
+      // embedUrl は FANZA litevideo の iframe プレイヤーページ URL (sample_embed_url)。
+      // これは実際にサンプル動画を再生できる埋め込みページなので VideoObject.embedUrl の
+      // 仕様に合致する。MP4 直リンク (contentUrl 相当) は DB に保持しておらず再生時に
+      // 動的解決するため SSR では確定できない。以前は contentUrl/embedUrl ともに作品
+      // 詳細ページ URL を入れていたが、これは動画ファイルでも埋め込みプレイヤーでもなく
+      // 構造化データ違反になりうるため、確実な値が無い contentUrl は出力しない。
+      embedUrl: movie.sample_embed_url ?? undefined,
       genre: movie.genres.length > 0 ? movie.genres : undefined,
       actor:
         movie.actresses.length > 0

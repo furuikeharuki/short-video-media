@@ -17,9 +17,11 @@ _HERE = Path(__file__).resolve()
 sys.path.insert(0, str(_HERE.parents[1]))
 
 from src.post_candidates import (  # noqa: E402
+    _ROTATION_PATTERN,
     PostCandidate,
     actress_url,
     build_candidates,
+    feed_url,
     genre_url,
     movie_url,
     pick_candidate,
@@ -38,6 +40,26 @@ def test_urls_are_canonical_av_shorts_with_utm():
     assert "utm_source=x" in movie_url("abc-123")
     assert "utm_medium=social" in actress_url("七海")
     assert "utm_campaign=bot" in genre_url("ドラマ")
+
+
+def test_feed_url_uses_v_param_then_utm():
+    # ユーザー例: https://av-shorts.com/feed?v=miaa00574
+    url = feed_url("miaa00574")
+    assert url.startswith("https://av-shorts.com/feed?v=miaa00574")
+    # v が先、UTM はその後ろ (クエリ順序: v → utm_*)
+    assert url == (
+        "https://av-shorts.com/feed?v=miaa00574"
+        "&utm_source=x&utm_medium=social&utm_campaign=bot"
+    )
+    assert url.index("v=miaa00574") < url.index("utm_source=x")
+
+
+def test_feed_url_encodes_special_chars_and_no_at():
+    url = feed_url("a/b @c")
+    assert "@" not in url
+    # スラッシュや空白は v 値としてエンコードされ、クエリ構造を壊さない
+    assert url.startswith("https://av-shorts.com/feed?v=")
+    assert url.count("?") == 1
 
 
 def test_urls_encode_japanese():
@@ -95,19 +117,53 @@ def test_build_candidates_splits_by_kind():
     assert all(x.url.startswith("https://av-shorts.com/") for vals in c.values() for x in vals)
 
 
+def test_build_candidates_feed_uses_same_slugs_as_movies():
+    c = build_candidates(_SAMPLE_HOME)
+    # feed 候補は作品と同じ slug を /feed?v= に流用する
+    assert {x.title for x in c["feed"]} == {"作品その1", "作品その2", "作品その3"}
+    assert all(x.kind == "feed" for x in c["feed"])
+    assert all(x.url.startswith("https://av-shorts.com/feed?v=") for x in c["feed"])
+    assert c["feed"][0].url.startswith("https://av-shorts.com/feed?v=movie-1")
+
+
 def test_build_candidates_handles_empty_home():
     c = build_candidates({})
-    assert c == {"movie": [], "actress": [], "genre": []}
+    assert c == {"feed": [], "movie": [], "actress": [], "genre": []}
 
 
 # ---------------------------------------------------------------------------
 # ローテーション (決定的・重複回避)
 # ---------------------------------------------------------------------------
 
-def test_rotate_kind_cycles_over_three_kinds():
+def test_rotate_kind_cycles_over_all_kinds():
     d = date(2026, 1, 1)
-    kinds = {rotate_kind(d, slot) for slot in range(6)}
-    assert kinds == {"movie", "actress", "genre"}
+    kinds = {rotate_kind(d, slot) for slot in range(len(_ROTATION_PATTERN))}
+    assert kinds == {"feed", "movie", "actress", "genre"}
+
+
+def test_rotate_kind_makes_feed_the_majority():
+    # 1 パターン周期のうち feed が 70% 以上を占める (流入施策の主役)
+    d = date(2026, 1, 1)
+    span = len(_ROTATION_PATTERN)
+    feed_slots = sum(1 for slot in range(span) if rotate_kind(d, slot) == "feed")
+    assert feed_slots / span >= 0.7
+    # どの開始日でも同じ配分になる (決定的・日付非依存の比率)
+    d2 = date(2026, 7, 15)
+    feed_slots2 = sum(1 for slot in range(span) if rotate_kind(d2, slot) == "feed")
+    assert feed_slots2 == feed_slots
+
+
+def test_feed_is_most_picked_kind_over_a_window():
+    # 実候補を使い、複数スロットで pick したとき feed が最多になることを確認
+    c = build_candidates(_SAMPLE_HOME)
+    d = date(2026, 5, 30)
+    picks = [pick_candidate(c, d, slot) for slot in range(16)]
+    feed_count = sum(1 for p in picks if p and p.kind == "feed")
+    other_max = max(
+        sum(1 for p in picks if p and p.kind == k)
+        for k in ("movie", "actress", "genre")
+    )
+    assert feed_count > other_max
 
 
 def test_pick_candidate_is_deterministic():
@@ -167,6 +223,26 @@ def test_render_post_within_length_limit():
     cand = PostCandidate(kind="actress", title="あ" * 50, url=actress_url("x" * 50))
     text = render_post(cand, date(2026, 5, 30), 0)
     assert len(text) <= 280
+
+
+def test_render_feed_post_includes_feed_url_and_natural_copy():
+    cand = PostCandidate(kind="feed", title="作品X", url=feed_url("miaa00574"))
+    text = render_post(cand, date(2026, 5, 30), 0)
+    assert "https://av-shorts.com/feed?v=miaa00574" in text
+    assert "18歳未満閲覧禁止" in text
+    assert "ショート動画" in text  # feed 向けの自然な文面
+    assert "@" not in text
+    assert "#" not in text
+
+
+def test_feed_picks_avoid_consecutive_duplicate_urls():
+    # feed が連投されても、隣り合うスロットで同じ URL は出さない
+    c = build_candidates(_SAMPLE_HOME)
+    d = date(2026, 5, 30)
+    picks = [pick_candidate(c, d, slot) for slot in range(8)]
+    urls = [p.url for p in picks if p]
+    for a, b in zip(urls, urls[1:]):
+        assert a != b
 
 
 def test_render_post_uses_no_hashtags():

@@ -23,7 +23,8 @@ import httpx
 
 SITE_URL = "https://av-shorts.com"
 
-CandidateKind = Literal["movie", "actress", "genre"]
+# feed = 縦スクロール試し見フィード (/feed?v=<slug>)。流入施策の主役なので最優先で投稿する。
+CandidateKind = Literal["feed", "movie", "actress", "genre"]
 
 # 投稿 URL に付ける軽量 UTM。過剰なパラメータは付けない。
 _UTM = "utm_source=x&utm_medium=social&utm_campaign=bot"
@@ -40,6 +41,17 @@ def _with_utm(path: str) -> str:
     """canonical path に UTM を付けた絶対 URL を返す。"""
     sep = "&" if "?" in path else "?"
     return f"{SITE_URL}{path}{sep}{_UTM}"
+
+
+def feed_url(slug: str) -> str:
+    """縦スクロール試し見フィードの該当動画 URL。
+
+    フロントは `/feed?v=<slug>` の `v` を作品 slug (= content_id) として解決し
+    (`getMovieBySlug`)、その動画を先頭に差し込んだフィードを表示する。
+    `?v=` を先に置き、UTM はその後ろに付ける (クエリ順序: v → utm_*)。
+    """
+    q = urllib.parse.quote(slug, safe="")
+    return _with_utm(f"/feed?v={q}")
 
 
 def movie_url(slug: str) -> str:
@@ -68,9 +80,8 @@ def fetch_home(api_base_url: str, *, client: httpx.Client | None = None) -> dict
             http.close()
 
 
-def _movie_candidates(home: dict[str, Any]) -> list[PostCandidate]:
-    """人気・新着セクションから作品候補を作る。"""
-    out: list[PostCandidate] = []
+def _iter_movie_items(home: dict[str, Any]):
+    """人気・新着セクションの (slug, title) を重複なく優先順で yield する。"""
     seen: set[str] = set()
     # 「人気動画」「新着」「本日配信開始」を優先的に拾う
     preferred = {"popular", "recent", "new", "ranking_weekly", "ranking_daily"}
@@ -87,8 +98,27 @@ def _movie_candidates(home: dict[str, Any]) -> list[PostCandidate]:
             if not slug or not title or slug in seen:
                 continue
             seen.add(slug)
-            out.append(PostCandidate(kind="movie", title=title, url=movie_url(slug)))
-    return out
+            yield slug, title
+
+
+def _feed_candidates(home: dict[str, Any]) -> list[PostCandidate]:
+    """作品セクションから feed (/feed?v=<slug>) 候補を作る。
+
+    流入施策の主役。作品 (movie) と同じ slug を使い、誘導先だけ縦スクロール
+    フィードに変える。
+    """
+    return [
+        PostCandidate(kind="feed", title=title, url=feed_url(slug))
+        for slug, title in _iter_movie_items(home)
+    ]
+
+
+def _movie_candidates(home: dict[str, Any]) -> list[PostCandidate]:
+    """人気・新着セクションから作品詳細ページ候補を作る。"""
+    return [
+        PostCandidate(kind="movie", title=title, url=movie_url(slug))
+        for slug, title in _iter_movie_items(home)
+    ]
 
 
 def _actress_candidates(home: dict[str, Any]) -> list[PostCandidate]:
@@ -123,24 +153,41 @@ def _genre_candidates(home: dict[str, Any]) -> list[PostCandidate]:
 def build_candidates(home: dict[str, Any]) -> dict[CandidateKind, list[PostCandidate]]:
     """home レスポンスを種別ごとの候補リストに変換する。"""
     return {
+        "feed": _feed_candidates(home),
         "movie": _movie_candidates(home),
         "actress": _actress_candidates(home),
         "genre": _genre_candidates(home),
     }
 
 
-# 1 日あたりの投稿スロット数 (workflow の cron 回数と揃える運用)。
-# slot_of_day は cron が叩いた時刻ではなく「その日の通し番号」を想定し、
-# 種別ローテーションの決定論性のために使う。
+# 種別ローテーションのスロット配分。
+# 流入施策の主役である feed (/feed?v=<slug>) を「一番多く」投稿するため、
+# 8 スロット中 6 枠 (= 75%) を feed に割り当て、残りを作品詳細/女優/ジャンルへ回す。
+# slot は cron が叩いた時刻ではなく「その日の通し番号」を想定し、決定論性のために使う。
+_ROTATION_PATTERN: list[CandidateKind] = [
+    "feed",
+    "feed",
+    "movie",
+    "feed",
+    "feed",
+    "actress",
+    "feed",
+    "feed",
+    "genre",
+    "feed",
+]
+# feed が連続しても URL/文面はリスト内 offset とテンプレ選択でずれるため、
+# 同一動画の連投にはならない (build 側で重複 slug は排除済み)。
+
+
 def rotate_kind(d: date, slot: int) -> CandidateKind:
     """日付とスロット番号から投稿する種別を決定的にローテーションする。
 
-    女優・ジャンル・作品をバランス良く回す。永続ストレージを持たずに
-    短期重複を避けるための決定的ルール。
+    feed を最多 (約 75%) にしつつ、作品詳細・女優・ジャンルも一定割合で混ぜる。
+    永続ストレージを持たずに短期重複を避けるための決定的ルール。
     """
-    order: list[CandidateKind] = ["movie", "actress", "genre"]
-    idx = (d.toordinal() + slot) % len(order)
-    return order[idx]
+    idx = (d.toordinal() + slot) % len(_ROTATION_PATTERN)
+    return _ROTATION_PATTERN[idx]
 
 
 def pick_candidate(
@@ -151,11 +198,11 @@ def pick_candidate(
     """種別ローテーションに従って 1 件選ぶ。
 
     決定した種別に候補が無ければ、他の種別へフォールバックする
-    (movie → actress → genre の順)。リスト内の選択も日付+スロットで
-    決定的にずらして、同じ先頭要素ばかり投稿しないようにする。
+    (feed → movie → actress → genre の順、feed 最優先)。リスト内の選択も
+    日付+スロットで決定的にずらして、同じ先頭要素ばかり投稿しないようにする。
     """
     kind = rotate_kind(d, slot)
-    fallback_order: list[CandidateKind] = [kind, "movie", "actress", "genre"]
+    fallback_order: list[CandidateKind] = [kind, "feed", "movie", "actress", "genre"]
     seen_kinds: set[CandidateKind] = set()
     for k in fallback_order:
         if k in seen_kinds:

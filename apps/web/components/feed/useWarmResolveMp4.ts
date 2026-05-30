@@ -1,11 +1,15 @@
 "use client";
 
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useSyncExternalStore } from "react";
 
 import type { MovieCard } from "@/lib/api/feed";
 import { resolveMp4Url } from "@/lib/api/resolve-mp4";
 import { getPrefetchPolicy } from "@/lib/networkPrefs";
 import { isVideoTimingEnabled } from "@/lib/videoTiming";
+import {
+  shouldDeferPrefetch,
+  subscribeActivePlayback,
+} from "@/lib/activePlayback";
 
 /**
  * 遠距離 (current+WARM_START..+WARM_END) を低優先度で「温める」hook。
@@ -64,10 +68,29 @@ export function useWarmResolveMp4(
   /** 直近 resolve が失敗 (null) した slug → 失敗時刻 (ms)。TTL 経過で再試行可能に戻る。 */
   const failedSlugsRef = useRef<Map<string, number>>(new Map());
 
+  // 現在動画がバッファリング中は遠距離 warm も止める。warm はバイトを取らない
+  // 軽量な URL 解決だが、現在動画優先を徹底するため active が安定するまで遅らせる。
+  const deferForActive = useSyncExternalStore(
+    subscribeActivePlayback,
+    shouldDeferPrefetch,
+    () => false,
+  );
+
   useEffect(() => {
     const inFlight = inFlightRef.current;
     const resolved = resolvedSlugsRef.current;
     const failed = failedSlugsRef.current;
+
+    // 現在動画がバッファリング中は warm を全停止して、active の URL 解決 / Range
+    // 取得に帯域とリクエストスロットを譲る。active が playing に入ったら再開する。
+    if (deferForActive) {
+      for (const [slug, controller] of inFlight.entries()) {
+        controller.abort();
+        inFlight.delete(slug);
+      }
+      vtWarmLog(`resolve skip active-buffering`);
+      return;
+    }
 
     // Save-Data / 2g / slow-2g なら近距離 prefetch も止まる。warm も完全停止する。
     const policy = getPrefetchPolicy();
@@ -212,7 +235,7 @@ export function useWarmResolveMp4(
       cancelled = true;
       for (const t of timers) clearTimeout(t);
     };
-  }, [items, currentIndex, isRapidSwiping]);
+  }, [items, currentIndex, isRapidSwiping, deferForActive]);
 
   // アンマウント時は全 warm を abort。
   useEffect(() => {

@@ -31,6 +31,11 @@ import {
   unpinSlug,
 } from "@/lib/videoHandoff";
 import { signalPlaying, signalUnstable } from "@/components/ads/adReadyGate";
+import {
+  markActiveBuffering,
+  markActiveIdle,
+  markActivePlaying,
+} from "@/lib/activePlayback";
 
 interface Props {
   item: MovieCard;
@@ -1024,6 +1029,9 @@ export default function FeedItem({ item, isActive, isAdjacent = false, isFirst, 
     if (!isActive) {
       // 中央から外れた瞬間に走る。flush 予約済みなら gate 側で無視される。
       signalUnstable("inactive");
+      // この slug は中央でなくなった。active 動画が居ない扱いに戻して
+      // byte-prefetch 抑制を解除する (次に中央化した slug が改めて駆動する)。
+      markActiveIdle();
       return;
     }
     if (!videoSrc) return;
@@ -1035,10 +1043,23 @@ export default function FeedItem({ item, isActive, isAdjacent = false, isFirst, 
       // late rebind (tryClaim の canplay 経路) はこのフラグを見て disrupt を抑止する。
       activePlayingRef.current = true;
       signalPlaying();
+      // 安定再生に入った → byte-prefetch を解禁し「次の 1〜2 本」の先読みを進める。
+      markActivePlaying();
     };
-    const onWaiting = () => signalUnstable("waiting");
-    const onStalled = () => signalUnstable("stalled");
-    const onError = () => signalUnstable("error");
+    // waiting / stalled / error は「現在動画がまだ安定して再生できていない」状態。
+    // byte-prefetch を抑制して帯域を active のバッファ回復に集中させる。
+    const onWaiting = () => {
+      signalUnstable("waiting");
+      markActiveBuffering();
+    };
+    const onStalled = () => {
+      signalUnstable("stalled");
+      markActiveBuffering();
+    };
+    const onError = () => {
+      signalUnstable("error");
+      markActiveBuffering();
+    };
 
     video.addEventListener("playing", onPlaying);
     video.addEventListener("waiting", onWaiting);
@@ -1050,6 +1071,12 @@ export default function FeedItem({ item, isActive, isAdjacent = false, isFirst, 
     if (!video.paused && !video.ended && video.readyState >= 3) {
       activePlayingRef.current = true;
       signalPlaying();
+      markActivePlaying();
+    } else {
+      // まだ安定再生していない (resolve 中 / canplay 前 / 再バッファ中)。
+      // playing を観測するまでは byte-prefetch を抑制して、現在動画の
+      // 立ち上がりに帯域を集中させる。
+      markActiveBuffering();
     }
 
     return () => {

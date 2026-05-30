@@ -2658,10 +2658,11 @@ export function useFeedPlayback({ slug, title, isActive, videoSrc, boundElement 
     // navigator.share はユーザージェスチャーの同期コンテキストが必要なため
     // e.preventDefault() を呼ばない
     const url = `${window.location.origin}/feed?v=${slug}`;
+    const copyText = title ? `${title}\n${url}` : url;
     if (navigator.share) {
-      navigator.share({ title, url }).catch(() => {});
+      navigator.share(title ? { title, text: title, url } : { url }).catch(() => {});
     } else {
-      navigator.clipboard.writeText(url).catch(() => {});
+      navigator.clipboard.writeText(copyText).catch(() => {});
     }
   }, [slug, title]);
 

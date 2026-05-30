@@ -52,7 +52,7 @@ export async function generateMetadata({
     const title = `${movie.title} | ${SITE_NAME}`;
     const description = movie.description
       ? movie.description.slice(0, 120) + "..."
-      : `${movie.actresses.join("・")}出演。AV Shortsで試し見できるショート動画。`;
+      : `${movie.actresses.join("・")}出演。${SITE_NAME}で試し見できるショート動画。`;
     const imageUrl = movie.image_url_large ?? movie.image_url_list ?? "";
     // 共有URLとしての ?v= は維持しつつ canonical は /feed に揃える (既存SEO方針)。
     const shareUrl = `${SITE_URL}/feed?v=${encodeURIComponent(slug)}`;

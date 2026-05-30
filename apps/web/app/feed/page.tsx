@@ -15,6 +15,11 @@ export const metadata: Metadata = {
   description:
     "縦スクロールで次々と試し見できるAVショート動画フィード。気に入った作品はFANZAでそのまま購入できます。",
   alternates: { canonical: "/feed" },
+  // /feed は force-dynamic な client 専用ページで SSR HTML に作品リンク・本文が出ず、
+  // クローラからは実質「空の薄いページ」に見える。個別作品は /movies/[slug]、
+  // 一覧導線は / や /list/* が index 対象なので、/feed 自体は noindex にして
+  // 薄いページ評価を避ける (follow は維持してリンクは辿らせる)。UI/挙動は不変。
+  robots: { index: false, follow: true },
   openGraph: {
     title: "ショートフィード",
     description:

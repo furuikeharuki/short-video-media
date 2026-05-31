@@ -2,7 +2,9 @@ import { NextResponse } from "next/server";
 
 const ALLOWED_EVENTS = new Set([
   "page_view",
+  "age_gate_view",
   "age_gate_pass",
+  "age_gate_exit",
   "detail_view",
   "affiliate_click",
   "video_play",

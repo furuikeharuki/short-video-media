@@ -1,4 +1,7 @@
 import AgeGateForm from "@/components/analytics/age-gate-form";
+import NextScreenPreview from "@/components/age-gate/NextScreenPreview";
+import AgeGateExitLink from "@/components/age-gate/AgeGateExitLink";
+import { sanitizeNextPath, classifyNextPath } from "@/lib/age-gate/next-path";
 import type { Metadata } from "next";
 
 // /age-gate は本来ユーザー向けの中継ページであって独立した検索対象ではない。
@@ -39,13 +42,21 @@ type AgeGatePageProps = {
 
 export default async function AgeGatePage({ searchParams }: AgeGatePageProps) {
   const params = await searchParams;
-  const nextPath = params.next || "/";
+  // next はクライアントが書き換え可能なため必ずサニタイズする (オープン
+  // リダイレクト防止)。同一オリジンの内部パス以外は "/" にフォールバックする。
+  const nextPath = sanitizeNextPath(params.next);
+  const nextKind = classifyNextPath(nextPath);
 
   return (
     <main style={styles.main}>
+      {/* 次の画面の気配を背後にうっすら見せる (内容はロードしない汎用スケルトン)。 */}
+      <NextScreenPreview kind={nextKind} />
+
+      {/* age-gate カードの可読性を上げるための暗幕。preview と同様に不活性。 */}
+      <div style={styles.scrim} aria-hidden="true" />
       <div style={styles.bg} aria-hidden="true" />
 
-      <div style={styles.card}>
+      <div style={styles.card} role="dialog" aria-modal="true" aria-labelledby="age-gate-title">
         <div style={styles.iconWrap} aria-hidden="true">
           <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="#e91e63" strokeWidth="1.5">
             <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
@@ -60,22 +71,22 @@ export default async function AgeGatePage({ searchParams }: AgeGatePageProps) {
           </span>
         </div>
 
-        <h1 style={styles.title}>年齢確認</h1>
+        <h1 id="age-gate-title" style={styles.title}>年齢確認</h1>
         <p style={styles.subtitle}>このサイトは<strong style={styles.strong}>18歳以上対象</strong>のアダルトコンテンツを含みます。</p>
-        <p style={styles.sub2}>下のボタンを押すことで、あなたが18歳以上であることを確認したことになります。</p>
 
-        <AgeGateForm nextPath={nextPath} />
+        {/* 不安軽減コピー: 登録不要・無料で続きが見られることを明示して離脱を抑える。 */}
+        <ul style={styles.reassure} aria-label="ご利用にあたって">
+          <li style={styles.reassureItem}>会員登録なし・無料でそのまま視聴できます</li>
+          <li style={styles.reassureItem}>確認後はご覧になっていたページに戻ります</li>
+        </ul>
+
+        <AgeGateForm nextPath={nextPath} nextKind={nextKind} />
+
+        <p style={styles.sub2}>ボタンを押すと、あなたが18歳以上であることを確認したものとみなします。</p>
 
         <div style={styles.divider} />
 
-        <a
-          href="https://www.google.com"
-          target="_blank"
-          rel="noopener noreferrer"
-          style={styles.exitLink}
-        >
-          18歳未満の方はこちら
-        </a>
+        <AgeGateExitLink />
 
         <p style={styles.legal}>
           同意することで、当サイトのプライバシーポリシーおよび利用規約に同意したものとみなします。
@@ -96,6 +107,13 @@ const styles: Record<string, React.CSSProperties> = {
     justifyContent: 'center',
     padding: '24px 16px',
     fontFamily: "-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif",
+  },
+  scrim: {
+    position: 'fixed',
+    inset: 0,
+    background: 'rgba(10,10,10,0.62)',
+    pointerEvents: 'none',
+    zIndex: 0,
   },
   bg: {
     position: 'fixed',
@@ -143,22 +161,30 @@ const styles: Record<string, React.CSSProperties> = {
     fontWeight: 600,
   },
   sub2: {
-    fontSize: '13px',
+    fontSize: '12px',
     color: 'rgba(255,255,255,0.4)',
     lineHeight: 1.7,
-    marginBottom: '28px',
+    marginTop: '12px',
+    marginBottom: '4px',
+  },
+  reassure: {
+    listStyle: 'none',
+    padding: 0,
+    margin: '0 0 24px',
+    textAlign: 'left',
+    display: 'inline-block',
+  },
+  reassureItem: {
+    fontSize: '13px',
+    color: 'rgba(255,255,255,0.7)',
+    lineHeight: 1.9,
+    paddingLeft: '22px',
+    position: 'relative',
   },
   divider: {
     height: '1px',
     background: 'rgba(255,255,255,0.08)',
     margin: '24px 0',
-  },
-  exitLink: {
-    display: 'block',
-    fontSize: '13px',
-    color: 'rgba(255,255,255,0.35)',
-    textDecoration: 'none',
-    marginBottom: '20px',
   },
   legal: {
     fontSize: '11px',
@@ -184,4 +210,19 @@ const css = `
   }
   .age-gate-form-btn:hover { opacity: 0.88; }
   .age-gate-form-btn:active { opacity: 0.75; transform: scale(0.98); }
+  .age-gate-form-btn:focus-visible {
+    outline: 3px solid rgba(233,30,99,0.6);
+    outline-offset: 2px;
+  }
+  ul[aria-label="ご利用にあたって"] li::before {
+    content: "";
+    position: absolute;
+    left: 0;
+    top: 0.55em;
+    width: 12px;
+    height: 7px;
+    border-left: 2px solid #e91e63;
+    border-bottom: 2px solid #e91e63;
+    transform: rotate(-45deg);
+  }
 `;

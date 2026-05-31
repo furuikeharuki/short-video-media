@@ -35,7 +35,9 @@ export type BackendEventType =
 // 旧 trackEvent 互換のフロント語彙 (GA4 イベント名にも使う)。
 export type AnalyticsEventName =
   | "page_view"
+  | "age_gate_view"
   | "age_gate_pass"
+  | "age_gate_exit"
   | "detail_view"
   | "affiliate_click"
   | "video_play"
@@ -58,7 +60,9 @@ type Routing = {
 const ROUTE_RULES: Record<AnalyticsEventName, Routing> = {
   // ページビュー系: GA4 のみ
   page_view: { ga4: true },
+  age_gate_view: { ga4: true },
   age_gate_pass: { ga4: true },
+  age_gate_exit: { ga4: true },
   scroll_depth: { ga4: true },
 
   // 動画再生系
@@ -85,6 +89,7 @@ export type AnalyticsProperties = Record<string, unknown> & {
   title?: string;
   affiliate_url?: string;
   next_path?: string;
+  next_kind?: string;
   search_query?: string;
 };
 

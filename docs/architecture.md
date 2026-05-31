@@ -30,7 +30,7 @@
            │                     │    compose run --rm jobs ... │
            │                     │  → bootstrap は Actions      │
            │                     │    runner で SSH トンネル     │
-           │                     │    経由 (matrix 年並列)      │
+           │                     │    経由 (matrix 月並列)      │
            │                     └──────────────────────────────┘
            │
            └─ DMM / FANZA API (api / Actions runner / VPS jobs から outbound)

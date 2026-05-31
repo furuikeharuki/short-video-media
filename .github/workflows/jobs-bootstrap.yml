@@ -2,9 +2,17 @@
 # .github/workflows/jobs-bootstrap.yml
 # ----------------------------------------------------------------------------
 # 一括取り直しジョブ (旧 scheduler.py の SCHEDULER_BOOTSTRAP=true 相当)。
-# matrix で「年 × 四半期 (Q1-Q4)」並列に sync_catalog --mode full を走らせる。
-# 1 年単位だと 1 ジョブが 4h timeout を超えるため、四半期に分割して
-# 1 ジョブあたりの実行時間を ~1/4 に抑える (timeout-minutes も 240 → 350 に引き上げ)。
+# matrix で「年 × 月 (01-12)」並列に sync_catalog --mode full を走らせる。
+# 以前は年 × 四半期 (Q1-Q4) 分割だったが、件数の多い四半期 (例 2024Q3 / 2024Q4 /
+# 2025Q2) が 1 ジョブで GitHub Actions の最大実行時間 (5h50m) を超えて cancel される
+# 事故が続いたため、さらに細かい月単位に分割して 1 ジョブの実行時間を ~1/3 に抑える。
+# 期間ラベルは 2024Q3 ではなく 2024-07 / 2024-08 / 2024-09 のように月単位になる。
+#
+# データ網羅性:
+#   月スライスは四半期と同じ start_date..end_date 区間をちょうどタイル状に覆うため、
+#   取得対象の作品は四半期分割時と完全に一致する (取りこぼし / 重複は発生しない)。
+#   sync_catalog 側は元々 --start-date/--end-date を受け取り内部で _month_slices() に
+#   分解しているので、月単位に切っても 1 ジョブ = 1 月スライスになるだけで挙動は不変。
 #
 # ホスティングの判断:
 #   incremental (sync_catalog / sync_actress) は VPS 上で実行する
@@ -39,9 +47,12 @@
 #     - default: 2018-2026 / videoa,videoc
 #
 # 注意:
-#   - matrix で年×四半期を並列実行する。Free プランの同時並列数は 20、月 2000 分。
-#   - 9 年 × 4 四半期 = 36 ジョブ。max-parallel: 8 で DMM API / VPS への負荷を抑える。
-#   - 1 四半期あたり ~15-30 分想定 (1 年分を 1/4 に分割)。
+#   - matrix で年×月を並列実行する。Free プランの同時並列数は 20、月 2000 分。
+#   - 9 年 × 12 ヶ月 = 108 ジョブ。max-parallel: 8 で DMM API / VPS への負荷を抑える。
+#     (同時実行数は据え置きなので瞬間的な API/DB 負荷は四半期分割時と変わらない。
+#      総ジョブ数は増えるが 1 ジョブが短くなるため throughput はほぼ同等。)
+#   - 1 ヶ月あたり ~5-15 分想定 (1 四半期分を 1/3 に分割)。件数の多い月でも
+#     5h50m の Actions 上限に到達しにくくなる。
 #   - sync_actress_profiles / goods は別ワークフロー (後続ステップ) で直列に走らせる。
 # ============================================================================
 name: Jobs - bootstrap (full re-sync)
@@ -78,45 +89,41 @@ concurrency:
 
 jobs:
   # ─────────────────────────────────────────────────────────────────
-  # 1. 動画フロアを年並列で full 取得
+  # 1. 動画フロアを年×月並列で full 取得
   # ─────────────────────────────────────────────────────────────────
   prepare-matrix:
-    name: prepare year x quarter matrix
+    name: prepare year x month matrix
     runs-on: ubuntu-latest
     outputs:
       periods: ${{ steps.gen.outputs.periods }}
     steps:
-      - name: Generate year x quarter list as JSON
+      - name: Generate year x month list as JSON
         id: gen
         env:
           START: ${{ github.event.inputs.start_year }}
           END: ${{ github.event.inputs.end_year }}
         run: |
           set -euo pipefail
-          # 1 年単位の full sync は重く 4h timeout を超えるため、
-          # 年 × 四半期 (Q1-Q4) に分割して 1 ジョブあたりの実行時間を ~1/4 に抑える。
-          # 各四半期の開始/終了日は固定 (Q1: 01-01..03-31 等) なので閏年の特別扱いは不要。
-          # sync_catalog 内部で更に月スライスに分解するため Feb の日数差も自動で吸収される。
+          # 件数の多い四半期が 5h50m の Actions 上限を超えて cancel される事故が
+          # 続いたため、年 × 月 (01-12) に分割して 1 ジョブの実行時間を ~1/3 に抑える。
+          # 各月の末日は calendar.monthrange で算出するので閏年 (2/29) も正しく扱える。
+          # 月スライスは四半期と同じ年初〜年末区間をタイル状に覆うため、取得対象は不変。
+          # label は "2024-07" 形式 (ゼロ埋め月) にし、Actions UI でソートしやすくする。
           python3 - <<PY >> "$GITHUB_OUTPUT"
-          import json, os
+          import calendar, json, os
           s = int(os.environ["START"])
           e = int(os.environ["END"])
           assert s <= e, "start_year must be <= end_year"
-          quarters = [
-              (1, "01-01", "03-31"),
-              (2, "04-01", "06-30"),
-              (3, "07-01", "09-30"),
-              (4, "10-01", "12-31"),
-          ]
           periods = []
           for year in range(s, e + 1):
-              for q, start_md, end_md in quarters:
+              for month in range(1, 13):
+                  last_day = calendar.monthrange(year, month)[1]
                   periods.append({
                       "year": year,
-                      "quarter": q,
-                      "label": f"{year}Q{q}",
-                      "start_date": f"{year}-{start_md}",
-                      "end_date": f"{year}-{end_md}",
+                      "month": month,
+                      "label": f"{year}-{month:02d}",
+                      "start_date": f"{year}-{month:02d}-01",
+                      "end_date": f"{year}-{month:02d}-{last_day:02d}",
                   })
           print(f"periods={json.dumps(periods)}")
           PY
@@ -125,25 +132,27 @@ jobs:
     name: "sync_catalog full ${{ matrix.period.label }}"
     needs: prepare-matrix
     runs-on: ubuntu-latest
-    # 年 × 四半期に分割したので 1 ジョブの想定実行時間は ~1h だが、
-    # DMM API の throttling や日米間 RTT で伸びる余地を見て 350 分に設定 (旧 240 分)。
+    # 年 × 月に分割したので 1 ジョブの想定実行時間は ~5-15 分だが、
+    # DMM API の throttling や日米間 RTT で伸びる余地を見て 350 分に設定。
+    # (Actions のジョブ上限 6h 未満。件数が多い月でも 5h50m に到達しにくい。)
     timeout-minutes: 350
     environment: production
     strategy:
       # 1 期間失敗しても他は続けたい。
       fail-fast: false
-      # 年 × 四半期 = 9 年なら 36 ジョブに展開される。Free プランの同時 20 ジョブ
+      # 年 × 月 = 9 年なら 108 ジョブに展開される。Free プランの同時 20 ジョブ
       # 上限と、DMM API / VPS Postgres (RAM 1.9GB) への負荷を考え 8 並列に抑える。
+      # 同時実行数は四半期分割時と同じ 8 なので瞬間負荷は増えない。
       max-parallel: 8
       matrix:
         period: ${{ fromJson(needs.prepare-matrix.outputs.periods) }}
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: "3.12"
           cache: pip
@@ -186,8 +195,8 @@ jobs:
           # としてホスト OS の loopback にのみ bind しているため、
           # SSH して初めて db コンテナへ到達できる。
           # 外部ネットワークからは見えないので firewall 面も安全。
-          # ServerAlive 系で NAT/firewall の idle 切断を防ぐ。年単位の full sync は
-          # トンネルを生かしておく時間が長いため keepalive 必須。
+          # ServerAlive 系で NAT/firewall の idle 切断を防ぐ。月単位に分割しても 1 ジョブ
+          # 内でトンネルを数分〜十数分生かすため、idle 切断対策として keepalive は維持する。
           ssh ${PORT_OPT} \
             -o BatchMode=yes \
             -o ExitOnForwardFailure=yes \
@@ -310,7 +319,7 @@ jobs:
           rm -f ~/.ssh/known_hosts
 
   # ─────────────────────────────────────────────────────────────────
-  # 3. (optional) goods フロアを年並列で取得 (actress に依存)
+  # 3. (optional) goods フロアを年×月並列で取得 (actress に依存)
   # ─────────────────────────────────────────────────────────────────
   sync-goods:
     name: "sync_catalog goods ${{ matrix.period.label }}"
@@ -332,10 +341,10 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: "3.12"
           cache: pip
@@ -373,8 +382,8 @@ jobs:
           if [ -n "${PORT}" ]; then
             PORT_OPT="-p ${PORT}"
           fi
-          # ServerAlive 系で NAT/firewall の idle 切断を防ぐ。年単位の full sync は
-          # トンネルを生かしておく時間が長いため keepalive 必須。
+          # ServerAlive 系で NAT/firewall の idle 切断を防ぐ。月単位に分割しても 1 ジョブ
+          # 内でトンネルを数分〜十数分生かすため、idle 切断対策として keepalive は維持する。
           ssh ${PORT_OPT} \
             -o BatchMode=yes \
             -o ExitOnForwardFailure=yes \

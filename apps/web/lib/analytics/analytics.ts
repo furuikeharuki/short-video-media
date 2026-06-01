@@ -6,12 +6,22 @@
  *   trackEvent("affiliate_click", { slug, affiliate_url })
  *
  * 内部的に下記の 2 系統に振り分ける:
- *   - GA4: ブラウザビーコン用 (/api/events Route Handler → Measurement Protocol)
+ *   - GA4: `window.gtag('event', ...)` のクライアント側ビーコン (ga4-client.ts)。
+ *     gtag が `_ga` / `_ga_*` Cookie 由来の本物の client_id / session_id を自動付与
+ *     するため、イベントが正しいユーザ・セッションに紐づく。
  *   - FastAPI /api/v1/events: ランキング集計・検索クエリ統計用
  *
  * 各イベントは「DB に積むべきか」「GA4 に送るべきか」を ROUTE_RULES で決める。
  * affiliate_click のような収益核イベントは必ず両方に送る。
+ *
+ * 注意: 以前は GA4 への送信を `/api/events` Route Handler → Measurement Protocol
+ * (mp/collect) で行い `client_id: "anonymous"` 固定だったため、全イベントが
+ * 1 ユーザ (activeUsers=1) に collapse し、ブラウザの gtag セッションとも切り離された
+ * 「イベントのみのセッション」を生んでいた (landingPage 空・engagedSessions 0)。
+ * その transport は廃止し、クライアント gtag に一本化した。
  */
+
+import { sendGa4Event } from "./ga4-client";
 
 const API_BASE_URL =
   // クライアント (window 経由) では NEXT_PUBLIC_API_BASE_URL のみ参照可能。
@@ -117,20 +127,14 @@ async function sendToBackend(
   }
 }
 
-async function sendToGA4Route(
+function sendToGA4(
   event: AnalyticsEventName,
   props: AnalyticsProperties,
-): Promise<void> {
-  try {
-    await fetch("/api/events", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ event, properties: props }),
-      keepalive: true,
-    });
-  } catch {
-    /* ignore */
-  }
+): void {
+  // クライアント側 gtag 経由で送る。gtag が本物の client_id / session_id を
+  // 付与するため、サーバー側 Measurement Protocol のような ID 固定問題が起きない。
+  // SSR / gtag 未ロード環境では ga4-client 内で no-op。
+  sendGa4Event(event, props);
 }
 
 /**
@@ -149,8 +153,9 @@ export async function trackEvent(
     return;
   }
 
-  const tasks: Promise<unknown>[] = [];
-  if (rule.ga4 !== false) tasks.push(sendToGA4Route(event, properties));
-  if (rule.backend) tasks.push(sendToBackend(rule.backend, properties));
-  await Promise.allSettled(tasks);
+  // GA4 はクライアント gtag に同期的に積む (fetch を伴わない)。
+  if (rule.ga4 !== false) sendToGA4(event, properties);
+
+  // バックエンド集計は従来どおり /api/v1/events に投げる。
+  if (rule.backend) await sendToBackend(rule.backend, properties);
 }

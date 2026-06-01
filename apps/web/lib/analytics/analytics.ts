@@ -49,6 +49,7 @@ export type AnalyticsEventName =
   | "age_gate_pass"
   | "age_gate_exit"
   | "detail_view"
+  | "movie_feed_cta_click"
   | "affiliate_click"
   | "video_play"
   | "video_complete"
@@ -82,6 +83,10 @@ const ROUTE_RULES: Record<AnalyticsEventName, Routing> = {
   // 詳細閲覧
   detail_view: { ga4: true, backend: "detail_click" },
   detail_click: { ga4: true, backend: "detail_click" },
+
+  // 作品詳細 → ショート動画フィード (/feed?v=<slug>) への送客 CTA。
+  // GA4 のみ (バックエンド集計の語彙には無いため backend マッピングなし)。
+  movie_feed_cta_click: { ga4: true },
 
   // 収益核: 両方に必ず送る
   affiliate_click: { ga4: true, backend: "affiliate_click" },

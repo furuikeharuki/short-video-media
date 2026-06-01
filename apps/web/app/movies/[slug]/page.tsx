@@ -3,6 +3,7 @@ import Link from "next/link";
 import type { Metadata } from "next";
 
 import AffiliateLink from "@/components/analytics/affiliate-link";
+import MovieFeedCtaLink from "@/components/movie-detail/MovieFeedCtaLink";
 import DetailViewTracker from "@/components/analytics/detail-view-tracker";
 import BackButton from "@/components/BackButton";
 import ActressLink from "@/components/ActressLink";
@@ -253,6 +254,16 @@ export default async function MovieDetailPage({ params }: PageProps) {
             </div>
             <h1 style={styles.title}>{movie.title}</h1>
 
+            {/* ファーストビュー内の主送客 CTA: 作品詳細 → /feed?v=<slug>。
+                未認証時は middleware が age-gate を挟んだ上で slug を保持して戻す。 */}
+            <div style={styles.feedCtaArea}>
+              <MovieFeedCtaLink
+                slug={movie.slug}
+                title={movie.title}
+                context="detail_page"
+              />
+            </div>
+
             <div style={styles.scoreArea}>
               {hasReview && (
                 <div style={styles.scoreItem}>
@@ -374,6 +385,7 @@ const styles: Record<string, React.CSSProperties> = {
     marginBottom: '28px',
   },
   ctaArea: { display: 'flex', flexDirection: 'column' as const, gap: '12px' },
+  feedCtaArea: { marginBottom: '20px' },
   adBottom: {
     marginTop: '24px',
     marginBottom: '10px',
@@ -399,4 +411,22 @@ const pageCSS = `
   }
   .affiliate-btn:active { opacity: 0.75; transform: scale(0.98); }
   @media (hover: hover) { .affiliate-btn:hover { opacity: 0.88; } }
+
+  .movie-feed-cta {
+    display: flex; align-items: center; justify-content: center; gap: 10px;
+    width: 100%; min-height: 54px; padding: 0 16px;
+    background: linear-gradient(135deg, #ff2d6a 0%, #b5179e 100%);
+    color: #fff; font-size: 16px; font-weight: 700; line-height: 1.2;
+    border-radius: 12px; text-align: center; text-decoration: none;
+    box-shadow: 0 6px 18px rgba(255,45,106,0.35);
+    transition: opacity 0.15s ease, transform 0.15s ease; box-sizing: border-box;
+  }
+  .movie-feed-cta__icon {
+    display: inline-flex; align-items: center; justify-content: center;
+    width: 22px; height: 22px; border-radius: 999px;
+    background: rgba(255,255,255,0.22); font-size: 11px; flex-shrink: 0;
+  }
+  .movie-feed-cta__label { display: inline-block; }
+  .movie-feed-cta:active { opacity: 0.85; transform: scale(0.985); }
+  @media (hover: hover) { .movie-feed-cta:hover { opacity: 0.92; } }
 `;

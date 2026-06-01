@@ -1,84 +1,18 @@
 import { NextResponse } from "next/server";
 
-const ALLOWED_EVENTS = new Set([
-  "page_view",
-  "age_gate_view",
-  "age_gate_pass",
-  "age_gate_exit",
-  "detail_view",
-  "affiliate_click",
-  "video_play",
-  "video_complete",
-  "scroll_depth",
-  "search",
-  // バックエンド共通語彙 (lib/analytics/analytics.ts の AnalyticsEventName と同期)。
-  // これらが allow リストにないと、フィード視聴 (view) / ホームカードタップ (play /
-  // detail_click) のたびに /api/events が 400 を返してしまい、ブラウザ console に
-  // ノイズが出続けるだけでなく、GA4 ビーコンも送られない。
-  "view",
-  "play",
-  "detail_click",
-]);
-
-type EventPayload = {
-  event: string;
-  properties?: Record<string, unknown>;
-};
-
-async function sendToGA4(event: string, properties: Record<string, unknown>) {
-  const GA_MEASUREMENT_ID = process.env.NEXT_PUBLIC_GA_MEASUREMENT_ID;
-  const GA_API_SECRET = process.env.GA_API_SECRET;
-
-  if (!GA_MEASUREMENT_ID || !GA_API_SECRET) return;
-
-  await fetch(
-    `https://www.google-analytics.com/mp/collect?measurement_id=${GA_MEASUREMENT_ID}&api_secret=${GA_API_SECRET}`,
-    {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        client_id: properties.client_id ?? "anonymous",
-        events: [
-          {
-            name: event,
-            params: {
-              ...properties,
-              engagement_time_msec: 100,
-            },
-          },
-        ],
-      }),
-    }
-  );
-}
-
-export async function POST(request: Request) {
-  try {
-    const body = (await request.json()) as EventPayload;
-
-    if (!body?.event || !ALLOWED_EVENTS.has(body.event)) {
-      return NextResponse.json(
-        { ok: false, error: "Invalid event name" },
-        { status: 400 }
-      );
-    }
-
-    const payload = {
-      event: body.event,
-      properties: body.properties ?? {},
-      timestamp: new Date().toISOString(),
-    };
-
-    console.log("[analytics]", JSON.stringify(payload));
-
-    // GA4に送信
-    await sendToGA4(payload.event, payload.properties);
-
-    return NextResponse.json({ ok: true });
-  } catch {
-    return NextResponse.json(
-      { ok: false, error: "Invalid request body" },
-      { status: 400 }
-    );
-  }
+/**
+ * 旧 GA4 ビーコン用 Route Handler。
+ *
+ * 以前はここで Measurement Protocol (mp/collect) に `client_id: "anonymous"` 固定で
+ * イベントを投げていたが、これが原因で GA4 上で全イベントが 1 ユーザ
+ * (activeUsers=1) に collapse し、ブラウザの gtag セッションとも切り離された
+ * 「イベントのみのセッション」(landingPage 空・engagedSessions 0) を量産していた。
+ *
+ * GA4 送信は client 側 gtag に一本化したため (lib/analytics/ga4-client.ts)、
+ * この endpoint はもう Measurement Protocol を呼ばない。デプロイ直後に古いクライアント
+ * バンドルがまだ POST してくる可能性があるので、404/400 でノイズを出さないよう
+ * 受理だけして握りつぶす no-op として残す。新規呼び出しは追加しないこと。
+ */
+export async function POST(): Promise<Response> {
+  return NextResponse.json({ ok: true, deprecated: true });
 }

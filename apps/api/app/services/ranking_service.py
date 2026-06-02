@@ -50,7 +50,7 @@ async def get_ranking(
 ) -> list[MovieCard]:
     """期間ランキング (daily / weekly / monthly)。
 
-    主指標 (一次キー) は **watch_count** (50% 以上再生に到達したユニーク
+    主指標 (一次キー) は **watch_count** (25% 以上再生に到達したユニーク
     feed_session 数を期間内で集計したもの)。`get_popular_all_time` と同じ
     canonical 定義 (`aggregate_watch_count_ranking`) を、期間ウィンドウ
     付きで使う。
@@ -154,7 +154,7 @@ async def get_popular_all_time(
     limit: int = 20,
     offset: int = 0,
 ) -> list[MovieCard]:
-    """「人気」セクション: 全期間の watch_count (= 50%以上再生に到達したユニーク feed_session 数) 順。
+    """「人気」セクション: 全期間の watch_count (= 25%以上再生に到達したユニーク feed_session 数) 順。
 
     interaction_events ベースの watch_count を主指標にし、不足分は
     既存 view イベント / review_count フォールバックで穴埋めする。
@@ -163,7 +163,8 @@ async def get_popular_all_time(
     互換性メモ:
         従来は raw view イベント数を「総視聴回数」として並べていたが、
         フィード上の単なる通過 / 自動再生でも view が積み上がるため、
-        2026-05 以降は「50% 到達ユニーク watch」を canonical な指標として採用する。
+        2026-05 以降は「25% 到達ユニーク watch」を canonical な指標として採用する
+        (当初の閾値は 50% だったが 2026-06 に 25% へ引き下げた)。
         watch_count が貯まるまでは aggregate_view_ranking_all_time + 既存
         フォールバックで補い、ユーザー体験を維持する。
     """

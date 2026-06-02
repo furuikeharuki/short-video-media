@@ -84,7 +84,7 @@ async def get_home(
         )
     )
 
-    # 3. 人気動画 (全期間の watch_count = 50% 以上再生に到達したユニーク
+    # 3. 人気動画 (全期間の watch_count = 25% 以上再生に到達したユニーク
     #    feed_session 数を主指標にする canonical な「人気」)。subtitle は
     #    以前 "総視聴回数順" と書いていたが、フィード自動再生の通過 view を
     #    含む raw view 数とは別物なので、ユーザーから見て分かりやすい

@@ -33,7 +33,7 @@ async def get_movie_by_slug_service(db: AsyncSession, slug: str) -> MovieDetail 
     if movie.price_list:
         price_list = PriceList.model_validate(movie.price_list)
 
-    # interaction_events から watch_count (50% 以上再生に到達したユニーク feed_session 数) を集計。
+    # interaction_events から watch_count (25% 以上再生に到達したユニーク feed_session 数) を集計。
     # 失敗しても詳細表示そのものは継続したいので例外は飲み、None にしてフロント側で
     # JSON-LD interactionStatistic を出さない判断に委ねる。
     try:

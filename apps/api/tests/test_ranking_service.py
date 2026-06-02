@@ -360,7 +360,7 @@ def test_popular_products_empty_when_no_goods(monkeypatch: pytest.MonkeyPatch) -
 def test_popular_all_time_uses_watch_count_first(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """`get_popular_all_time` は watch_count (50% 到達) を主指標として使うこと。
+    """`get_popular_all_time` は watch_count (25% 到達) を主指標として使うこと。
 
     watch_count の集計関数が呼ばれ、その slug 群が先頭に並ぶことを担保する。
     """

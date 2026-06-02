@@ -104,13 +104,17 @@ async def insert_interaction_event(
 # watch_count 集計
 # ─────────────────────────────────────────────
 # watch_count の定義 (canonical):
-#   「ある作品について、ユーザー (= feed_session) が 50% 以上再生に到達した」ら 1 watch。
+#   「ある作品について、ユーザー (= feed_session) が 25% 以上再生に到達した」ら 1 watch。
 #   具体的には interaction_events のうち以下のいずれかを満たすレコードを「watch event」とみなす:
-#     - event_name='play_progress' AND (progress_milestone >= 50 OR progress_ratio >= 0.5)
+#     - event_name='play_progress' AND (progress_milestone >= 25 OR progress_ratio >= 0.25)
 #     - event_name='video_complete' (100% 到達なので必ず watch に該当)
 #
+#   閾値は元々 50% だったが、より浅い視聴 (25% 到達) も人気の指標に含めるため
+#   25% に引き下げた。フロントは元から 25/50/75 マイルストーンを送出しているため
+#   既存の interaction_events をそのまま再利用でき、バックフィルは不要。
+#
 # デデュープ:
-#   同一 feed_session_id + slug で複数の 50/75/100/complete イベントが飛んでも
+#   同一 feed_session_id + slug で複数の 25/50/75/100/complete イベントが飛んでも
 #   1 watch にしか数えない (COUNT(DISTINCT feed_session_id))。
 #   feed_session_id が NULL のレコードは、互いを区別する識別子がないため
 #   現在の interaction_event 1 件をそのまま 1 watch として保守的に数える
@@ -122,14 +126,14 @@ async def insert_interaction_event(
 def _watch_event_filter():
     """watch_count を構成する interaction_events 行の WHERE 句。
 
-    play_progress 系 (50% 以上) と video_complete の両方を含む。
+    play_progress 系 (25% 以上) と video_complete の両方を含む。
     """
     return or_(
         InteractionEvent.event_name == "video_complete",
         (InteractionEvent.event_name == "play_progress")
         & (
-            (InteractionEvent.progress_milestone >= 50)
-            | (InteractionEvent.progress_ratio >= 0.5)
+            (InteractionEvent.progress_milestone >= 25)
+            | (InteractionEvent.progress_ratio >= 0.25)
         ),
     )
 
@@ -218,7 +222,7 @@ async def aggregate_watch_count_ranking(
 
     canonical 定義は全期間版と同じ:
       - event_name='video_complete' か、
-        event_name='play_progress' で 50% 以上に到達した行を watch event とみなし、
+        event_name='play_progress' で 25% 以上に到達した行を watch event とみなし、
       - (slug, feed_session_id) で COUNT(DISTINCT) によりデデュープ。
       - feed_session_id が NULL の行は interaction_event.id でデデュープ。
 

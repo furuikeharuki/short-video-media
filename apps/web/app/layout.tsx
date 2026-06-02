@@ -12,6 +12,7 @@ import {
   SITE_NAME,
   SITE_URL,
   SITE_DESCRIPTION,
+  HOME_DESCRIPTION,
   SITE_KEYWORDS,
   SITE_LOCALE,
 } from "@/lib/config/seo";
@@ -99,7 +100,7 @@ export default function RootLayout({
     "@type": "WebSite",
     name: SITE_NAME,
     url: SITE_URL,
-    description: SITE_DESCRIPTION,
+    description: HOME_DESCRIPTION,
     inLanguage: "ja-JP",
     potentialAction: {
       "@type": "SearchAction",

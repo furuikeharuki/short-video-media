@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import { getHome } from "@/lib/api/home";
+import { HOME_DESCRIPTION } from "@/lib/config/seo";
 import HorizontalCardRow from "@/components/home/HorizontalCardRow";
 import MovieCardThumb from "@/components/home/MovieCardThumb";
 import ActressCardThumb from "@/components/home/ActressCardThumb";
@@ -23,8 +24,7 @@ export const revalidate = 30;
 // template "%s" を通って <title>AV Shorts</title> として描画される)。
 export const metadata: Metadata = {
   title: "AV Shorts",
-  description:
-    "本日配信開始の新作、日間/週間/月間ランキング、人気ジャンル別のAVショート動画を一覧でチェック。気に入った作品はFANZAでそのまま購入できます。",
+  description: HOME_DESCRIPTION,
   alternates: { canonical: "/" },
   openGraph: {
     title: "AV Shorts",

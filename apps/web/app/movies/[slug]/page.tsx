@@ -15,14 +15,20 @@ type PageProps = {
   params: Promise<{ slug: string }>;
 };
 
+// ISR: 1時間キャッシュ。generateStaticParams なしの全動的ルートでも
+// 初回生成後はキャッシュ済み HTML を返すことで、クローラーへの応答を
+// 安定させインデックス率を向上させる。
+export const revalidate = 3600;
+
 export async function generateMetadata({ params }: PageProps): Promise<Metadata> {
   try {
     const { slug } = await params;
     const movie = await getMovieBySlug(slug);
     const title = `${movie.title} | ${SITE_NAME}`;
-    const description = movie.description
-      ? movie.description.slice(0, 120) + "..."
+    const raw = movie.description
+      ? movie.description
       : `${movie.actresses.join("・")}出演。${movie.maker_name ?? ""}の作品をショート動画で試し見できます。`;
+    const description = raw.length > 155 ? raw.slice(0, 152) + "…" : raw;
     const imageUrl = movie.image_url_large ?? movie.image_url_list ?? "";
     const canonical = `${SITE_URL}/movies/${slug}`;
 

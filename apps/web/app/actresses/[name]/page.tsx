@@ -194,7 +194,7 @@ export default async function ActressDetailPage({ params }: PageProps) {
 
         {(stats.top_genres.length > 0 || stats.top_makers.length > 0) && (
           <section style={styles.section}>
-            <h2 style={styles.sectionTitle}>側向</h2>
+            <h2 style={styles.sectionTitle}>傾向</h2>
             {stats.top_genres.length > 0 && (
               <div style={styles.tagBlock}>
                 <span style={styles.tagBlockLabel}>よく出るジャンル</span>

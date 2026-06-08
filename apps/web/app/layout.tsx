@@ -68,7 +68,7 @@ export const metadata: Metadata = {
     },
   },
   alternates: {
-    canonical: "https://av-shorts.com/",
+    canonical: SITE_URL,
   },
 };
 

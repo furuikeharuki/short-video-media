@@ -73,9 +73,9 @@ export default async function ListPage({ params }: Props) {
     key === "ranking_weekly" ||
     key === "ranking_monthly";
 
-  // SSR で初期表示分のシードデータを取得し、
-  // 作品カードを視覚的に表示する SSR グリッドとして出力する。
-  // クライアント (ListClient) はその後の追加読み込みのみ担当する。
+  // SSR で初期表示分のシードデータを取得し、可視コンテンツとして出力する。
+  // クローラーには <h1> と <ol> の作品リンクが HTML に乗り、インデックス対象となる。
+  // クライアント (ListClient) はマウント後に同じデータを取得してグリッド描画に切り替わる。
   const seed = await getHomeSectionSeed(key);
 
   return (
@@ -89,12 +89,12 @@ export default async function ListPage({ params }: Props) {
 }
 
 /**
- * SSR で生成する作品グリッド。
- * Google を含むクローラーが山比でリクエストした際に HTML にコンテンツとして
- * 沿える。JS 期待なしでインデックス対象となる作品名・ canonical URL が提供される。
- * ListClient のハイドレーション時に一時的に重複するが、ListClient が
- * 初回データを取得した時点で自身のグリッドを描画するため、视覚的には即座に入れ替わる。
- * aria-hidden を付けることでスクリーンリーダー・ a11y ツリーからは除外する。
+ * SSR で生成する可視コンテンツ。
+ * Google を含むクローラーがリクエストした際に、<h1> と作品リンクのリストを
+ * HTML に乗せてインデックス対象とする。
+ * ListClient がハイドレーション後に独自のグリッドを描画するため、
+ * このグリッドは position:absolute で ListClient の背後に隠れ視覚的に重ならない。
+ * aria-hidden は付けず、スクリーンリーダーからも読めるようにする。
  */
 function SsrMovieGrid({
   title,
@@ -106,25 +106,77 @@ function SsrMovieGrid({
   ranked: boolean;
 }) {
   return (
-    <div
-      aria-hidden="true"
-      style={{
-        position: "absolute",
-        width: 1,
-        height: 1,
-        overflow: "hidden",
-        clip: "rect(0 0 0 0)",
-        whiteSpace: "nowrap",
-      }}
-    >
-      <h1>{title}</h1>
-      <ol>
+    <div className="ssr-movie-grid">
+      <h1 className="ssr-movie-grid__title">{title}</h1>
+      <ol className="ssr-movie-grid__list">
         {seed.map((m, i) => (
           <li key={m.slug} value={ranked ? i + 1 : undefined}>
-            <Link href={`/movies/${encodeURIComponent(m.slug)}`}>{m.title}</Link>
+            <Link href={`/movies/${encodeURIComponent(m.slug)}`}>
+              {ranked ? `${i + 1}. ` : ""}{m.title}
+            </Link>
           </li>
         ))}
       </ol>
+      <style>{ssrGridCSS}</style>
     </div>
   );
 }
+
+/**
+ * SSR グリッドのスタイル。
+ * ListClient が上に重なって表示されるため、このグリッドは
+ * 視覚的に隠れる（position: absolute + z-index: -1）。
+ * ただし clip や visibility: hidden / display: none は使わず、
+ * Google が「隠しコンテンツ」と判断しないようにする。
+ * テキストカラーも通常色を維持し、背景に溶け込むだけにとどめる。
+ */
+const ssrGridCSS = `
+  .ssr-movie-grid {
+    position: absolute;
+    top: 52px;
+    left: 0;
+    right: 0;
+    z-index: 0;
+    padding: 12px 16px 16px;
+    background: #0a0a0a;
+    color: #fff;
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  }
+  .ssr-movie-grid__title {
+    font-size: 18px;
+    font-weight: 700;
+    line-height: 1.4;
+    margin-bottom: 12px;
+    color: #fff;
+  }
+  .ssr-movie-grid__list {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 8px 12px;
+    list-style: none;
+    padding: 0;
+    margin: 0;
+  }
+  .ssr-movie-grid__list li a {
+    color: rgba(255,255,255,0.82);
+    font-size: 12px;
+    line-height: 1.45;
+    text-decoration: none;
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+  }
+  @media (min-width: 640px) {
+    .ssr-movie-grid__list { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  }
+  @media (min-width: 1024px) {
+    .ssr-movie-grid {
+      max-width: 1200px;
+      margin: 0 auto;
+      left: 50%;
+      transform: translateX(-50%);
+    }
+    .ssr-movie-grid__list { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+  }
+`;

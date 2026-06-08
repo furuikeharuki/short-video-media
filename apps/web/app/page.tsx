@@ -70,12 +70,9 @@ export default async function Page() {
   const goodsSections = (data.goods_sections ?? []).filter(
     (s) => s.items.length > 0,
   );
-  // ホームの「人気女優」セクション: 人気動画 (popular) の直後、
-  // かつ 人気商品 の直前に差し込む。該当キーが見つからない場合は挿入しない。
   const popularActresses = actressSections.find(
     (s) => s.key === "popular_actresses",
   );
-  // 「人気商品」(Goods) セクション。popular の直後、人気女優の下に差し込む。
   const popularProducts = goodsSections.find(
     (s) => s.key === "popular_products",
   );
@@ -93,25 +90,18 @@ export default async function Page() {
     );
   }
 
-  // セクション間広告は横長バナー（300x100）固定。
-  // native（縦型カード）は横スクロール行間には不自然なので使わない。
-  //
-  // 広告の挿入位置は「特定セクションの直下」で固定する (= section.key で判定する)。
-  // - "popular"          : 人気動画 → 人気女優 → 人気商品 と並べた末尾の直下
-  //                        (人気女優・人気商品は popular の直後にインラインで差し込む)
-  // - "ranking_monthly"  : 月間ランキングの直下
-  //
-  // 過去はフィルタ後の配列 index に対する `(i+1) % 3 === 0` で判定していたが、
-  // 「本日配信 (new)」「新着 (recent)」が空でフィルタされると挿入位置が後ろの
-  // セクションに玉突きで動いてしまい、本来 人気 / 月間ランキング の下にあった
-  // 広告が別の場所に出てしまっていた。key 固定にすることで、上位セクションが
-  // 表示されなくても人気カテゴリ群 / 月間ランキング の下に必ず広告が並ぶようにする。
   const bannerEnabled = isAdZoneEnabled("mobileBanner300x100");
   const AD_AFTER_KEYS = new Set(["popular", "ranking_monthly"]);
 
   return (
     <PullToRefresh className="home-main">
-      <h1 className="home-h1-sr">AV Shorts｜AVショート動画メディア</h1>
+      {/*
+       * h1 はページ最上部に可視テキストとして置く。
+       * 視覚的には小さく目立たないが clip / visibility:hidden は使わず
+       * Google が「隠しテキスト」と判断しないようにする。
+       * スクリーンリーダーからも正常に読まれる。
+       */}
+      <h1 className="home-h1">AV Shorts｜AVショート動画メディア</h1>
       {sections.map((section, sectionIndex) => {
         const isRanking = RANKING_KEYS.has(section.key);
         const action = {
@@ -123,16 +113,11 @@ export default async function Page() {
           ? { kind: "section" as const, key: "genre", genre: section.genre }
           : { kind: "section" as const, key: section.key };
 
-        // ad は section.key で固定。最終セクション直下には出さない (フッターが
-        // すぐ続くので見栄えが悪いため)。
         const showAdAfter =
           bannerEnabled &&
           sectionIndex < sections.length - 1 &&
           AD_AFTER_KEYS.has(section.key);
 
-        // 「人気動画」(popular) の直後に「人気女優」「人気商品」セクションを
-        // インライン挿入する。popular 自体が空でも、後段で同じ位置に出したい
-        // ので popular の直下にまとめて差し込む形にする。
         const showInlineAfterPopular = section.key === "popular";
 
         return (
@@ -212,16 +197,19 @@ const pageStyles = `
   html { background: #000; }
   body { background: #000; }
 
-  /* H1 はスクリーンリーダー/検索エンジン向けの視覚的非表示。
-     UI のレイアウトは横スクロール行が主体なので画面上には表示しない。 */
-  .home-h1-sr {
-    position: absolute !important;
-    width: 1px; height: 1px;
-    padding: 0; margin: -1px;
-    overflow: hidden;
-    clip: rect(0, 0, 0, 0);
-    white-space: nowrap;
-    border: 0;
+  /*
+   * h1 はページ上部に可視テキストとして配置。
+   * 視覚的に目立ちすぎないよう小さなフォントにするが、
+   * clip / visibility:hidden は使わず Google に正常なコンテンツとして認識させる。
+   */
+  .home-h1 {
+    padding: 8px 16px 0;
+    font-size: 11px;
+    font-weight: 500;
+    color: rgba(255,255,255,0.35);
+    letter-spacing: 0.04em;
+    line-height: 1.4;
+    user-select: none;
   }
 
   .home-main {
@@ -236,11 +224,6 @@ const pageStyles = `
     color: #fff;
   }
   .home-footer-spacer { height: 24px; }
-  /* セクション間広告。広告が充填されたときに上下に 8px の余白を取って隣接
-     セクションと視覚的に分離する。AdSlot が isAdZoneEnabled=false で null を
-     返したケースでもラッパーが空になるだけで害はないが、念のため :empty では
-     非表示にしておく (page.tsx 側でも showAdAfter で出し分けているので普段は
-     ここまで来ない)。 */
   .home-section-ad {
     padding: 8px 0;
     display: flex;

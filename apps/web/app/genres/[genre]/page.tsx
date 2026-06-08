@@ -8,13 +8,11 @@ import MovieCardThumb from "@/components/home/MovieCardThumb";
 import { getGenreMovies } from "@/lib/api/genres";
 import { SITE_NAME, SITE_URL, SITE_LOCALE } from "@/lib/config/seo";
 
-// ISR: ジャンル集約ページは 1 時間キャッシュ。クローラ/初回表示で DB に負荷を
-// かけないようにしつつ、新作の取り込みに合わせて緩やかに更新する。
+// ISR: ジャンル集約ページは 1 時間キャッシュ。
 export const revalidate = 3600;
 
-// 初期表示件数。JSON-LD の ItemList と画面表示で共通利用する。
-// 件数を抑えて初期 HTML / 画像読み込みを軽量に保つ。
-const INITIAL_LIMIT = 30;
+// 初期表示件数。コンテンツ量を充実させ、競合ページとの差を縮めるため 60 件に増加。
+const INITIAL_LIMIT = 60;
 
 type PageProps = {
   params: Promise<{ genre: string }>;
@@ -67,14 +65,11 @@ export default async function GenrePage({ params }: PageProps) {
   try {
     result = await getGenreMovies(decoded, INITIAL_LIMIT);
   } catch {
-    // API 障害時はビルド/描画を止めず 404 にフォールバックする。
     notFound();
   }
 
   const { items, total } = result;
 
-  // 作品が 1 件も無いジャンル (存在しない / 全作品非公開) は 404 にする。
-  // /search?genre=... と違い、index 対象ページなので空ページを残さない。
   if (items.length === 0) {
     notFound();
   }
@@ -253,7 +248,7 @@ const styles: Record<string, React.CSSProperties> = {
 
 const pageCSS = `
   *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
-  html, body { background: #0a0a0a !important; overflow: hidden !important; }
+  html, body { background: #0a0a0a !important; }
 
   .genre-grid {
     display: grid;

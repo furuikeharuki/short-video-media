@@ -162,8 +162,6 @@ export default function ListClient({
       </div>
       <div className="list-grid">
         {items.map((item, index) => {
-          // AD_LIST_INTERVAL ごと (例: 6 件ごと) に 300x250 バナーを行として挟む。
-          // grid-column: 1 / -1 で 1 行全幅を占有させてレイアウトを崩さない。
           const showAdBefore =
             isAdZoneEnabled("mobileBanner300x250") &&
             AD_LIST_INTERVAL > 0 &&
@@ -180,7 +178,6 @@ export default function ListClient({
                 movie={item}
                 aspect="portrait"
                 fluid
-                // ランキングセクションでも順位バッジは 100 位まで、101 件目以降はバッジなし。
                 rank={ranked && index < 100 ? index + 1 : undefined}
                 playlist={{
                   key: `list-${sectionKey}`,
@@ -194,7 +191,6 @@ export default function ListClient({
           );
         })}
       </div>
-      {/* 次ページ取得用 sentinel + ロード表示 */}
       {nextCursor && (
         <div ref={sentinelRef} className="list-load-more" role="status" aria-live="polite">
           <span className="list-spinner" aria-hidden="true" />
@@ -208,7 +204,7 @@ export default function ListClient({
 }
 
 const pageCSS = `
-  html, body { background: #0a0a0a !important; overflow: hidden !important; }
+  html, body { background: #0a0a0a !important; }
   .list-main {
     position: fixed;
     top: 52px;
@@ -272,7 +268,6 @@ const pageCSS = `
       margin: 0 auto;
     }
   }
-  /* 末尾の「次を読み込み中」表示 + IntersectionObserver の sentinel を兼ねる */
   .list-load-more {
     display: flex;
     align-items: center;
@@ -283,7 +278,6 @@ const pageCSS = `
     font-size: 13px;
     min-height: 48px;
   }
-  /* 初期表示中のフルロード表示 */
   .list-initial-loading {
     display: flex;
     align-items: center;

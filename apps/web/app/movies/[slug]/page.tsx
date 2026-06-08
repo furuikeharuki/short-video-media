@@ -110,7 +110,6 @@ export default async function MovieDetailPage({ params }: PageProps) {
       { label: "収録時間",     value: movie.volume != null ? `${movie.volume}分` : NA },
       { label: "配信開始日",   value: formatDate(movie.delivery_date) },
       { label: "商品発売日",   value: formatDate(movie.release_date) },
-      // 配信品番: maker_product 欠落時は product_id にフォールバック (#288 と同じ)。
       { label: "配信品番", value: movie.maker_product || movie.product_id || NA },
     ];
 
@@ -123,12 +122,6 @@ export default async function MovieDetailPage({ params }: PageProps) {
       thumbnailUrl: imgSrc || undefined,
       uploadDate,
       duration: movie.volume ? `PT${movie.volume}M` : undefined,
-      // embedUrl は FANZA litevideo の iframe プレイヤーページ URL (sample_embed_url)。
-      // これは実際にサンプル動画を再生できる埋め込みページなので VideoObject.embedUrl の
-      // 仕様に合致する。MP4 直リンク (contentUrl 相当) は DB に保持しておらず再生時に
-      // 動的解決するため SSR では確定できない。以前は contentUrl/embedUrl ともに作品
-      // 詳細ページ URL を入れていたが、これは動画ファイルでも埋め込みプレイヤーでもなく
-      // 構造化データ違反になりうるため、確実な値が無い contentUrl は出力しない。
       embedUrl: movie.sample_embed_url ?? undefined,
       genre: movie.genres.length > 0 ? movie.genres : undefined,
       actor:
@@ -151,10 +144,6 @@ export default async function MovieDetailPage({ params }: PageProps) {
             worstRating: 1,
           }
         : undefined,
-      // watch_count は「50% 以上再生に到達したユニーク feed_session 数」を
-      // canonical な視聴回数として interaction_events から集計したもの。
-      // 0 や null (= まだ集計データが無い) のときは捏造値を入れないため出力しない。
-      //   参考: https://developers.google.com/search/docs/appearance/structured-data/video
       interactionStatistic:
         movie.watch_count != null && movie.watch_count > 0
           ? {
@@ -179,9 +168,6 @@ export default async function MovieDetailPage({ params }: PageProps) {
       ],
     };
 
-    // Product JSON-LD は価格情報がある場合のみ出力する。
-    // price は sale_price → list_price → price_min の順で採用。
-    // 既存ページの表示には影響せず、Google ショッピング系のリッチリザルト候補。
     const productJsonLd =
       price != null
         ? {
@@ -253,15 +239,22 @@ export default async function MovieDetailPage({ params }: PageProps) {
           </div>
 
           <div style={styles.content}>
+            {/* ジャンルバッジ: /genres/[genre] への内部リンクとして出力。
+                作品詳細 → ジャンル集約ページへの PageRank フローを形成し、
+                ジャンルページのインデックス評価を向上させる。 */}
             <div style={styles.genreList}>
               {movie.genres.map((g) => (
-                <span key={g} style={styles.badge}>{g}</span>
+                <Link
+                  key={g}
+                  href={`/genres/${encodeURIComponent(g)}`}
+                  style={styles.badge}
+                >
+                  {g}
+                </Link>
               ))}
             </div>
             <h1 style={styles.title}>{movie.title}</h1>
 
-            {/* ファーストビュー内の主送客 CTA: 作品詳細 → /feed?v=<slug>。
-                未認証時は middleware が age-gate を挟んだ上で slug を保持して戻す。 */}
             <div style={styles.feedCtaArea}>
               <MovieFeedCtaLink
                 slug={movie.slug}
@@ -299,7 +292,6 @@ export default async function MovieDetailPage({ params }: PageProps) {
             {movie.description && (
               <p style={styles.description}>{movie.description}</p>
             )}
-            {/* 広告は最大300pxに制限しセンタリング */}
             <div style={styles.adBottom}>
               <AdSlot zone="mobileBanner300x250" />
             </div>
@@ -357,6 +349,7 @@ const styles: Record<string, React.CSSProperties> = {
     border: '1px solid rgba(255,255,255,0.2)', color: 'rgba(255,255,255,0.7)',
     fontSize: '11px', fontWeight: 600, letterSpacing: '0.05em',
     padding: '3px 10px', borderRadius: '999px',
+    textDecoration: 'none',
   },
   title: {
     fontSize: 'clamp(18px, 5vw, 26px)' as unknown as string,

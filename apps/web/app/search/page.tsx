@@ -147,9 +147,6 @@ export default async function SearchPage({ searchParams }: Props) {
     (!!query && hasTagContext);
 
   if (hasAdvancedFilter) {
-    // 文脈クエリ (genre / director / maker / label / series の単一キー) を advanced 入力に統合して
-    // 「掛け合わせ検索」にする。例えば `/search?genre=巫乳&actresses=...` は
-    // 'genre=巫乳' を "AND" に保ちつつ actresses も絞り込む。
     const mergedGenres = (() => {
       if (!genreTag) return genres;
       const set = new Set<string>([genreTag, ...genres]);
@@ -189,10 +186,6 @@ export default async function SearchPage({ searchParams }: Props) {
       date_to: dateTo || undefined,
       sort,
     };
-    // サブヘッダーラベル: タグ文脈 (genre/director/maker/label/series) を q より優先表示。
-    // 保存済み詳細検索の q が AND 注入されていてもラベルは "今押したタグ" を見せるため。
-    // タグ文脈が無いケースでのみ q をラベルにする (検索アイコンからの明示検索)。
-    // 何も無ければ代表チップを 1 つラベル化する。
     let headerLabel: string;
     if (genreTag) {
       headerLabel = `#${genreTag}`;
@@ -216,7 +209,6 @@ export default async function SearchPage({ searchParams }: Props) {
       else if (mergedLabels.length) tip = `レーベル: ${mergedLabels[0]}`;
       headerLabel = tip;
     }
-    // playlistKey は input から導出 (string 化で安定するキーを作る)
     const playlistKey = `search-adv-${JSON.stringify({
       q: input.q,
       g: input.genres,
@@ -319,5 +311,5 @@ const styles: Record<string, React.CSSProperties> = {
 
 const pageCSS = `
   *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
-  html, body { background: #0a0a0a !important; overflow: hidden !important; }
+  html, body { background: #0a0a0a !important; }
 `;

@@ -4,14 +4,6 @@ import AgeGateExitLink from "@/components/age-gate/AgeGateExitLink";
 import { sanitizeNextPath, classifyNextPath } from "@/lib/age-gate/next-path";
 import type { Metadata } from "next";
 
-// /age-gate は本来ユーザー向けの中継ページであって独立した検索対象ではない。
-// 万一クローラ UA バイパス (middleware.ts) をすり抜けて Google が age-gate を
-// 取得しても、ホーム "/" の重複ページとして扱わせ、検索結果に
-// "年齢確認 | AV Shorts | AV Shorts" のような title が出続けることを防ぐ。
-// - robots: noindex,nofollow で除外する
-// - canonical を "/" に向けて、もし index されてもホーム扱いにする
-// - og:title もホームと同じサイト名にして、age-gate の文言を SERP の見出しに
-//   採用されにくくする
 export const metadata: Metadata = {
   title: "年齢確認",
   description: "AV Shorts は18歳以上を対象としたアダルトコンテンツを含みます。年齢確認のうえご利用ください。",
@@ -42,8 +34,6 @@ type AgeGatePageProps = {
 
 export default async function AgeGatePage({ searchParams }: AgeGatePageProps) {
   const params = await searchParams;
-  // next はクライアントが書き換え可能なため必ずサニタイズする (オープン
-  // リダイレクト防止)。同一オリジンの内部パス以外は "/" にフォールバックする。
   const nextPath = sanitizeNextPath(params.next);
   const nextKind = classifyNextPath(nextPath);
 

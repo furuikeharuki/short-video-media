@@ -26,12 +26,6 @@ export const viewport: Viewport = {
 
 export const metadata: Metadata = {
   metadataBase: new URL(SITE_URL),
-  // - default: 子ページが title を指定しなかったとき (= ホーム "/") の <title>。
-  //   Google は検索結果で og:site_name / applicationName 等からサイト名を自動付与する。
-  //   そのため <title> 側でも "| AV Shorts" を付けると重複 ("年齢確認 | AV Shorts |
-  //   AV Shorts") になってしまう。
-  // - template: 子ページが title を指定したときは、その文字列だけを <title> に出す
-  //   (例: "年齢確認")。サイト名は Google 側が自動で付与する。
   title: {
     default: SITE_NAME,
     template: "%s",
@@ -86,10 +80,6 @@ export default function RootLayout({
   modal: React.ReactNode;
 }) {
   const GA_ID = process.env.NEXT_PUBLIC_GA_MEASUREMENT_ID;
-  // デプロイ済みバンドルの識別子。Vercel が自動で渡す環境変数を使い、
-  // 落ちていればローカル/CI 用に "dev" を返す。stale-cache 切り分け用に
-  // <meta> として埋め込み、ユーザログから「いつの bundle が走っていたか」を
-  // 後追いできるようにする。クエリ ?vt=1 を付けずとも特定できるのが狙い。
   const BUILD_ID =
     process.env.VERCEL_GIT_COMMIT_SHA?.slice(0, 12) ||
     process.env.NEXT_PUBLIC_VERCEL_GIT_COMMIT_SHA?.slice(0, 12) ||

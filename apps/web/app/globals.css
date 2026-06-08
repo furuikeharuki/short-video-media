@@ -9,7 +9,8 @@
 }
 
 html, body {
-  height: 100%;
+  /* height: 100% は各ページの fixed レイアウトと競合し iOS Safari で
+     二重スクロールを引き起こすため削除。各ページが必要に応じて明示する。 */
   background: #000;
   color: #fff;
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
@@ -96,7 +97,6 @@ html, body {
   top: var(--header-h);
   left: 0;
   right: 0;
-  /* 詳細パネル展開時に画面外まで伸びないよう、ヘッダー直下からボトムナビ上端までを最大高にする */
   max-height: calc(100dvh - var(--header-h) - var(--bottom-nav-h, 56px));
   overflow-y: auto;
   -webkit-overflow-scrolling: touch;
@@ -299,11 +299,6 @@ html, body {
   padding-top: var(--header-h);
 }
 
-/*
-  .page-content
-  ショート以外の全ページで使う共通ラッパー。
-  ヘッダー（上）とボトムナブ（下）の高さ分だけ余白を確保する。
-*/
 .page-content {
   padding-top: var(--header-h);
   padding-bottom: var(--bottom-nav-h);
@@ -362,4 +357,3 @@ body.detail-page {
   overflow: auto !important;
   height: auto !important;
 }
-

@@ -154,13 +154,20 @@ export default async function GenrePage({ params }: PageProps) {
 
         {total > items.length && (
           <div style={styles.moreWrap}>
-            <Link
-              href={`/search?genre=${encodeURIComponent(decoded)}`}
+            {/*
+             * 「もっと見る」は /search?genre=... ではなく FANZA の該当ジャンルページへ外部リンクする。
+             * /search は robots.txt で Disallow 済みのため、内部リンクとして置くと
+             * クローラーがリンク先をクロールできず内部リンクの連鎖が切れる。
+             * rel="noopener noreferrer sponsored" を付け、外部 affiliate リンクである旨を明示する。
+             */}
+            <a
+              href={`https://www.dmm.co.jp/digital/videoa/-/list/=/article=keyword/id=/${encodeURIComponent(decoded)}/`}
+              target="_blank"
+              rel="noopener noreferrer sponsored"
               style={styles.moreLink}
-              prefetch={false}
             >
-              {decoded} の動画をもっと見る
-            </Link>
+              {decoded} の動画をFANZAでもっと見る
+            </a>
           </div>
         )}
 

@@ -25,11 +25,7 @@ export const viewport: Viewport = {
 };
 
 export const metadata: Metadata = {
-  // metadataBase は末尾スラッシュなしで指定する。
-  // Next.js は metadataBase を使って canonical を解決する際に末尾スラッシュを
-  // 正規化して削除するため、スラッシュなしにしておくことで canonical の
-  // "https://av-shorts.com/" がそのまま出力される。
-  metadataBase: new URL("https://av-shorts.com"),
+  metadataBase: new URL(SITE_URL),
   title: {
     default: SITE_NAME,
     template: "%s",
@@ -98,7 +94,7 @@ export default function RootLayout({
     inLanguage: "ja-JP",
     potentialAction: {
       "@type": "SearchAction",
-      target: `${SITE_URL}search?q={search_term_string}`,
+      target: `${SITE_URL}/search?q={search_term_string}`,
       "query-input": "required name=search_term_string",
     },
   };

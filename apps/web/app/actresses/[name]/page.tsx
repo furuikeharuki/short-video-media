@@ -9,6 +9,10 @@ import HorizontalCardRow from "@/components/home/HorizontalCardRow";
 import MovieCardThumb from "@/components/home/MovieCardThumb";
 import { SITE_NAME, SITE_URL, SITE_LOCALE } from "@/lib/config/seo";
 
+// ISR: 1時間キャッシュ。女優プロフィールページも初回生成後はキャッシュ済み HTML を
+// 返すことで、クローラーへの応答を安定させる。
+export const revalidate = 3600;
+
 const NA = "----";
 
 type PageProps = {
@@ -556,7 +560,7 @@ const styles: Record<string, React.CSSProperties> = {
 
 const pageCSS = `
   *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
-  html, body { background: #0a0a0a !important; overflow: hidden !important; }
+  html, body { background: #0a0a0a !important; }
 
   .goods-grid {
     display: grid;

@@ -155,19 +155,16 @@ export default async function GenrePage({ params }: PageProps) {
         {total > items.length && (
           <div style={styles.moreWrap}>
             {/*
-             * 「もっと見る」は /search?genre=... ではなく FANZA の該当ジャンルページへ外部リンクする。
-             * /search は robots.txt で Disallow 済みのため、内部リンクとして置くと
-             * クローラーがリンク先をクロールできず内部リンクの連鎖が切れる。
-             * rel="noopener noreferrer sponsored" を付け、外部 affiliate リンクである旨を明示する。
+             * robots.txt の /search Disallow を削除したため、内部リンクとして復元。
+             * /search は noindex,follow なのでインデックスはされず、
+             * クローラーはリンクをたどれる。ユーザーはサイト内に留まる。
              */}
-            <a
-              href={`https://www.dmm.co.jp/digital/videoa/-/list/=/article=keyword/id=/${encodeURIComponent(decoded)}/`}
-              target="_blank"
-              rel="noopener noreferrer sponsored"
+            <Link
+              href={`/search?genre=${encodeURIComponent(decoded)}`}
               style={styles.moreLink}
             >
-              {decoded} の動画をFANZAでもっと見る
-            </a>
+              {decoded} の動画をもっと見る
+            </Link>
           </div>
         )}
 
@@ -236,9 +233,9 @@ const styles: Record<string, React.CSSProperties> = {
   moreLink: {
     display: "inline-block",
     padding: "10px 20px",
-    background: "rgba(124,183,255,0.12)",
-    border: "1px solid rgba(124,183,255,0.3)",
-    color: "#7cb7ff",
+    background: "rgba(255,255,255,0.08)",
+    border: "1px solid rgba(255,255,255,0.2)",
+    color: "rgba(255,255,255,0.85)",
     fontSize: "13px",
     fontWeight: 600,
     borderRadius: "999px",

@@ -40,8 +40,18 @@ class MovieCard(BaseModel):
     actresses: list[str] = []
     genres: list[str] = []
     series_name: str | None = None
+    mp4_url: str | None = None
+    low_mp4_url: str | None = None
+    high_mp4_url: str | None = None
 
-    @field_validator("image_url_list", "image_url_large", mode="before")
+    @field_validator(
+        "image_url_list",
+        "image_url_large",
+        "mp4_url",
+        "low_mp4_url",
+        "high_mp4_url",
+        mode="before",
+    )
     @classmethod
     def _upgrade_image_https(cls, v: str | None) -> str | None:
         return _ensure_https(v)

@@ -16,9 +16,9 @@ import {
  *
  * 目的:
  *   resolver (DMM html5_player) は uncached で 3〜4 秒かかることが多く、
- *   `usePrefetchResolveMp4` の +1..+5 だけでは「ユーザーが連続スワイプで
- *   +6 以降に到達したとき URL がまだ取れていない」状態になりがち。
- *   本 hook は currentIndex+6..+15 をバックグラウンドで先行 resolve し、
+ *   `usePrefetchResolveMp4` の +1..+3 だけでは「ユーザーが連続スワイプで
+ *   +4 以降に到達したとき URL がまだ取れていない」状態になりがち。
+ *   本 hook は currentIndex+4..+12 をバックグラウンドで先行 resolve し、
  *   resolveCache (`resolveMp4Url` 内) に貯めておくことで、近距離 prefetch /
  *   active 再生が来たときには即キャッシュヒットさせる。
  *
@@ -39,8 +39,8 @@ import {
  *     ものだけ出す (毎レンダーで吐かない)。
  */
 
-const WARM_START = 6;
-const WARM_END = 15;
+const WARM_START = 4;
+const WARM_END = 12;
 const FAILURE_TTL_MS = 30_000;
 /**
  * バッチ内で resolveMp4Url を呼び出す間に挟む小休止。

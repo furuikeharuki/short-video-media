@@ -20,6 +20,9 @@ export type MovieCard = {
   actresses: string[];
   genres: string[];
   series_name: string | null;
+  mp4_url?: string | null;
+  low_mp4_url?: string | null;
+  high_mp4_url?: string | null;
 };
 
 export type FeedResponse = {

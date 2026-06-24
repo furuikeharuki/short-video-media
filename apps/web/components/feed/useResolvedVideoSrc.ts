@@ -6,7 +6,11 @@ import {
   extractBasename,
   extractHost,
   inferQualityTier,
+  pickFastStartUrl,
+  pickHighQualityUrl,
   pickPlaybackUrl,
+  primeResolveMp4Cache,
+  type ResolveMp4Response,
   resolveMp4Url,
 } from "@/lib/api/resolve-mp4";
 import { ensurePreconnect } from "@/lib/networkPrefs";
@@ -27,16 +31,24 @@ import { createVideoTimer, isVideoTimingEnabled } from "@/lib/videoTiming";
  *   5. ただし、その後そのカードが再び可視になったとき (enabled=false→true) は
  *      リトライカウンタをリセットして再挑戦する。
  *
- * 単一 <video> 戦略: 表示用 URL は `high_mp4_url || mp4_url` を採用する。
- * API が low_mp4_url を返してきても web では使用しない (低画質ファースト戦略は
- * 撤去済み)。
+ * フィードでは初速優先で `low_mp4_url || mp4_url` から再生を開始する。
+ * 高画質候補 (`high_mp4_url || mp4_url`) が別 URL なら Result として保持し、
+ * 呼び出し側が active 再生安定後に `upgradeToHighQuality()` で切り替える。
  */
 
 type State =
-  | { phase: "resolving"; url: null }
-  | { phase: "ready"; url: string }
-  | { phase: "retrying"; url: string | null }
-  | { phase: "exhausted"; url: null };
+  | { phase: "resolving"; url: null; highUrl: null }
+  | { phase: "ready"; url: string; highUrl: string | null; quality: "fast" | "high" }
+  | { phase: "retrying"; url: string | null; highUrl: string | null }
+  | { phase: "exhausted"; url: null; highUrl: null };
+type ReadyState = Extract<State, { phase: "ready" }>;
+
+type InitialResolvedMp4 = {
+  content_id?: string | null;
+  mp4_url?: string | null;
+  low_mp4_url?: string | null;
+  high_mp4_url?: string | null;
+};
 
 interface Args {
   slug: string;
@@ -48,6 +60,7 @@ interface Args {
    * 観測専用 (`source=active scope=adjacent` のように出る)。
    */
   isActive?: boolean;
+  initialResolved?: InitialResolvedMp4 | null;
 }
 
 interface Result {
@@ -67,10 +80,36 @@ interface Result {
    * active session 切り替え (= slug 変更) で 0 にリセット。
    */
   forceResolveEpoch: number;
+  /** 現在の URL が低画質スタートで、高画質候補が別にある場合だけ入る。 */
+  highQualitySrc: string | null;
+  /** 高画質候補へ切り替える。候補が無い/既に高画質なら no-op。 */
+  upgradeToHighQuality: () => void;
 }
 
 const MAX_FORCE_RETRIES = 3;
 const FORCE_RETRY_BACKOFF_MS = [500, 1000, 2000];
+
+function normalizeResolved(value: InitialResolvedMp4 | null | undefined): ResolveMp4Response | null {
+  if (!value?.mp4_url) return null;
+  return {
+    content_id: value.content_id ?? null,
+    mp4_url: value.mp4_url,
+    low_mp4_url: value.low_mp4_url || value.mp4_url,
+    high_mp4_url: value.high_mp4_url || value.mp4_url,
+  };
+}
+
+function readyStateFromResolved(res: ResolveMp4Response): ReadyState {
+  const url = pickFastStartUrl(res);
+  const highUrl = pickHighQualityUrl(res);
+  const upgradeUrl = highUrl !== url ? highUrl : null;
+  return {
+    phase: "ready",
+    url,
+    highUrl: upgradeUrl,
+    quality: upgradeUrl ? "fast" : "high",
+  };
+}
 
 /**
  * 解決結果の URL シグネチャを vt ログに残す (active / force-retry 共通)。
@@ -79,17 +118,18 @@ const FORCE_RETRY_BACKOFF_MS = [500, 1000, 2000];
  * を出す。これにより「ユーザーが見えている動画が高画質扱いになっているか」を
  * 観測しつつ、トークン付き URL をログに残さない。
  *
- * drift: mp4_url (= API primary = args.src) と high_mp4_url が異なる場合は
- * `drift=primary->high` を付ける。これが頻発するときは prefetch (= mp4_url を
- * 使う旧実装) と active (= high_mp4_url) が別 URL になり handoff src-mismatch を
- * 起こしていた。現在の実装は両者で pickPlaybackUrl(res) を共有するためログは
- * 不要だが、移行期と再発検知のために残す。
+ * drift=low->high は、低画質で開始して高画質へ切り替える候補があるケース。
+ * primary->high は single URL 運用時の互換的な高画質寄せを示す。
  */
 function logSelectedQuality(
   slug: string,
-  res: { mp4_url: string; high_mp4_url?: string | null },
+  res: {
+    mp4_url: string;
+    low_mp4_url?: string | null;
+    high_mp4_url?: string | null;
+  },
   picked: string,
-  source: "active" | "force-retry",
+  source: "active" | "force-retry" | "quality-upgrade",
   // 「この resolver は呼ばれた時点で active として実行されたのか、隣接 (adjacent)
   // として実行されたのか」を vt ログで明示する。これが無いと、非 current slug が
   // adjacent としてリゾルブしたログ (source=active) が「アクティブが切り替わった
@@ -100,9 +140,14 @@ function logSelectedQuality(
   if (!isVideoTimingEnabled()) return;
   const tier = inferQualityTier(picked);
   const host = extractHost(picked);
-  const drift = res.high_mp4_url && res.high_mp4_url !== res.mp4_url
-    ? "primary->high"
-    : "none";
+  const low = res.low_mp4_url || res.mp4_url;
+  const high = res.high_mp4_url || res.mp4_url;
+  const drift =
+    low !== high
+      ? "low->high"
+      : res.high_mp4_url && res.high_mp4_url !== res.mp4_url
+        ? "primary->high"
+        : "none";
   // `other` は extractor が拾った URL が辞書 4 種 (sm/dm/dmb/mhb) に当てはまらない
   // ケース。DMM 側が新サフィックスを使っているのか、SD しか出していないのかを
   // 切り分けるため、basename だけ (= 署名クエリは含めない安全な短い識別子) を残す。
@@ -113,7 +158,12 @@ function logSelectedQuality(
   );
 }
 
-export function useResolvedVideoSrc({ slug, enabled, isActive = false }: Args): Result {
+export function useResolvedVideoSrc({
+  slug,
+  enabled,
+  isActive = false,
+  initialResolved = null,
+}: Args): Result {
   // 最新の isActive を ref で握る。logSelectedQuality の発火タイミング (resolve
   // 完了時) は props 更新と完全には同期しないため、effect 内で「いま中央か?」を
   // 観測するには ref が必要。観測ログのためだけに使う。
@@ -121,7 +171,12 @@ export function useResolvedVideoSrc({ slug, enabled, isActive = false }: Args): 
   useEffect(() => {
     isActiveRef.current = isActive;
   }, [isActive]);
-  const [state, setState] = useState<State>({ phase: "resolving", url: null });
+  const [state, setState] = useState<State>(() => {
+    const initial = normalizeResolved(initialResolved);
+    return initial
+      ? readyStateFromResolved(initial)
+      : { phase: "resolving", url: null, highUrl: null };
+  });
   // force-resolve が ready を生成した回数。slug 変更 / 初回 resolve では増えない。
   const [forceResolveEpoch, setForceResolveEpoch] = useState(0);
 
@@ -144,12 +199,40 @@ export function useResolvedVideoSrc({ slug, enabled, isActive = false }: Args): 
       inFlightRef.current = null;
     }
     clearBackoff();
-    setState({ phase: "resolving", url: null });
+    const initial = normalizeResolved(initialResolved);
+    if (initial) {
+      primeResolveMp4Cache(slug, initial);
+      const nextState = readyStateFromResolved(initial);
+      logSelectedQuality(
+        slug,
+        initial,
+        nextState.url,
+        "active",
+        isActiveRef.current ? "active" : "adjacent",
+      );
+      setState(nextState);
+    } else {
+      setState({ phase: "resolving", url: null, highUrl: null });
+    }
     setForceResolveEpoch(0);
-  }, [slug, clearBackoff]);
+  }, [
+    slug,
+    initialResolved?.content_id,
+    initialResolved?.mp4_url,
+    initialResolved?.low_mp4_url,
+    initialResolved?.high_mp4_url,
+    clearBackoff,
+  ]);
+
+  useEffect(() => {
+    if (state.phase !== "ready") return;
+    ensurePreconnect(state.url);
+    if (state.highUrl) ensurePreconnect(state.highUrl);
+  }, [state]);
 
   useEffect(() => {
     if (!enabled) return;
+    if (initialResolved?.mp4_url) return;
     if (state.phase !== "resolving") return;
     if (inFlightRef.current) return;
 
@@ -173,7 +256,9 @@ export function useResolvedVideoSrc({ slug, enabled, isActive = false }: Args): 
         }
         if (res?.mp4_url) {
           timer.mark("resolve:ok");
-          const url = pickPlaybackUrl(res);
+          const url = pickFastStartUrl(res);
+          const highUrl = pickHighQualityUrl(res);
+          const upgradeUrl = highUrl !== url ? highUrl : null;
           logSelectedQuality(
             slug,
             res,
@@ -182,10 +267,16 @@ export function useResolvedVideoSrc({ slug, enabled, isActive = false }: Args): 
             isActiveRef.current ? "active" : "adjacent",
           );
           ensurePreconnect(url);
-          setState({ phase: "ready", url });
+          if (upgradeUrl) ensurePreconnect(upgradeUrl);
+          setState({
+            phase: "ready",
+            url,
+            highUrl: upgradeUrl,
+            quality: upgradeUrl ? "fast" : "high",
+          });
         } else {
           timer.mark("resolve:exhausted");
-          setState({ phase: "exhausted", url: null });
+          setState({ phase: "exhausted", url: null, highUrl: null });
         }
       })
       .finally(() => {
@@ -200,7 +291,7 @@ export function useResolvedVideoSrc({ slug, enabled, isActive = false }: Args): 
         inFlightRef.current = null;
       }
     };
-  }, [enabled, slug, state.phase]);
+  }, [enabled, slug, state.phase, initialResolved?.mp4_url]);
 
   const runForceResolve = useCallback(() => {
     if (inFlightRef.current) {
@@ -208,7 +299,7 @@ export function useResolvedVideoSrc({ slug, enabled, isActive = false }: Args): 
     }
     const controller = new AbortController();
     inFlightRef.current = controller;
-    setState((prev) => ({ phase: "retrying", url: prev.url }));
+    setState((prev) => ({ phase: "retrying", url: prev.url, highUrl: prev.highUrl }));
 
     void resolveMp4Url(slug, {
       force: true,
@@ -218,6 +309,8 @@ export function useResolvedVideoSrc({ slug, enabled, isActive = false }: Args): 
       .then((res) => {
         if (controller.signal.aborted) return;
         if (res?.mp4_url) {
+          // force retry は現 URL が詰まった/壊れた後の救済なので、低画質に固執せず
+          // 高画質候補を優先する。URL が同一でも epoch で load/play を撃ち直す。
           const url = pickPlaybackUrl(res);
           logSelectedQuality(
             slug,
@@ -230,7 +323,7 @@ export function useResolvedVideoSrc({ slug, enabled, isActive = false }: Args): 
           let sameUrl = false;
           setState((prev) => {
             sameUrl = prev.url === url;
-            return { phase: "ready", url };
+            return { phase: "ready", url, highUrl: null, quality: "high" };
           });
           setForceResolveEpoch((n) => {
             const next = n + 1;
@@ -257,7 +350,7 @@ export function useResolvedVideoSrc({ slug, enabled, isActive = false }: Args): 
             runForceResolve();
           }, wait);
         } else {
-          setState({ phase: "exhausted", url: null });
+          setState({ phase: "exhausted", url: null, highUrl: null });
         }
       })
       .catch(() => {
@@ -275,7 +368,7 @@ export function useResolvedVideoSrc({ slug, enabled, isActive = false }: Args): 
             runForceResolve();
           }, wait);
         } else {
-          setState({ phase: "exhausted", url: null });
+          setState({ phase: "exhausted", url: null, highUrl: null });
         }
       })
       .finally(() => {
@@ -287,12 +380,40 @@ export function useResolvedVideoSrc({ slug, enabled, isActive = false }: Args): 
 
   const handleError = useCallback(() => {
     if (forceRetryCountRef.current >= MAX_FORCE_RETRIES) {
-      setState({ phase: "exhausted", url: null });
+      setState({ phase: "exhausted", url: null, highUrl: null });
       return;
     }
     forceRetryCountRef.current += 1;
     runForceResolve();
   }, [runForceResolve]);
+
+  const upgradeToHighQuality = useCallback(() => {
+    setState((prev) => {
+      if (prev.phase !== "ready") return prev;
+      if (!prev.highUrl) return prev;
+      if (prev.url === prev.highUrl) return { ...prev, highUrl: null, quality: "high" };
+      if (isVideoTimingEnabled()) {
+        logSelectedQuality(
+          slug,
+          {
+            mp4_url: prev.url,
+            low_mp4_url: prev.url,
+            high_mp4_url: prev.highUrl,
+          },
+          prev.highUrl,
+          "quality-upgrade",
+          isActiveRef.current ? "active" : "adjacent",
+        );
+      }
+      ensurePreconnect(prev.highUrl);
+      return {
+        phase: "ready",
+        url: prev.highUrl,
+        highUrl: null,
+        quality: "high",
+      };
+    });
+  }, [slug]);
 
   useEffect(() => {
     const becameEnabled = !prevEnabledRef.current && enabled;
@@ -323,5 +444,7 @@ export function useResolvedVideoSrc({ slug, enabled, isActive = false }: Args): 
     resolving: state.phase === "resolving" || state.phase === "retrying",
     handleError,
     forceResolveEpoch,
+    highQualitySrc: state.phase === "ready" ? state.highUrl : null,
+    upgradeToHighQuality,
   };
 }

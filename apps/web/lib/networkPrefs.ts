@@ -8,7 +8,7 @@
  *   - Safari / iOS Safari → +1 のみ + 隠し <video> 数を絞る
  *     (モバイル Safari は同 origin あたり HTTP 同時接続が 4〜6 と少なく、
  *      隠し <video> を複数マウントすると中央 <video> の Range 取得を奪う)
- *   - Chrome / Chromium / Android Chrome → +1 と +2 の 2 枚先読み
+ *   - Chrome / Chromium / Android Chrome → +1〜+3 の 3 枚先読み
  *
  * SSR セーフ: window が無い場合は保守的なデフォルト (Safari と同じ +1 だけ) を返す。
  */
@@ -35,8 +35,8 @@ export type PrefetchPolicy = {
   immediateUpcoming: boolean;
   /**
    * +3 を preload="metadata" だけで温めるか (バイト本体は取らない)。
-   * Chromium+4G/wifi で true。byte 帯域を奪わずに「次の次の次」の resolver 解決と
-   * loadedmetadata までを前倒しできるので、3 連続 rapid swipe の貫通力が上がる。
+   * 4G/WiFi 相当では aheadCount=3 で +3 も bytes prefetch するため false。
+   * 将来 +2 までに戻す AB テスト時の軽量 warm 枠として残している。
    */
   warmPlusThree: boolean;
   /** デバッグ用: 判定根拠の文字列。本番には出さない。 */
@@ -143,16 +143,15 @@ export function getPrefetchPolicy(): PrefetchPolicy {
     };
   }
 
-  // Chrome / Chromium / Edge (Chromium):
-  //   - +1 / +2 を bytes 先読み (immediateUpcoming=true で +2 も debounce なし)
-  //   - +3 を preload="metadata" だけで温めて resolver + handshake + container を前倒し
-  //     (bytes は取らないので帯域は中央 <video> に残す)
+  // Chrome / Chromium / Edge (Chromium) の 4G/WiFi 相当:
+  //   - +1 / +2 / +3 を bytes 先読み (immediateUpcoming=true で +2/+3 も debounce なし)
+  //   - 2G/3G/Save-Data は上で絞っているので、ここでは TikTok/Shorts 寄りに攻める。
   return {
-    aheadCount: 2,
+    aheadCount: 3,
     preload: "auto",
     immediateUpcoming: true,
-    warmPlusThree: true,
-    reason: "chromium",
+    warmPlusThree: false,
+    reason: "chromium-fast",
   };
 }
 

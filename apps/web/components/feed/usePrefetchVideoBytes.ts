@@ -11,7 +11,7 @@ import {
   extractBasename,
   extractHost,
   inferQualityTier,
-  pickPlaybackUrl,
+  pickFastStartUrl,
   resolveMp4Url,
 } from "@/lib/api/resolve-mp4";
 import { ensurePreconnect, getPrefetchPolicy } from "@/lib/networkPrefs";
@@ -59,7 +59,7 @@ import {
  *     +1 のバイト取得が間に合うとは限らない。そのため本 hook では
  *     "次に中央になる" current+1 を最優先で裏 prefetch する権威ソースとして扱う。
  *   - ブラウザに応じて先読み枚数を変える:
- *       * Chrome / Chromium: current+1 と +2 の 2 枚を bytes 先読み
+   *       * Chrome / Chromium: current+1〜+3 の 3 枚を bytes 先読み
  *       * Safari / iOS Safari: current+1 のみ、preload="metadata" でメタデータだけ取得
  *       * Save-Data / 2g / slow-2g: 完全に止める
  *   - rapid swipe 中 / target スライドが存在しない場合は slot を 0 にして
@@ -151,25 +151,26 @@ function vtPrefetchLog(message: string) {
 /**
  * prefetch が選んだ URL の画質ティアを vt ログに残す。
  *
- * 不変条件: 隠し <video> と active <video> は同じ canonical URL を使うため、
- * ここで `quality` が `mhb` 以外になる場合は API が最高ビットレートとして
- * `_mhb_w.mp4` を返していない (= DMM 側でその作品は HD 候補が無い) ことを
- * 意味する。`drift=primary->high` は `high_mp4_url !== mp4_url` の作品で、
- * 旧実装が src-mismatch を出していたケース。
+ * 不変条件: 隠し <video> と active <video> は同じ初回 URL を使う。
+ * フィード初速優先のため、ここでは `low_mp4_url || mp4_url` を採用する。
+ * `drift=low->high` は、再生安定後に高画質へ切り替える余地がある作品。
  */
 function logPrefetchQuality(
   slug: string,
-  res: { mp4_url: string; high_mp4_url?: string | null },
+  res: {
+    mp4_url: string;
+    low_mp4_url?: string | null;
+    high_mp4_url?: string | null;
+  },
   picked: string,
   offset: number,
 ) {
   if (!isVideoTimingEnabled()) return;
   const tier = inferQualityTier(picked);
   const host = extractHost(picked);
-  const drift =
-    res.high_mp4_url && res.high_mp4_url !== res.mp4_url
-      ? "primary->high"
-      : "none";
+  const low = res.low_mp4_url || res.mp4_url;
+  const high = res.high_mp4_url || res.mp4_url;
+  const drift = low !== high ? "low->high" : "none";
   // `other` は辞書 4 種に該当しないファイル名。DMM の新サフィックスか SD 限定かを
   // 切り分けるため、basename だけ (= 署名クエリは含まない短い識別子) を残す。
   const extra = tier === "other" ? ` basename=${extractBasename(picked)}` : "";
@@ -273,7 +274,7 @@ export function usePrefetchVideoBytes(
   // 回線状況は途中で変わり得るが、本サイトは短時間セッションなので静的取得で十分。
 
   // 対象スライドの一覧 (id+slug+offset) を currentIndex / items から決める。
-  // policy.aheadCount = 1 → +1 だけ / 2 → +1 と +2。
+  // policy.aheadCount = 1 → +1 だけ / 2 → +1 と +2 / 3 → +1〜+3。
   // さらに policy.warmPlusThree=true なら +3 を preload="metadata" だけで足す。
   // ここで targets を実 effect が走る前に算出しておくと、deps として安定 key (id 連結) を使える。
   const policy = getPrefetchPolicyMemo();
@@ -646,14 +647,10 @@ export function usePrefetchVideoBytes(
         .then((res) => {
           if (controller.signal.aborted) return;
           if (!res?.mp4_url) return;
-          // active (useResolvedVideoSrc) と同じ canonical URL を使う。
-          // ここで `res.mp4_url` (= API primary = args.src) ではなく
-          // `pickPlaybackUrl(res)` (= high_mp4_url || mp4_url) を採用しないと、
-          // 隠し <video> に貼る src と active <video> の src が不一致になり、
-          // videoHandoff レジストリの src 比較で `promote-src-mismatch` が
-          // 出続けて handoff が成立しない (＝ prefetch 帯域が無駄に消費されて
-          // active の高画質取得を遅らせる)。
-          const url = pickPlaybackUrl(res);
+          // active (useResolvedVideoSrc) の初回 URL と同じ低画質開始 URL を使う。
+          // ここで high_mp4_url を採用すると、active は低画質、hidden は高画質になり
+          // videoHandoff の src 比較で promote-src-mismatch になる。
+          const url = pickFastStartUrl(res);
           logPrefetchQuality(target.slug, res, url, target.offset);
           // 解決した CDN origin に dyn preconnect (TCP/TLS handshake を前倒し)。
           ensurePreconnect(url);
@@ -712,7 +709,15 @@ export function usePrefetchVideoBytes(
     // 再開させるため、依存に含める。targets は毎レンダー新オブジェクトなので key 化した
     // 文字列を使う。
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [targetsKey, isRapidSwiping, deferForActive, policy.preload, policy.aheadCount, currentIndex]);
+  }, [
+    targetsKey,
+    isRapidSwiping,
+    deferForActive,
+    policy.preload,
+    policy.aheadCount,
+    policy.immediateUpcoming,
+    currentIndex,
+  ]);
 
   // アンマウント時に全 resolve を abort
   useEffect(() => {
@@ -748,8 +753,8 @@ export function usePrefetchVideoBytes(
         .then((res) => {
           if (controller.signal.aborted) return;
           if (!res?.mp4_url) return;
-          // self-heal 後も active と同じ canonical URL を使う (src-mismatch 防止)。
-          const url = pickPlaybackUrl(res);
+          // self-heal 後も active 初回 URL と同じ低画質開始 URL を使う (src-mismatch 防止)。
+          const url = pickFastStartUrl(res);
           ensurePreconnect(url);
           const id = slugToIdRef.current.get(slug);
           if (!id) return; // 既に対象範囲外
@@ -820,7 +825,7 @@ function registryLabel(slug: string): "canplay" | "metadata" | "false" {
  * - SSR 時点では window が無いので保守的なデフォルトが返るが、
  *   クライアントマウント後にもう一度評価して上書きする。
  * - クライアントで初めて評価されたタイミングで vt ログを 1 行出して、運用者が
- *   「今のセッションは +2 即時 / +3 metadata warming が有効なのか」を確認できるようにする。
+   *   「今のセッションは +2/+3 即時 / +3 metadata warming が有効なのか」を確認できるようにする。
  */
 let memoPolicy: ReturnType<typeof getPrefetchPolicy> | null = null;
 let policyLogged = false;

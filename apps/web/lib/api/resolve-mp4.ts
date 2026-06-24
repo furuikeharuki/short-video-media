@@ -19,39 +19,38 @@ export type ResolveMp4Response = {
   content_id: string | null;
   /**
    * 再生可能な MP4 URL。
-   * web は単一 <video> 戦略のため、`high_mp4_url || mp4_url` を採用する。
-   * low_mp4_url は API が返しても web では使用しない。
+   * 互換フィールド。フィードでは `low_mp4_url || mp4_url` で即開始し、
+   * 再生が安定してから `high_mp4_url || mp4_url` に切り替える。
    */
   mp4_url: string;
   /** 高画質候補 (あれば優先採用)。なければ mp4_url で再生。 */
   high_mp4_url?: string | null;
-  /** 低画質候補 (web では未使用、旧 API レスポンス互換のため optional)。 */
+  /** 低画質候補。フィードの初速優先再生で使う。 */
   low_mp4_url?: string | null;
 };
 
-/**
- * 単一 <video> 戦略における再生 URL の選択。
- *
- * 不変条件: active 再生 (useResolvedVideoSrc) と 隠し prefetch
- * (usePrefetchVideoBytes / handoff registry) は同じ canonical URL を使う。
- *
- * 過去の事故:
- *   - active は `high_mp4_url || mp4_url`、prefetch は `mp4_url` (= primary
- *     = args.src) を使っていたため、`mp4_url !== high_mp4_url` の作品では
- *     handoff registry の src が active 側 src と一致せず、`promote-src-mismatch`
- *     で JSX <video> がゼロから立ち上がる。さらに prefetch 帯域が「使われない
- *     低画質 URL」に費やされて、active 側の高画質 fetch を遅らせる二重の損失。
- *   - DMM html5_player は `args.src` (= primary) に必ずしも最高ビットレートを
- *     入れないことがある (bitrates 配列に `_mhb_w.mp4` があっても primary が
- *     `_dm_w.mp4` のケース)。high_mp4_url は bitrates 由来で最高ビットレート、
- *     mp4_url は primary なので、`high_mp4_url || mp4_url` を採用すると
- *     確実に最高画質を選べる。
- */
+/** 互換用の高画質寄り URL 選択。詳細ページや force retry の最終候補で使う。 */
 export function pickPlaybackUrl(res: {
   mp4_url: string;
   high_mp4_url?: string | null;
 }): string {
   return res.high_mp4_url || res.mp4_url;
+}
+
+/** フィード初速優先の開始 URL。低画質候補があれば最優先で使う。 */
+export function pickFastStartUrl(res: {
+  mp4_url: string;
+  low_mp4_url?: string | null;
+}): string {
+  return res.low_mp4_url || res.mp4_url;
+}
+
+/** 最終的に寄せる高画質 URL。既存の pickPlaybackUrl と同じ選択を明示名で公開する。 */
+export function pickHighQualityUrl(res: {
+  mp4_url: string;
+  high_mp4_url?: string | null;
+}): string {
+  return pickPlaybackUrl(res);
 }
 
 /**
@@ -213,6 +212,28 @@ function readSuccessCache(slug: string): ResolveMp4Response | null {
 
 function writeSuccessCache(slug: string, value: ResolveMp4Response): void {
   successCache.set(slug, { value, storedAt: Date.now() });
+}
+
+export function primeResolveMp4Cache(
+  slug: string,
+  value:
+    | {
+        content_id?: string | null;
+        mp4_url?: string | null;
+        low_mp4_url?: string | null;
+        high_mp4_url?: string | null;
+      }
+    | null
+    | undefined,
+): boolean {
+  if (!slug || !value?.mp4_url) return false;
+  writeSuccessCache(slug, {
+    content_id: value.content_id ?? null,
+    mp4_url: value.mp4_url,
+    low_mp4_url: value.low_mp4_url || value.mp4_url,
+    high_mp4_url: value.high_mp4_url || value.mp4_url,
+  });
+  return true;
 }
 
 /**

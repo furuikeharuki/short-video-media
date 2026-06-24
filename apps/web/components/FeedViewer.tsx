@@ -10,6 +10,7 @@ import { usePrefetchVideoBytes } from "@/components/feed/usePrefetchVideoBytes";
 import { useWarmResolveMp4 } from "@/components/feed/useWarmResolveMp4";
 import PrefetchVideoBuffer from "@/components/feed/PrefetchVideoBuffer";
 import { AD_FEED_INTERVAL, isAdZoneEnabled } from "@/lib/ads/config";
+import { primeResolveMp4Cache } from "@/lib/api/resolve-mp4";
 
 const WINDOW_SIZE = 1;
 const RAPID_THRESHOLD_MS = 350;
@@ -133,6 +134,12 @@ export default function FeedViewer({
   const movieItems = slides
     .filter((s): s is Extract<FeedSlide, { kind: "video" }> => s.kind === "video")
     .map((s) => s.movie);
+
+  useEffect(() => {
+    for (const item of items) {
+      primeResolveMp4Cache(item.slug, item);
+    }
+  }, [items]);
 
   // currentIndex は slides 配列の index (広告スライドを含む)。一方 prefetch hook 群は
   // 動画のみで構成された movieItems を受け取るので、両者の index を直接突き合わせると

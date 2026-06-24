@@ -61,6 +61,8 @@ interface Props {
 // ハードタイムアウト: <video> が loadeddata も error も発火しないまま
 // これだけ経ったら、ネットワーク進行不能とみなして onError 相当のリトライを走らせる。
 const VIDEO_HARD_TIMEOUT_MS = 25000;
+const HIGH_QUALITY_UPGRADE_DELAY_MS = 1200;
+const HIGH_QUALITY_UPGRADE_TIMEOUT_MS = 7000;
 
 export default function FeedItem({ item, isActive, isAdjacent = false, isFirst, isSecond = false, isRapidSwiping = false }: Props) {
   const [modalSlug, setModalSlug] = useState<string | null>(null);
@@ -88,12 +90,20 @@ export default function FeedItem({ item, isActive, isAdjacent = false, isFirst, 
     };
   }, [isActive, item.slug]);
 
-  // 表示する動画 URL の解決。API は high_mp4_url / low_mp4_url を返し得るが、
-  // 単一 <video> 戦略では `high_mp4_url || mp4_url` のみを使う。
-  const { videoSrc, exhausted, handleError, forceResolveEpoch } = useResolvedVideoSrc({
+  // 表示する動画 URL の解決。フィードは低画質 URL で即開始し、active 再生が
+  // 安定してから高画質 URL を裏で canplay まで温めて切り替える。
+  const {
+    videoSrc,
+    exhausted,
+    handleError,
+    forceResolveEpoch,
+    highQualitySrc,
+    upgradeToHighQuality,
+  } = useResolvedVideoSrc({
     slug: item.slug,
     enabled: isActive || isAdjacent,
     isActive,
+    initialResolved: item.mp4_url ? item : null,
   });
 
   // prefetch buffer から canplay 済み要素を引き取れたら、新規 <video> を作らずに
@@ -124,6 +134,7 @@ export default function FeedItem({ item, isActive, isAdjacent = false, isFirst, 
     useState<string | null>(null);
   const activeReadyRef = useRef(false);
   const activePlayingRef = useRef(false);
+  const pendingQualityUpgradeRef = useRef(false);
   // force-fallback の useEffect (上の方で定義) から呼ばれる
   // abandonPendingIfActiveReady の最新参照を保持するための ref。useCallback は
   // 下の方で宣言されるため直接クロージャに取り込むと TDZ / 古い参照問題があるので、
@@ -882,6 +893,108 @@ export default function FeedItem({ item, isActive, isAdjacent = false, isFirst, 
     setShimmerVisible(false);
   }, [setVideoReady, setSpinnerVisible, setShimmerVisible, clearHardTimeout, abandonPendingIfActiveReady]);
 
+  // 低画質で再生開始できた後だけ、高画質 URL を画面外 video で probe する。
+  // canplay 到達前には切り替えないため、低画質の初回再生を高画質 Range 取得で
+  // ブロックしない。probe 済み URL はブラウザキャッシュ / 接続再利用にも乗りやすい。
+  useEffect(() => {
+    if (!isActive) return;
+    if (!videoReady) return;
+    if (!videoSrc) return;
+    if (!highQualitySrc) return;
+    if (highQualitySrc === videoSrc) return;
+    if (isRapidSwiping) return;
+    if (typeof document === "undefined") return;
+
+    let cancelled = false;
+    let probe: HTMLVideoElement | null = null;
+    let timeout: ReturnType<typeof setTimeout> | null = null;
+    const cleanupProbe = () => {
+      if (timeout) {
+        clearTimeout(timeout);
+        timeout = null;
+      }
+      if (!probe) return;
+      try {
+        probe.pause();
+      } catch {
+        /* ignore */
+      }
+      try {
+        probe.removeAttribute("src");
+        probe.load();
+      } catch {
+        /* ignore */
+      }
+      if (probe.parentNode) {
+        probe.parentNode.removeChild(probe);
+      }
+      probe = null;
+    };
+    const startTimer = setTimeout(() => {
+      if (cancelled) return;
+      if (!isActiveRef.current) return;
+      if (document.visibilityState === "hidden") return;
+      const activeVideo = videoRef.current;
+      if (!activeVideo || activeVideo.paused || activeVideo.readyState < 2) return;
+
+      probe = document.createElement("video");
+      probe.src = highQualitySrc;
+      probe.preload = "auto";
+      probe.muted = true;
+      probe.playsInline = true;
+      probe.setAttribute("aria-hidden", "true");
+      probe.tabIndex = -1;
+      probe.style.position = "fixed";
+      probe.style.top = "-9999px";
+      probe.style.left = "-9999px";
+      probe.style.width = "100px";
+      probe.style.height = "100px";
+      probe.style.opacity = "0";
+      probe.style.pointerEvents = "none";
+      const switchToHigh = () => {
+        if (cancelled) return;
+        const current = videoRef.current;
+        if (!isActiveRef.current || !current || current.paused || current.readyState < 2) {
+          cleanupProbe();
+          return;
+        }
+        pendingQualityUpgradeRef.current = true;
+        upgradeToHighQuality();
+        cleanupProbe();
+      };
+      const onError = () => cleanupProbe();
+      probe.addEventListener("loadeddata", switchToHigh, { once: true });
+      probe.addEventListener("canplay", switchToHigh, { once: true });
+      probe.addEventListener("error", onError, { once: true });
+      document.body.appendChild(probe);
+      try {
+        probe.load();
+      } catch {
+        /* ignore */
+      }
+      if (!probe) return;
+      if (probe.readyState >= 2) {
+        switchToHigh();
+        return;
+      }
+      timeout = setTimeout(cleanupProbe, HIGH_QUALITY_UPGRADE_TIMEOUT_MS);
+    }, HIGH_QUALITY_UPGRADE_DELAY_MS);
+
+    return () => {
+      cancelled = true;
+      clearTimeout(startTimer);
+      cleanupProbe();
+    };
+  }, [
+    isActive,
+    videoReady,
+    videoSrc,
+    highQualitySrc,
+    isRapidSwiping,
+    videoRef,
+    upgradeToHighQuality,
+  ]);
+
   // isActive を ref で参照することでハンドラ identity を安定させる。FeedItemVideo
   // の useLayoutEffect 依存配列にこのハンドラが入っており、identity 変化で cleanup
   // (promoted <video> の pause+src removal+load+detach) が走ってしまうのを防ぐ。
@@ -964,6 +1077,10 @@ export default function FeedItem({ item, isActive, isAdjacent = false, isFirst, 
   }, [isActive, videoSrc, item.slug, handleError]);
 
   useEffect(() => {
+    if (pendingQualityUpgradeRef.current) {
+      pendingQualityUpgradeRef.current = false;
+      return;
+    }
     setVideoReadyState(false);
     activeReadyRef.current = false;
   }, [item.slug, videoSrc]);

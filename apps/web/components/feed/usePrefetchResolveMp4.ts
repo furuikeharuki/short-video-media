@@ -9,15 +9,14 @@ import { isVideoTimingEnabled } from "@/lib/videoTiming";
 /**
  * 現在のスライド (active) + 直後 N 枚分の MP4 URL を resolver に事前解決させておく hook。
  *
- * 単一 <video> 戦略への移行に伴い、低画質ファースト戦略は撤去された。
- * 代わりに resolve 先読みを priority-based に強化し、ユーザーの再生体感を改善する:
+ * 低画質ファースト戦略では、resolve が終わり次第 `low_mp4_url` で即開始できる。
+ * そのため「次の 2〜3 件」の resolve を高めの優先度で先に終わらせる:
  *
  *   - active (priority=0) は高速スワイプ中でも即座に発火。ユーザーが今見ている
  *     スライドの resolve が一番大事。`useResolvedVideoSrc` 側でも resolve は走るが、
  *     そちらは <video> マウント後に動くため、active を本 hook で先取りすると
  *     並列で resolve が始まり早く着地できる。
- *   - active + 1..PREFETCH_AHEAD (priority>=1) は高速スワイプが落ち着いてから
- *     `PREFETCH_DEBOUNCE_MS` 後に順次発火。
+ *   - active + 1..PREFETCH_AHEAD (priority>=1) は短い debounce 後に順次発火。
  *
  * 仕様:
  *   - in-flight デデュープと並列度上限は `resolveMp4Url` 側で管理 (resolveCache /
@@ -31,8 +30,8 @@ import { isVideoTimingEnabled } from "@/lib/videoTiming";
  *     失敗 (null) は永続抑制せず、`FAILURE_TTL_MS` 経過後にリトライ可能に戻す。
  */
 
-const PREFETCH_AHEAD = 5;
-const PREFETCH_DEBOUNCE_MS = 400;
+const PREFETCH_AHEAD = 3;
+const PREFETCH_DEBOUNCE_MS = 80;
 /** 失敗 (null) を覚えておく時間。これを過ぎたら再度 prefetch を試みる。 */
 const FAILURE_TTL_MS = 30_000;
 
@@ -113,7 +112,7 @@ export function usePrefetchResolveMp4(
         `resolve start index=${scheduledIndex} priority=${target.priority} slug=${target.slug}`,
       );
       // priority=0 (active) は "high" で global slot を優先確保。
-      // priority>=1 (近距離 +1..+5) は "normal" で FIFO 順、warm の "low" より先に走る。
+      // priority>=1 (近距離 +1..+3) は "normal" で FIFO 順、warm の "low" より先に走る。
       const resolvePriority = target.priority === 0 ? "high" : "normal";
       void resolveMp4Url(target.slug, {
         signal: controller.signal,

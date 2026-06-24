@@ -1,5 +1,7 @@
+import asyncio
 import hashlib
 import json
+import logging
 import random
 from datetime import date
 from typing import Literal
@@ -15,6 +17,7 @@ from app.repositories.movie_repository import (
 from app.repositories.search_repository import get_advanced_movie_ids
 from app.schemas.feed import FeedResponse
 from app.schemas.movie import MovieCard, PriceList
+from app.services import resolver_client
 
 
 SortKey = Literal["new", "popular", "rating", "views", "bookmarks"]
@@ -23,6 +26,13 @@ SHUFFLE_CACHE_TTL = 3600
 MOVIES_CACHE_TTL  = 1800
 SHUFFLE_KEY_PREFIX = "feed:shuffle:"
 MOVIES_KEY_PREFIX  = "movies:data:"
+RESOLVER_WARM_AHEAD = 3
+RESOLVER_INLINE_AHEAD = 3
+RESOLVER_INLINE_TIMEOUT_S = 0.65
+
+logger = logging.getLogger(__name__)
+_resolver_warm_tasks: set[asyncio.Task[None]] = set()
+_resolver_inline_tasks: set[asyncio.Task[tuple[MovieCard, resolver_client.ResolvedMp4 | None]]] = set()
 
 
 def _to_card(movie) -> MovieCard:
@@ -50,6 +60,113 @@ def _to_card(movie) -> MovieCard:
 
 def _card_to_dict(card: MovieCard) -> dict:
     return card.model_dump()
+
+
+def _attach_resolved_mp4(card: MovieCard, resolved: resolver_client.ResolvedMp4) -> None:
+    card.mp4_url = resolved.mp4_url
+    card.low_mp4_url = resolved.low_mp4_url or resolved.mp4_url
+    card.high_mp4_url = resolved.high_mp4_url or resolved.mp4_url
+
+
+async def _resolve_feed_card(
+    card: MovieCard,
+) -> tuple[MovieCard, resolver_client.ResolvedMp4 | None]:
+    if not card.content_id:
+        return card, None
+    try:
+        return card, await resolver_client.resolve_mp4(card.content_id)
+    except resolver_client.ResolverConfigError:
+        return card, None
+    except Exception:  # noqa: BLE001
+        logger.debug(
+            "feed inline resolver failed: content_id=%s",
+            card.content_id,
+            exc_info=True,
+        )
+        return card, None
+
+
+def _consume_inline_task(
+    task: asyncio.Task[tuple[MovieCard, resolver_client.ResolvedMp4 | None]],
+) -> None:
+    _resolver_inline_tasks.discard(task)
+    try:
+        task.result()
+    except Exception:  # noqa: BLE001
+        logger.debug("feed inline resolver background task failed", exc_info=True)
+
+
+async def _attach_inline_resolved_urls(items: list[MovieCard]) -> None:
+    """先頭数件だけ短時間待って MP4 URL を feed レスポンスに同梱する。
+
+    650ms 以内に解決できたものだけ `MovieCard` に反映する。間に合わない task は
+    cancel せずに継続し、resolver の in-flight dedupe / 成功キャッシュを温める。
+    """
+    targets: list[MovieCard] = []
+    seen: set[str] = set()
+    for item in items:
+        if not item.content_id or item.content_id in seen:
+            continue
+        seen.add(item.content_id)
+        targets.append(item)
+        if len(targets) >= RESOLVER_INLINE_AHEAD:
+            break
+    if not targets:
+        return
+
+    try:
+        tasks = [asyncio.create_task(_resolve_feed_card(item)) for item in targets]
+    except RuntimeError:
+        return
+
+    done, pending = await asyncio.wait(tasks, timeout=RESOLVER_INLINE_TIMEOUT_S)
+    for task in done:
+        card, resolved = task.result()
+        if resolved is not None:
+            _attach_resolved_mp4(card, resolved)
+
+    for task in pending:
+        _resolver_inline_tasks.add(task)
+        task.add_done_callback(_consume_inline_task)
+
+
+def _schedule_resolver_warm(items: list[MovieCard]) -> None:
+    """Feed 先頭数件の MP4 resolver 成功キャッシュを非同期で温める。
+
+    レスポンスは待たせない。フロントが直後に /resolve-mp4 を叩いたとき、
+    in-flight dedupe または成功キャッシュに乗ることを狙う。
+    """
+    content_ids: list[str] = []
+    seen: set[str] = set()
+    for item in items:
+        if not item.content_id or item.content_id in seen:
+            continue
+        seen.add(item.content_id)
+        content_ids.append(item.content_id)
+        if len(content_ids) >= RESOLVER_WARM_AHEAD:
+            break
+    if not content_ids:
+        return
+
+    async def warm_one(content_id: str) -> None:
+        try:
+            await resolver_client.resolve_mp4(content_id)
+        except resolver_client.ResolverConfigError:
+            # ローカル開発など DMM_AFFILIATE_ID 未設定環境では黙って無効化。
+            return
+        except Exception:  # noqa: BLE001
+            logger.debug("feed resolver warm failed: content_id=%s", content_id, exc_info=True)
+
+    async def warm_batch() -> None:
+        await asyncio.gather(*(warm_one(content_id) for content_id in content_ids))
+
+    try:
+        task = asyncio.create_task(warm_batch())
+        _resolver_warm_tasks.add(task)
+        task.add_done_callback(_resolver_warm_tasks.discard)
+    except RuntimeError:
+        # テスト等で running loop が無い経路では何もしない。
+        return
 
 
 def _adv_cache_key(seed: int, adv: dict) -> str:
@@ -285,6 +402,8 @@ async def get_feed_paginated(
 
         card_map = await _get_movies_with_cache(db, page_ids)
         items = [card_map[i] for i in page_ids if i in card_map]
+        await _attach_inline_resolved_urls(items)
+        _schedule_resolver_warm(items)
         next_offset = offset + limit
         next_cursor = str(next_offset) if next_offset < total else None
         return FeedResponse(items=items, next_cursor=next_cursor, total=total)
@@ -300,6 +419,8 @@ async def get_feed_paginated(
 
         card_map = await _get_movies_with_cache(db, page_ids)
         items = [card_map[i] for i in page_ids if i in card_map]
+        await _attach_inline_resolved_urls(items)
+        _schedule_resolver_warm(items)
 
         next_offset = offset + limit
         next_cursor = str(next_offset) if next_offset < total else None
@@ -309,6 +430,8 @@ async def get_feed_paginated(
         db, offset=offset, limit=limit, genres=genres_norm or None
     )
     items = [_to_card(m) for m in movies]
+    await _attach_inline_resolved_urls(items)
+    _schedule_resolver_warm(items)
     next_offset = offset + limit
     next_cursor = str(next_offset) if next_offset < total else None
     return FeedResponse(items=items, next_cursor=next_cursor, total=total)

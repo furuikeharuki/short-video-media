@@ -127,7 +127,7 @@ jobs:
           export REPO_DIR="${REPO_DIR}"
           export GIT_REF="${GIT_REF}"
           export BUILD_OPTS="${BUILD_OPTS}"
-          ./scripts/deploy-xserver.sh
+          bash ./scripts/deploy-xserver.sh
           EOF
 
       - name: Tear down ssh-agent

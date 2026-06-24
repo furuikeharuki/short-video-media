@@ -1,6 +1,7 @@
 "use client";
 
 import { trackEvent } from "@/lib/analytics/analytics";
+import { normalizeSafeExternalHref } from "@/lib/safe-url";
 
 type AffiliateLinkProps = {
   href: string;
@@ -15,7 +16,7 @@ export default function AffiliateLink({
 }: AffiliateLinkProps) {
   // 空文字 / 不正値の affiliate_url が来たときに <a href=""> で同じページに
   // 戻ってしまうのを防ぐ。データ欠落時はクリック不能ボタン (disabled) を出す。
-  const safeHref = typeof href === "string" ? href.trim() : "";
+  const safeHref = normalizeSafeExternalHref(href);
   if (!safeHref) {
     return (
       <button

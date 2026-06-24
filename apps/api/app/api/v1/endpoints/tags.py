@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Query, Response
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -11,7 +11,8 @@ router = APIRouter(prefix="/tags")
 
 @router.get("/popular", response_model=list[str])
 async def get_popular_tags(
-    limit: int = 20,
+    response: Response,
+    limit: int = Query(20, ge=1, le=100),
     db: AsyncSession = Depends(get_db),
 ) -> list[str]:
     """
@@ -26,4 +27,7 @@ async def get_popular_tags(
         .limit(limit)
     )
     result = await db.execute(stmt)
+    response.headers["Cache-Control"] = (
+        "public, max-age=300, stale-while-revalidate=3600"
+    )
     return list(result.scalars().all())

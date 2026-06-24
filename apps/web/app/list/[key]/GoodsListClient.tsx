@@ -7,6 +7,7 @@ import { AD_LIST_INTERVAL, isAdZoneEnabled } from "@/lib/ads/config";
 import type { GoodsCard } from "@/lib/api/home";
 import { getPopularProductsSection } from "@/lib/api/homeSection";
 import { trackEvent } from "@/lib/analytics/analytics";
+import { normalizeSafeExternalHref } from "@/lib/safe-url";
 
 type Props = {
   title: string;
@@ -142,8 +143,7 @@ export default function GoodsListClient({ title }: Props) {
             index > 0 &&
             index % AD_LIST_INTERVAL === 0;
           const img = g.image_url_large ?? g.image_url_list ?? "";
-          const safeHref =
-            typeof g.affiliate_url === "string" ? g.affiliate_url.trim() : "";
+          const safeHref = normalizeSafeExternalHref(g.affiliate_url);
           const handleClick = () => {
             if (!safeHref) return;
             void trackEvent("affiliate_click", {

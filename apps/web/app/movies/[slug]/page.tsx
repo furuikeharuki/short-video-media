@@ -9,6 +9,7 @@ import BackButton from "@/components/BackButton";
 import ActressLink from "@/components/ActressLink";
 import AdSlot from "@/components/ads/AdSlot";
 import { getMovieBySlug } from "@/lib/api/movies";
+import { resolvePlaybackUrlSSR } from "@/lib/api/playback";
 import { SITE_NAME, SITE_URL, SITE_LOCALE } from "@/lib/config/seo";
 
 type PageProps = {
@@ -75,6 +76,17 @@ export default async function MovieDetailPage({ params }: PageProps) {
     const price = movie.price_list?.sale_price ?? movie.price_list?.list_price ?? movie.price_min;
     const hasReview = movie.review_count > 0 && movie.review_average != null;
     const canonical = `${SITE_URL}/movies/${slug}`;
+    const sampleVideoPath = `/videos/${encodeURIComponent(movie.slug)}/sample.mp4`;
+    const sampleVideoUrl = `${SITE_URL}${sampleVideoPath}`;
+
+    // 再生開始を速くするため、SSR 中に実 CDN 直リンクを事前解決する。
+    // 間に合わなかった (cold resolve) ときは null になり、従来どおり
+    // /videos/[slug]/sample.mp4 への 302 リダイレクト route にフォールバックする。
+    const playback = movie.content_id
+      ? await resolvePlaybackUrlSSR(movie.slug)
+      : null;
+    // <source> に入れる src。直リンクが取れていればそれを優先。
+    const videoSrc = playback?.url ?? sampleVideoPath;
 
     const fieldLink = (
       field: "director" | "maker" | "label" | "series",
@@ -119,10 +131,13 @@ export default async function MovieDetailPage({ params }: PageProps) {
       "@type": "VideoObject",
       name: movie.title,
       description: movie.description ?? `${movie.actresses.join("・")}出演作品`,
-      thumbnailUrl: imgSrc || undefined,
+      thumbnailUrl: imgSrc ? [imgSrc] : undefined,
       uploadDate,
-      duration: movie.volume ? `PT${movie.volume}M` : undefined,
+      url: canonical,
+      mainEntityOfPage: canonical,
+      contentUrl: movie.content_id ? sampleVideoUrl : undefined,
       embedUrl: movie.sample_embed_url ?? undefined,
+      isFamilyFriendly: false,
       genre: movie.genres.length > 0 ? movie.genres : undefined,
       actor:
         movie.actresses.length > 0
@@ -203,6 +218,10 @@ export default async function MovieDetailPage({ params }: PageProps) {
 
     return (
       <>
+        {/* 解決済み CDN origin へ TLS/TCP を前倒し。再生開始の体感を縮める。 */}
+        {playback?.origin && (
+          <link rel="preconnect" href={playback.origin} crossOrigin="anonymous" />
+        )}
         <script
           type="application/ld+json"
           dangerouslySetInnerHTML={{ __html: JSON.stringify(videoJsonLd) }}
@@ -227,14 +246,27 @@ export default async function MovieDetailPage({ params }: PageProps) {
               aria-hidden="true"
               style={styles.heroBgBlur}
             />
-            <img
-              src={imgSrc}
-              alt={`${movie.title}${movie.actresses.length > 0 ? ` - ${movie.actresses.join("・")}` : ""}`}
-              style={styles.heroImg}
-              width={720}
-              height={1280}
-              loading="eager"
-            />
+            {movie.content_id ? (
+              <video
+                controls
+                playsInline
+                preload={playback?.url ? "auto" : "metadata"}
+                poster={imgSrc || undefined}
+                style={styles.heroVideo}
+                aria-label={`${movie.title} サンプル動画`}
+              >
+                <source src={videoSrc} type="video/mp4" />
+              </video>
+            ) : (
+              <img
+                src={imgSrc}
+                alt={`${movie.title}${movie.actresses.length > 0 ? ` - ${movie.actresses.join("・")}` : ""}`}
+                style={styles.heroImg}
+                width={720}
+                height={1280}
+                loading="eager"
+              />
+            )}
             <BackButton resumeFeedUnmuted />
           </div>
 
@@ -335,6 +367,12 @@ const styles: Record<string, React.CSSProperties> = {
     position: 'relative', zIndex: 1, width: 'auto' as unknown as string,
     height: '100%', maxWidth: 'calc(100% - 60px)' as unknown as string,
     objectFit: 'contain', display: 'block', borderRadius: '8px',
+  },
+  heroVideo: {
+    position: 'relative', zIndex: 1, width: 'auto' as unknown as string,
+    height: '100%', maxWidth: 'calc(100% - 60px)' as unknown as string,
+    objectFit: 'contain', display: 'block', borderRadius: '8px',
+    background: '#000',
   },
   content: {
     padding: '20px 16px',

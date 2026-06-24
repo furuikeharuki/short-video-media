@@ -2,6 +2,7 @@
 
 import type { GoodsCard } from "@/lib/api/home";
 import { trackEvent } from "@/lib/analytics/analytics";
+import { normalizeSafeExternalHref } from "@/lib/safe-url";
 
 type Props = {
   goods: GoodsCard;
@@ -17,8 +18,7 @@ type Props = {
  */
 export default function GoodsCardThumb({ goods, rank }: Props) {
   const imgSrc = goods.image_url_large ?? goods.image_url_list ?? "";
-  const safeHref =
-    typeof goods.affiliate_url === "string" ? goods.affiliate_url.trim() : "";
+  const safeHref = normalizeSafeExternalHref(goods.affiliate_url);
 
   const handleClick = () => {
     if (!safeHref) return;

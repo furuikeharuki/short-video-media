@@ -2,11 +2,23 @@
 
 import { trackEvent } from "@/lib/analytics/analytics";
 
+type AgeGateExitLinkProps = {
+  nextPath?: string;
+  nextKind?: string;
+};
+
 // 18歳未満 (= 退出) リンク。離脱を計測してから外部へ遷移させる。
 // 計測失敗・解析未設定でも遷移は必ず行う (trackEvent は内部で握りつぶす)。
-export default function AgeGateExitLink() {
+export default function AgeGateExitLink({
+  nextPath,
+  nextKind,
+}: AgeGateExitLinkProps) {
   const handleClick = () => {
-    void trackEvent("age_gate_exit");
+    window.dispatchEvent(new Event("age-gate-settled"));
+    void trackEvent("age_gate_exit", {
+      next_path: nextPath,
+      next_kind: nextKind,
+    });
   };
 
   return (

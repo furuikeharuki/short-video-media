@@ -11,14 +11,18 @@ dependencies = [
   "pydantic-settings>=2.0.0",
   "pyjwt>=2.9.0",
   # DMM サンプル動画ページから MP4 URL を抽出する extractor、および
-  # 各種テストで使う HTTP クライアント。
+  # 各種テストで使う HTTP クライアント。h2 は httpx の HTTP/2 有効化に必要。
   "httpx>=0.27",
+  "h2>=4.1.0",
 ]
 
 [project.optional-dependencies]
 # Redis キャッシュを使う場合のみインストール:
 #   pip install -e "apps/api[cache]"
 cache = ["redis[asyncio]>=5.0.0"]
+# 互換用: 以前の手順 `pip install -e "apps/api[http2]"` を残す。
+# h2 自体は本番でも有効化したいため通常依存に含めている。
+http2 = ["h2>=4.1.0"]
 # テスト用
 dev = [
   "pytest>=8.0",

@@ -20,6 +20,8 @@ type Props = {
   playlist?: Playlist;
   /** playlist 未指定時の遷移先 (デフォは詳細モーダル)。 */
   href?: string;
+  /** 初期表示のLCP候補として優先読み込みするか。 */
+  priority?: boolean;
   /**
    * 親のグリッド/フレックスセルに合わせて幅 100% で伸ばすか。
    * デフォは false (140px フィックス = ホームの横スクロール用) 。
@@ -33,6 +35,7 @@ export default function MovieCardThumb({
   rank,
   playlist,
   href,
+  priority = false,
   fluid = false,
 }: Props) {
   const router = useRouter();
@@ -83,6 +86,8 @@ export default function MovieCardThumb({
               aria-hidden="true"
               loading="lazy"
               decoding="async"
+              width={aspect === "portrait" ? 360 : 640}
+              height={aspect === "portrait" ? 640 : 360}
               className="mct-thumb-blur"
             />
             {/* 前景レイヤー: メイン画像。videoa(pl.jpg) は右端寄せでメインビジュアルを見せる */}
@@ -90,8 +95,11 @@ export default function MovieCardThumb({
             <img
               src={imgSrc}
               alt={movie.title}
-              loading="lazy"
+              loading={priority ? "eager" : "lazy"}
               decoding="async"
+              fetchPriority={priority ? "high" : "auto"}
+              width={aspect === "portrait" ? 360 : 640}
+              height={aspect === "portrait" ? 640 : 360}
               className="mct-thumb-img"
             />
           </>

@@ -7,6 +7,7 @@ import AdSlot from "@/components/ads/AdSlot";
 import { getActressByName } from "@/lib/api/actresses";
 import HorizontalCardRow from "@/components/home/HorizontalCardRow";
 import MovieCardThumb from "@/components/home/MovieCardThumb";
+import { normalizeSafeExternalHref } from "@/lib/safe-url";
 import { SITE_NAME, SITE_URL, SITE_LOCALE } from "@/lib/config/seo";
 
 // ISR: 1時間キャッシュ。女優プロフィールページも初回生成後はキャッシュ済み HTML を
@@ -91,6 +92,7 @@ export default async function ActressDetailPage({ params }: PageProps) {
 
   const { profile, stats, movies, goods } = detail;
   const heroImg = profile.image_url_large ?? profile.image_url_small ?? profile.thumbnail_url ?? "";
+  const dmmListUrl = normalizeSafeExternalHref(profile.dmm_list_url);
   const age = calcAge(profile.birthday);
 
   const profileRows: { label: string; value: React.ReactNode }[] = [
@@ -232,10 +234,10 @@ export default async function ActressDetailPage({ params }: PageProps) {
           </section>
         )}
 
-        {profile.dmm_list_url && (
+        {dmmListUrl && (
           <section style={styles.section}>
             <a
-              href={profile.dmm_list_url}
+              href={dmmListUrl}
               target="_blank"
               rel="noopener noreferrer sponsored"
               style={styles.extLink}
@@ -283,10 +285,12 @@ export default async function ActressDetailPage({ params }: PageProps) {
             <div className="goods-grid">
               {goods.map((g) => {
                 const img = g.image_url_large ?? g.image_url_list ?? "";
+                const safeHref = normalizeSafeExternalHref(g.affiliate_url);
+                if (!safeHref) return null;
                 return (
                   <a
                     key={g.id}
-                    href={g.affiliate_url}
+                    href={safeHref}
                     target="_blank"
                     rel="noopener noreferrer sponsored"
                     style={styles.goodsCard}

@@ -115,6 +115,7 @@ export default async function Page() {
                   movie={m}
                   aspect="portrait"
                   rank={isRanking && i < 100 ? i + 1 : undefined}
+                  priority={sectionIndex === 0 && i < 3}
                   playlist={{
                     key: playlistKey,
                     title: section.title,

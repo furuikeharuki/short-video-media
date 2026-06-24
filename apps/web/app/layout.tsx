@@ -6,6 +6,7 @@ import NavigationLoadingOverlay from "@/components/NavigationLoadingOverlay";
 import SessionProvider from "@/components/SessionProvider";
 import SavedFilterEnforcer from "@/components/SavedFilterEnforcer";
 import FullpageInterstitial from "@/components/ads/FullpageInterstitial";
+import AgeGateOverlay from "@/components/age-gate/AgeGateOverlay";
 import BuildIdLogger from "@/components/BuildIdLogger";
 import HydrationDebugEarlyScript from "@/components/HydrationDebugEarlyScript";
 import {
@@ -163,6 +164,7 @@ export default function RootLayout({
             <Header />
             {children}
             {modal}
+            <AgeGateOverlay />
             <BottomNav />
             {/* /feed から / や /mypage へフルページ遷移する瞬間に、ヘッダーと
                 ボトムナビの間だけを黒+スピナーで覆って「タップが効いた」感を即返す。

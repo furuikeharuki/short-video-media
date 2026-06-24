@@ -1,7 +1,13 @@
 import { NextRequest, NextResponse } from "next/server";
 
+export async function GET(request: NextRequest) {
+  return NextResponse.json({
+    verified: request.cookies.get("age_verified")?.value === "true",
+  });
+}
+
 export async function POST(request: NextRequest) {
-  const { nextPath } = await request.json().catch(() => ({ nextPath: "/" }));
+  await request.json().catch(() => null);
 
   const res = NextResponse.json({ ok: true });
   res.cookies.set("age_verified", "true", {

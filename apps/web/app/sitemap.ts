@@ -1,9 +1,18 @@
 import type { MetadataRoute } from "next";
 import { SITE_URL } from "@/lib/config/seo";
 
-type MovieSitemapEntry = { slug: string; last_modified: string | null };
-type ActressSitemapEntry = { name: string; last_modified: string | null };
-type GenreSitemapEntry = { name: string; last_modified: string | null };
+type MovieSitemapEntry = {
+  slug: string;
+  last_modified?: string | null;
+  title?: string | null;
+  description?: string | null;
+  thumbnail_url?: string | null;
+  sample_embed_url?: string | null;
+  content_id?: string | null;
+  publication_date?: string | null;
+};
+type ActressSitemapEntry = { name: string; last_modified?: string | null };
+type GenreSitemapEntry = { name: string; last_modified?: string | null };
 type SitemapUrls = {
   movies: MovieSitemapEntry[];
   actresses: ActressSitemapEntry[];
@@ -12,6 +21,7 @@ type SitemapUrls = {
 
 const API_BASE_URL =
   process.env.API_BASE_URL ||
+  process.env.INTERNAL_API_BASE_URL ||
   process.env.NEXT_PUBLIC_API_BASE_URL ||
   "http://127.0.0.1:8000";
 
@@ -19,7 +29,7 @@ const API_BASE_URL =
 // クローラがリトライしてきても DB に負荷をかけないようにしておく。
 export const revalidate = 3600;
 
-function parseLastModified(s: string | null, fallback: Date): Date {
+function parseLastModified(s: string | null | undefined, fallback: Date): Date {
   if (!s) return fallback;
   const d = new Date(s);
   return isNaN(d.getTime()) ? fallback : d;

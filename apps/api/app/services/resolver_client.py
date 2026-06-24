@@ -240,11 +240,26 @@ _shared_client_loop: asyncio.AbstractEventLoop | None = None
 _shared_client_lock = asyncio.Lock()
 
 
+# HTTP/2 は h2 パッケージが入っている環境でのみ有効化する。
+# DMM (www.dmm.co.jp) は HTTP/2 対応のため、有効化できると litevideo →
+# html5_player の 2 リクエストを 1 本の TCP/TLS 接続上で多重化でき、
+# 抽出レイテンシをわずかに削減できる。h2 が未インストールの環境では
+# httpx.AsyncClient(http2=True) が ImportError を投げるため、事前に検出して
+# False にフォールバックする (ローカル/テスト環境で h2 が未導入でも壊さない)。
+try:  # pragma: no cover - import 可否は環境依存
+    import h2  # type: ignore[import-not-found]  # noqa: F401
+
+    _HTTP2_AVAILABLE = True
+except ImportError:  # pragma: no cover
+    _HTTP2_AVAILABLE = False
+
+
 def _new_shared_client() -> httpx.AsyncClient:
     timeout_s = _get_timeout_s()
     return httpx.AsyncClient(
         timeout=timeout_s,
         limits=_HTTPX_LIMITS,
+        http2=_HTTP2_AVAILABLE,
     )
 
 

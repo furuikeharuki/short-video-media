@@ -28,7 +28,7 @@ const defaultMetadata: Metadata = {
   title: "ショートフィード",
   description:
     "縦スクロールで次々と試し見できるAVショート動画フィード。気に入った作品はFANZAでそのまま購入できます。",
-  alternates: { canonical: "/feed" },
+  alternates: { canonical: `${SITE_URL}/feed` },
   robots: noindexRobots,
   openGraph: {
     title: "ショートフィード",
@@ -51,16 +51,19 @@ export async function generateMetadata({
     const movie = await getMovieBySlug(slug);
     const title = `${movie.title} | ${SITE_NAME}`;
     const description = movie.description
-      ? movie.description.slice(0, 120) + "..."
+      ? movie.description.length > 120
+        ? `${movie.description.slice(0, 119)}…`
+        : movie.description
       : `${movie.actresses.join("・")}出演。${SITE_NAME}で試し見できるショート動画。`;
     const imageUrl = movie.image_url_large ?? movie.image_url_list ?? "";
-    // 共有URLとしての ?v= は維持しつつ canonical は /feed に揃える (既存SEO方針)。
+    // 共有URLとしての ?v= は維持しつつ、SEO評価は動画をサーバー描画する作品詳細へ集約する。
     const shareUrl = `${SITE_URL}/feed?v=${encodeURIComponent(slug)}`;
+    const canonical = `${SITE_URL}/movies/${encodeURIComponent(slug)}`;
 
     return {
       title,
       description,
-      alternates: { canonical: "/feed" },
+      alternates: { canonical },
       robots: noindexRobots,
       openGraph: {
         type: "video.other",

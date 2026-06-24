@@ -48,6 +48,7 @@ export type AnalyticsEventName =
   | "age_gate_view"
   | "age_gate_pass"
   | "age_gate_exit"
+  | "age_gate_abandon"
   | "detail_view"
   | "movie_feed_cta_click"
   | "affiliate_click"
@@ -74,6 +75,7 @@ const ROUTE_RULES: Record<AnalyticsEventName, Routing> = {
   age_gate_view: { ga4: true },
   age_gate_pass: { ga4: true },
   age_gate_exit: { ga4: true },
+  age_gate_abandon: { ga4: true },
   scroll_depth: { ga4: true },
 
   // 動画再生系

@@ -10,6 +10,7 @@ const PUBLIC_PATHS = [
 
 const PUBLIC_FILE_NAMES = new Set<string>([
   "sitemap.xml",
+  "video-sitemap.xml",
   "robots.txt",
 ]);
 
@@ -37,29 +38,10 @@ export function middleware(request: NextRequest) {
     return NextResponse.next();
   }
 
-  // ✅ クローラはCookieを持たないため、UAに関係なく無条件でバイパス
-  // UA判定に頼らず、クローラが実ページを取得できるようにする
-  const userAgent = request.headers.get("user-agent") ?? "";
-  const CRAWLER_UA_PATTERN =
-    /(googlebot|bingbot|slurp|duckduckbot|baiduspider|yandexbot|sogou|exabot|facebot|facebookexternalhit|twitterbot|linkedinbot|applebot|petalbot|google-inspectiontool|chrome-lighthouse|adsbot-google|mediapartners-google|bot\b|crawler|spider|crawl)/i;
-
-  if (CRAWLER_UA_PATTERN.test(userAgent)) {
-    // ✅ クローラへのレスポンスにはX-Robots-Tagを一切付けない
-    return NextResponse.next();
-  }
-
-  // 認証済みユーザーはそのまま通す
-  const verified = request.cookies.get("age_verified")?.value;
-  if (verified === "true") {
-    return NextResponse.next();
-  }
-
-  // ✅ 未認証ユーザーへのリダイレクト：X-Robots-Tagを付けない
-  const url = request.nextUrl.clone();
-  url.pathname = "/age-gate";
-  url.search = "";
-  url.searchParams.set("next", pathname + request.nextUrl.search);
-  return NextResponse.redirect(url); // ← noindexヘッダーを削除
+  // UA でクローラだけを実ページへ通し、一般ユーザーだけ /age-gate へ
+  // リダイレクトすると cloaking に見える。年齢確認は layout の
+  // AgeGateOverlay で同じ HTML 上に重ね、middleware では差分配信しない。
+  return NextResponse.next();
 }
 
 export const config = {

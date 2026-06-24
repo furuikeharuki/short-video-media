@@ -23,6 +23,7 @@ const CTA_LABEL: Record<string, string> = {
 
 export default function AgeGateForm({ nextPath, nextKind }: AgeGateFormProps) {
   const btnRef = useRef<HTMLButtonElement>(null);
+  const settledRef = useRef(false);
 
   // 表示計測 (ファネルの母数)。マウント時に 1 回だけ送る。
   useEffect(() => {
@@ -32,6 +33,31 @@ export default function AgeGateForm({ nextPath, nextKind }: AgeGateFormProps) {
     });
     // モバイルで誤タップを誘発しないよう preventScroll でフォーカスのみ移す。
     btnRef.current?.focus({ preventScroll: true });
+
+    const markSettled = () => {
+      settledRef.current = true;
+    };
+    const trackAbandon = () => {
+      if (settledRef.current) return;
+      settledRef.current = true;
+      void trackEvent("age_gate_abandon", {
+        next_path: nextPath,
+        next_kind: nextKind,
+      });
+    };
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === "hidden") trackAbandon();
+    };
+
+    window.addEventListener("age-gate-settled", markSettled);
+    window.addEventListener("pagehide", trackAbandon);
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+
+    return () => {
+      window.removeEventListener("age-gate-settled", markSettled);
+      window.removeEventListener("pagehide", trackAbandon);
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
+    };
     // nextPath / nextKind はページ単位で固定なので初回のみで十分。
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -39,6 +65,7 @@ export default function AgeGateForm({ nextPath, nextKind }: AgeGateFormProps) {
   const handleClick = async () => {
     // クライアント側でも再度サニタイズする (props 改ざん・将来の呼び出し対策)。
     const target = sanitizeNextPath(nextPath);
+    settledRef.current = true;
 
     try {
       await fetch("/api/age-gate", {

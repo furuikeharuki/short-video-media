@@ -355,8 +355,28 @@ export function registerPrefetchElement(args: {
     // readiness とバッファをそのまま温存する。プールから戻ってきたケースも含む。
     if (existing.src === src) {
       const fromPool = existing.detached;
-      if (existing.el.preload !== preload) {
+      const previousPreload = existing.el.preload;
+      if (previousPreload !== preload) {
         existing.el.preload = preload;
+        // metadata で作った軽量ウォーム slot が +2/+1 に近づいて auto へ昇格した時、
+        // preload 属性を変えるだけではブラウザが追加 Range request を始めないことがある。
+        // 既に canplay していない、かつ現在ロード中でもない場合だけ load() を蹴り、
+        // 既存 src / cache を使って先頭バッファ取得を確実に開始させる。
+        const shouldKickAutoLoad =
+          preload === "auto" &&
+          previousPreload !== "auto" &&
+          existing.el.readyState < 3 &&
+          existing.el.networkState !== 2;
+        if (shouldKickAutoLoad) {
+          try {
+            existing.el.load();
+            vtHandoffLog(
+              `reload slug=${slug} reason=preload-upgrade from=${previousPreload} to=${preload}`,
+            );
+          } catch {
+            /* ignore */
+          }
+        }
       }
       // PrefetchVideoBuffer が新たに自前の readiness リスナを貼るので、
       // pool 専用リスナは外して二重発火を避ける。

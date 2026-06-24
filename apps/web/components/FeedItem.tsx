@@ -165,7 +165,8 @@ export default function FeedItem({ item, isActive, isAdjacent = false, isFirst, 
   // hasPromotableElement は registry を sync に読むので render フェーズで判定でき、
   // expectingPromotion=true を渡せば JSX <video> の一時マウントを完全に回避できる。
   // canplay 未到達でも pending entry があれば JSX <video> を作らず host だけを
-  // 描画し、subscribe で canplay 到達を待つ (pending promote)。
+  // 描画し、subscribe で canplay 到達を待つ (pending promote)。ただし pending が
+  // 長引く場合は下の host-only deadlock 監視で早めに JSX <video> へ逃がす。
   //
   // canplay 到達済みの pool entry は pendingAbandonedSlug 状態に関係なく claim 対象。
   // 「最初の active commit で一瞬 claim に失敗した slug」でも、後から pool に
@@ -488,9 +489,10 @@ export default function FeedItem({ item, isActive, isAdjacent = false, isFirst, 
   //   - canplay 済みの pool entry が存在する (hasPromotableElement=true) 場合:
   //     真の deadlock (promote 自体が何らかの理由で完了しない) なので 4 秒待つ。
   //   - pending entry しかない (hasPendingElement=true のみ) 場合:
-  //     pool entry が canplay に到達するのを待っているが、active 化後 500ms 以内に
+  //     pool entry が canplay に到達するのを待っているが、active 化後 650ms 以内に
   //     canplay に到達しなければ、JSX <video> をゼロから立ち上げる方が高速。
-  //     この経路で 4 秒待つと毎ページ 500ms〜1s の余計な遅延が発生する。
+  //     +1 metadata/auto warm で pending entry は増えるため、ここを長くすると
+  //     host-only のままサムネで待つ時間が体感遅延になる。
   //     (観測: bound=null → stale-element → host-only-deadlock の連鎖)
   //
   // 解消条件 (promotedElement set / 非 active / videoSrc 消失) は依存配列の変化で
@@ -506,7 +508,7 @@ export default function FeedItem({ item, isActive, isAdjacent = false, isFirst, 
     const isPendingOnly =
       !hasPromotableElement(item.slug, videoSrc) &&
       hasPendingElement(item.slug, videoSrc);
-    const HOST_ONLY_DEADLOCK_MS = isPendingOnly ? 1800 : 4000;
+    const HOST_ONLY_DEADLOCK_MS = isPendingOnly ? 650 : 4000;
     // PR #272 でタイマー満了時に hasPromotableElement を再判定するようにしたが、
     // 観測ログでは「force-fallback engaged の数 ms〜数十 ms 後に pool readiness が
     // canplay に到達する」レースが残っていた (例: 61mdtm00435 / suji00117)。
@@ -519,10 +521,9 @@ export default function FeedItem({ item, isActive, isAdjacent = false, isFirst, 
     //     キャンセルして JSX <video> remount を回避する。
     //   - grace を超えても canplay/promotable が来ないなら、本当に詰まったケース
     //     として従来通り force-fallback を engage する。
-    // 350ms は実ログ (deadline → canplay が 12〜数十 ms) に十分なマージンで、かつ
-    // 全体のフォールバック時間 (pending 1800ms + grace 350ms = 2150ms) を実用的な
-    // 範囲に保つ。
-    const FINAL_GRACE_MS = 350;
+    // pending-only は「もう JSX へ逃がした方が速い」判定なので grace も短くする。
+    // canplay 済み entry の真の deadlock だけは従来どおり余裕を持つ。
+    const FINAL_GRACE_MS = isPendingOnly ? 150 : 350;
     let timer: ReturnType<typeof setTimeout> | null = null;
     let graceTimer: ReturnType<typeof setTimeout> | null = null;
     let unsub: (() => void) | null = null;

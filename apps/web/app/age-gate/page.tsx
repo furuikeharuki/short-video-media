@@ -76,7 +76,7 @@ export default async function AgeGatePage({ searchParams }: AgeGatePageProps) {
 
         <div style={styles.divider} />
 
-        <AgeGateExitLink />
+        <AgeGateExitLink nextPath={nextPath} nextKind={nextKind} />
 
         <p style={styles.legal}>
           同意することで、当サイトのプライバシーポリシーおよび利用規約に同意したものとみなします。

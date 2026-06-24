@@ -116,6 +116,27 @@ class Settings(BaseSettings):
     DB_POOL_RECYCLE: int = 300
     DB_POOL_PRE_PING: bool = True
 
+    # ─────────────────────────────────────────────
+    # 事前 resolve (MP4 URL warm) ジョブ
+    # ─────────────────────────────────────────────
+    # 人気上位作品の low/high mp4_url を先に解決して resolver の成功キャッシュ
+    # (Redis があれば Redis、無ければ API プロセスの in-process LRU) に載せておく。
+    # これによりフィード初回再生の「resolve に伴う DMM 実アクセス待ち (数秒)」を
+    # 体感からほぼ消す。
+    #
+    # RESOLVE_WARM_ENABLED=true のとき、API プロセス内で起動時 + 一定間隔の
+    # バックグラウンド warm ループを回す。Redis が無い単一プロセス構成 (現 xserver)
+    # でも、フィードを返すのと同じプロセスの in-process キャッシュを温めるので効く。
+    # DMM_AFFILIATE_ID 未設定なら warm は安全に no-op になる。
+    RESOLVE_WARM_ENABLED: bool = False
+    # warm ループの実行間隔 (秒)。resolver 成功キャッシュ TTL (3600s) より短くして
+    # 期限切れ前に温め直す。既定 1800s = 30 分。
+    RESOLVE_WARM_INTERVAL_SECONDS: int = 1800
+    # 1 周で温める最大件数 (review_count 降順の人気上位)。
+    RESOLVE_WARM_LIMIT: int = 200
+    # 同時 resolve 本数。DMM へのバーストを避けるため控えめに。
+    RESOLVE_WARM_CONCURRENCY: int = 4
+
     @property
     def allowed_origins_list(self) -> list[str]:
         return [origin.strip() for origin in self.ALLOWED_ORIGINS.split(",") if origin.strip()]

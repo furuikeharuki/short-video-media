@@ -1,3 +1,5 @@
+import asyncio
+import logging
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
@@ -8,10 +10,13 @@ from app.core.cache import close_redis
 from app.core.config import settings
 from app.core.request_id import REQUEST_ID_HEADER, RequestIdMiddleware
 from app.core.sentry import init_sentry
+from app.services import resolve_warm_service
 from app.services.resolver_client import (
     shutdown_resolver_http_client,
     startup_resolver_http_client,
 )
+
+logger = logging.getLogger(__name__)
 
 # Sentry は import 時に環境変数を見て条件付きで有効化する。
 # 未設定 or sentry-sdk 未インストールなら完全 no-op。
@@ -29,9 +34,39 @@ async def lifespan(app: FastAPI):
     DMM への httpx.AsyncClient はプロセスで 1 本だけ持って keep-alive する。
     """
     await startup_resolver_http_client()
+
+    # 事前 resolve (MP4 URL warm) ループ。RESOLVE_WARM_ENABLED=true のときだけ起動。
+    # フィードを返すのと同じプロセスで resolver の成功キャッシュを温め、初回再生の
+    # resolve 待ちを減らす。Redis 有無に依存しない (in-process キャッシュも温まる)。
+    warm_stop: asyncio.Event | None = None
+    warm_task: asyncio.Task[None] | None = None
+    if settings.RESOLVE_WARM_ENABLED:
+        warm_stop = asyncio.Event()
+        warm_task = asyncio.create_task(
+            resolve_warm_service.warm_resolve_loop(
+                interval_s=max(60, settings.RESOLVE_WARM_INTERVAL_SECONDS),
+                limit=max(1, settings.RESOLVE_WARM_LIMIT),
+                concurrency=max(1, settings.RESOLVE_WARM_CONCURRENCY),
+                stop_event=warm_stop,
+            )
+        )
+        logger.info(
+            "[resolve_warm] background loop enabled (interval=%ds limit=%d)",
+            settings.RESOLVE_WARM_INTERVAL_SECONDS,
+            settings.RESOLVE_WARM_LIMIT,
+        )
+
     try:
         yield
     finally:
+        if warm_stop is not None:
+            warm_stop.set()
+        if warm_task is not None:
+            warm_task.cancel()
+            try:
+                await warm_task
+            except (asyncio.CancelledError, Exception):  # noqa: BLE001
+                pass
         await shutdown_resolver_http_client()
         await close_redis()
 

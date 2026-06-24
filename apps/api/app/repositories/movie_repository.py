@@ -40,6 +40,27 @@ async def get_movies_by_ids(db: AsyncSession, ids: list[str]) -> dict[str, Movie
     return {m.id: m for m in movies}
 
 
+async def get_resolve_warm_content_ids(
+    db: AsyncSession,
+    limit: int = 500,
+) -> list[str]:
+    """事前 resolve job 向けに「温める価値が高い順」の content_id を返す。
+
+    フィードは shuffle 順だが、初回再生で当たりやすいのは人気作 (review_count
+    が多い作品) なので、可視作品をレビュー数の多い順に並べて上位 N 件を返す。
+    content_id を持たない作品 (= resolver を呼べない) は除外する。
+    """
+    query = (
+        select(Movie.content_id)
+        .where(Movie.is_visible.is_(True))
+        .where(Movie.content_id.is_not(None))
+        .order_by(desc(Movie.review_count), desc(Movie.primary_date))
+        .limit(limit)
+    )
+    result = await db.execute(query)
+    return [cid for cid in result.scalars().all() if cid]
+
+
 async def get_movies_paginated(
     db: AsyncSession,
     offset: int = 0,

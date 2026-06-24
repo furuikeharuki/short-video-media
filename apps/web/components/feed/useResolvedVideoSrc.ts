@@ -38,7 +38,14 @@ import { createVideoTimer, isVideoTimingEnabled } from "@/lib/videoTiming";
 
 type State =
   | { phase: "resolving"; url: null; highUrl: null }
-  | { phase: "ready"; url: string; highUrl: string | null; quality: "fast" | "high" }
+  | {
+      phase: "ready";
+      url: string;
+      /** 低画質スタート URL。upgrade 後も保持し、高画質が詰まったときの fallback 先にする。 */
+      fastUrl: string;
+      highUrl: string | null;
+      quality: "fast" | "high";
+    }
   | { phase: "retrying"; url: string | null; highUrl: string | null }
   | { phase: "exhausted"; url: null; highUrl: null };
 type ReadyState = Extract<State, { phase: "ready" }>;
@@ -84,6 +91,16 @@ interface Result {
   highQualitySrc: string | null;
   /** 高画質候補へ切り替える。候補が無い/既に高画質なら no-op。 */
   upgradeToHighQuality: () => void;
+  /**
+   * 高画質再生が詰まったときに低画質スタート URL へ戻す。再生位置は呼び出し側
+   * (useFeedPlayback の resume) が保持する。戻したあとは highUrl を落として
+   * 自動再 upgrade を抑止する (低⇄高の往復ループ防止)。
+   */
+  downgradeToFastQuality: () => void;
+  /** 現在再生している URL の画質。ready 以外では null。 */
+  currentQuality: "fast" | "high" | null;
+  /** いま高画質再生中で、戻せる別の低画質 URL がある (= 高画質 fallback 可能)。 */
+  canDowngrade: boolean;
 }
 
 const MAX_FORCE_RETRIES = 3;
@@ -106,6 +123,7 @@ function readyStateFromResolved(res: ResolveMp4Response): ReadyState {
   return {
     phase: "ready",
     url,
+    fastUrl: url,
     highUrl: upgradeUrl,
     quality: upgradeUrl ? "fast" : "high",
   };
@@ -129,7 +147,7 @@ function logSelectedQuality(
     high_mp4_url?: string | null;
   },
   picked: string,
-  source: "active" | "force-retry" | "quality-upgrade",
+  source: "active" | "force-retry" | "quality-upgrade" | "quality-downgrade",
   // 「この resolver は呼ばれた時点で active として実行されたのか、隣接 (adjacent)
   // として実行されたのか」を vt ログで明示する。これが無いと、非 current slug が
   // adjacent としてリゾルブしたログ (source=active) が「アクティブが切り替わった
@@ -181,6 +199,9 @@ export function useResolvedVideoSrc({
   const [forceResolveEpoch, setForceResolveEpoch] = useState(0);
 
   const forceRetryCountRef = useRef(0);
+  // 高画質 rebuffer で一度低画質へ落とした slug session では、force-resolve でも
+  // 高画質を再選択しない。低⇄高の往復で何度も止まるのを防ぐためのラッチ。
+  const forceResolvePrefersFastRef = useRef(false);
   const inFlightRef = useRef<AbortController | null>(null);
   const backoffTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const prevEnabledRef = useRef(enabled);
@@ -194,6 +215,7 @@ export function useResolvedVideoSrc({
 
   useEffect(() => {
     forceRetryCountRef.current = 0;
+    forceResolvePrefersFastRef.current = false;
     if (inFlightRef.current) {
       inFlightRef.current.abort();
       inFlightRef.current = null;
@@ -271,6 +293,7 @@ export function useResolvedVideoSrc({
           setState({
             phase: "ready",
             url,
+            fastUrl: url,
             highUrl: upgradeUrl,
             quality: upgradeUrl ? "fast" : "high",
           });
@@ -309,9 +332,12 @@ export function useResolvedVideoSrc({
       .then((res) => {
         if (controller.signal.aborted) return;
         if (res?.mp4_url) {
-          // force retry は現 URL が詰まった/壊れた後の救済なので、低画質に固執せず
-          // 高画質候補を優先する。URL が同一でも epoch で load/play を撃ち直す。
-          const url = pickPlaybackUrl(res);
+          const fastUrl = pickFastStartUrl(res);
+          // 通常の force retry は現 URL が詰まった/壊れた後の救済なので高画質候補を
+          // 優先する。ただし、高画質 rebuffer で一度低画質へ落とした session では
+          // force retry でも低画質を維持し、低⇄高ループを起こさない。
+          const preferFast = forceResolvePrefersFastRef.current;
+          const url = preferFast ? fastUrl : pickPlaybackUrl(res);
           logSelectedQuality(
             slug,
             res,
@@ -323,7 +349,16 @@ export function useResolvedVideoSrc({
           let sameUrl = false;
           setState((prev) => {
             sameUrl = prev.url === url;
-            return { phase: "ready", url, highUrl: null, quality: "high" };
+            // force-retry は基本的に高画質を優先するが、低画質へ downgrade 済みの
+            // session では fastUrl に固定する。高画質を選んだ場合だけ fastUrl を
+            // fallback 先として保持し、再び詰まったら低画質へ落とせるようにする。
+            return {
+              phase: "ready",
+              url,
+              fastUrl,
+              highUrl: null,
+              quality: preferFast ? "fast" : "high",
+            };
           });
           setForceResolveEpoch((n) => {
             const next = n + 1;
@@ -409,8 +444,46 @@ export function useResolvedVideoSrc({
       return {
         phase: "ready",
         url: prev.highUrl,
+        // 低画質スタート URL は upgrade 後も保持する。高画質が詰まったら
+        // downgradeToFastQuality() でここへ戻して再生を止めない。
+        fastUrl: prev.fastUrl,
         highUrl: null,
         quality: "high",
+      };
+    });
+  }, [slug]);
+
+  const downgradeToFastQuality = useCallback(() => {
+    // この session では force-resolve も低画質優先にする。setState updater の実行を
+    // 待たずに立てて、直後に rebuffer force retry が残っても高画質へ戻さない。
+    forceResolvePrefersFastRef.current = true;
+    setState((prev) => {
+      if (prev.phase !== "ready") return prev;
+      // 既に低画質、または戻せる別 URL が無いなら no-op。
+      if (prev.quality !== "high") return prev;
+      if (!prev.fastUrl || prev.fastUrl === prev.url) return prev;
+      if (isVideoTimingEnabled()) {
+        logSelectedQuality(
+          slug,
+          {
+            mp4_url: prev.fastUrl,
+            low_mp4_url: prev.fastUrl,
+            high_mp4_url: prev.url,
+          },
+          prev.fastUrl,
+          "quality-downgrade",
+          isActiveRef.current ? "active" : "adjacent",
+        );
+      }
+      ensurePreconnect(prev.fastUrl);
+      // highUrl は null のままにして、この session での自動再 upgrade を止める
+      // (低⇄高の往復で再生が何度も止まるのを防ぐ)。
+      return {
+        phase: "ready",
+        url: prev.fastUrl,
+        fastUrl: prev.fastUrl,
+        highUrl: null,
+        quality: "fast",
       };
     });
   }, [slug]);
@@ -446,5 +519,12 @@ export function useResolvedVideoSrc({
     forceResolveEpoch,
     highQualitySrc: state.phase === "ready" ? state.highUrl : null,
     upgradeToHighQuality,
+    downgradeToFastQuality,
+    currentQuality: state.phase === "ready" ? state.quality : null,
+    canDowngrade:
+      state.phase === "ready" &&
+      state.quality === "high" &&
+      !!state.fastUrl &&
+      state.fastUrl !== state.url,
   };
 }

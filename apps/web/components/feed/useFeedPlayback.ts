@@ -138,6 +138,15 @@ export function useFeedPlayback({ slug, title, isActive, videoSrc, boundElement 
   // slug が変わった (新しい作品にスワイプ) ときは time を 0 にリセット。
   const lastPlaybackRef = useRef<{ slug: string; time: number }>({ slug: "", time: 0 });
 
+  // 画質切替 (低→高 upgrade / 高→低 downgrade) 専用の resume 位置。
+  // 切替で <video> の src が差し替わると currentTime が 0 に戻るため、切替直前に
+  // ここへ再生位置を退避しておき、新 src の loadedmetadata で同位置へ seek し直す。
+  // これにより「画質を切り替えると最初から再生になる」のを防ぐ。
+  // lastPlaybackRef とは別に持つ理由: src 差し替え直後に rs=0 の <video> から
+  // currentTime=0 の timeupdate が漏れて lastPlaybackRef を 0 に上書きするレースが
+  // あるため、切替 resume は専用 ref で確実に保持・消費する。
+  const qualitySwitchResumeRef = useRef<{ slug: string; time: number } | null>(null);
+
   // ユーザーが明示的にポーズしたかどうか。fireTogglePlay の pause / handleDetail (modal 開く)
   // で true、playVideo / modal-close での再開で false に戻す。
   // pro-actress minStart の seek 後 play() リトライで「ユーザーが止めた動画を勝手に再生再開しない」
@@ -425,6 +434,10 @@ export function useFeedPlayback({ slug, title, isActive, videoSrc, boundElement 
   useEffect(() => {
     if (lastPlaybackRef.current.slug !== slug) {
       lastPlaybackRef.current = { slug: "", time: 0 };
+    }
+    // 別作品に切り替わったら画質切替 resume も破棄する (前作品の位置を持ち越さない)。
+    if (qualitySwitchResumeRef.current && qualitySwitchResumeRef.current.slug !== slug) {
+      qualitySwitchResumeRef.current = null;
     }
     const intent = pendingActiveAutoplayRef.current;
     if (intent && intent.slug !== slug) {
@@ -1734,6 +1747,56 @@ export function useFeedPlayback({ slug, title, isActive, videoSrc, boundElement 
     [attemptActiveAutoplay, slug],
   );
 
+  // 画質切替 (低⇄高) の直前に呼ぶ。現在の再生位置を退避しておき、src 差し替え後の
+  // loadedmetadata で同位置へ seek し直して「切替で最初から再生」になるのを防ぐ。
+  // 切替先 <video> が rs>=1 で既にメタデータを持っている (= 同 element の src 差し替え)
+  // ケースでは loadedmetadata が来ないことがあるため、ここでは退避だけ行い、seek は
+  // 呼び出し側 (FeedItem) が src 反映後に applyQualitySwitchResume() で確定させる。
+  const noteQualitySwitch = useCallback(() => {
+    const video = videoRef.current;
+    const t = video ? video.currentTime : 0;
+    if (t > 0.5) {
+      qualitySwitchResumeRef.current = { slug, time: t };
+      lastPlaybackRef.current = { slug, time: t };
+      if (isVideoTimingEnabled()) {
+        // eslint-disable-next-line no-console
+        console.debug(`vt ${slug}: quality-switch resume noted t=${t.toFixed(2)}`);
+      }
+    }
+  }, [slug]);
+
+  // src 反映後、退避した位置へ実際に seek して再生を継続する。loadedmetadata 経由
+  // (handleLoadedMeta) でも復元されるが、同一 element の src 差し替えで rs が一旦
+  // 1 以上のまま loadedmetadata が再発火しないブラウザのために、明示復元口も用意する。
+  // 既に同位置付近なら何もしない。消費したら resume ref を落とす。
+  const applyQualitySwitchResume = useCallback(() => {
+    const resume = qualitySwitchResumeRef.current;
+    if (!resume || resume.slug !== slug) return;
+    const video = videoRef.current;
+    if (!video) return;
+    if (video.readyState < 1) return; // metadata 未到達。handleLoadedMeta に委ねる。
+    const dur = video.duration;
+    let target = resume.time;
+    if (skipEffectiveRef.current && skipLowerBoundRef.current > 0 && target < skipLowerBoundRef.current) {
+      target = skipLowerBoundRef.current;
+    }
+    if (!Number.isFinite(dur) || target >= dur - 0.5) {
+      // duration 不明 or 終端付近。安全側に倒して loadedmetadata 経路へ委ねる。
+      return;
+    }
+    if (Math.abs(video.currentTime - target) > 0.25) {
+      try { video.currentTime = target; } catch { /* ignore */ }
+      lastPlaybackRef.current = { slug, time: target };
+      if (isVideoTimingEnabled()) {
+        // eslint-disable-next-line no-console
+        console.debug(
+          `vt ${slug}: quality-switch resume applied t=${target.toFixed(2)} rs=${video.readyState}`,
+        );
+      }
+    }
+    qualitySwitchResumeRef.current = null;
+  }, [slug]);
+
   // pending intent を「現状の videoRef + 状態」で消費する。
   // 同じ slug/videoSrc に対して active かつ要素がある場合に限り、reason=element-bound で
   // attemptActiveAutoplay を呼ぶ。消費後は intent をクリアする (重複起動防止)。
@@ -2052,18 +2115,31 @@ export function useFeedPlayback({ slug, title, isActive, videoSrc, boundElement 
 
     const handleLoadedMeta = () => {
       evaluate();
-      // リトライ後のレジューム: 同 slug で直近の再生位置が記録されていれば、
-      // その位置に currentTime をセットして「リトライしても最初からではなく途中から」とする。
+      // リトライ / 画質切替後のレジューム: 同 slug で直近の再生位置が記録されていれば、
+      // その位置に currentTime をセットして「最初からではなく途中から」再生する。
       // プロ女優作品は下限 5 秒を超えている限りその位置を採用；超えていなければ enforceLowerBound で 5 秒に修正される。
+      // 画質切替 (qualitySwitchResumeRef) は force-retry の lastPlaybackRef より優先し、
+      // 切替直前の正確な位置から再開する。消費したら null に戻す (一度きり)。
       const dur = video.duration;
+      const resumeCandidate =
+        qualitySwitchResumeRef.current &&
+        qualitySwitchResumeRef.current.slug === slug &&
+        qualitySwitchResumeRef.current.time > 0.5
+          ? qualitySwitchResumeRef.current.time
+          : lastPlaybackRef.current.slug === slug && lastPlaybackRef.current.time > 0.5
+            ? lastPlaybackRef.current.time
+            : null;
       if (
-        lastPlaybackRef.current.slug === slug &&
-        lastPlaybackRef.current.time > 0.5 &&
+        resumeCandidate != null &&
         Number.isFinite(dur) &&
-        lastPlaybackRef.current.time < dur - 0.5
+        resumeCandidate < dur - 0.5
       ) {
-        try { video.currentTime = lastPlaybackRef.current.time; } catch { /* ignore */ }
+        try { video.currentTime = resumeCandidate; } catch { /* ignore */ }
+        // lastPlaybackRef も切替先の位置に合わせておき、直後の rs=0 timeupdate=0 で
+        // 0 に巻き戻らないようにする。
+        lastPlaybackRef.current = { slug, time: resumeCandidate };
       }
+      qualitySwitchResumeRef.current = null;
       // メタデータ確定直後、初回再生はまだ 0 から始まっている可能性が高いので飛ばす。
       // これにより、isActive=false の隣接スライドでもプロ女優作品は 5 秒地点に
       // シークされ、そのフレームがプレビューとして表示される。
@@ -2820,5 +2896,7 @@ export function useFeedPlayback({ slug, title, isActive, videoSrc, boundElement 
     handleMouseLeave,
     handlePcClick,
     recoverActiveAfterForceResolve,
+    noteQualitySwitch,
+    applyQualitySwitchResume,
   };
 }

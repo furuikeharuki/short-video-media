@@ -95,12 +95,14 @@ const PREFETCH_START_OFFSET = 1;
 const PREV_PREFETCH_OFFSET = -1;
 
 /**
- * active 動画がまだ buffering 中でも、次スライド (+1) だけは温める。
+ * active 動画がまだ buffering 中でも、次スライド (+1) だけは軽く温める。
  *
  * 旧挙動は deferForActive=true の間、隠し <video> を全て外していたため、ユーザーが
  * current の playing を待たずに次へ送ると +1 が resolve / container 初期化からやり直し
- * になり、フィードの連続視聴で待ちが出やすかった。Chromium+高速回線のように policy が
- * auto を許す環境では +1 を canplay まで狙い、Safari 等では metadata に抑える。
+ * になり、フィードの連続視聴で待ちが出やすかった。一方で active が buffering の最中に
+ * +1 の bytes 取得まで走らせると、現在動画の Range request と帯域を奪い合って
+ * 「途中で止まる」症状を悪化させる。buffering 中は metadata までに抑え、active が
+ * playing に戻った瞬間に policy.preload (= Chromium 4G/WiFi なら auto +3) へ戻す。
  */
 const ACTIVE_BUFFERING_FALLBACK_PRELOAD = "metadata" as const;
 
@@ -483,8 +485,8 @@ export function usePrefetchVideoBytes(
 
     // 抑制ロジック (現在動画優先):
     //   - 現在動画がバッファリング中 (deferForActive): +2 以遠は止めるが、+1 だけは
-    //     温める。policy.preload=auto の環境では canplay まで狙い、Safari 等では
-    //     metadata で軽量ウォームに留める。
+    //     metadata で軽く温める。bytes 取得 (auto) は active の Range request を
+    //     奪いやすいため、playing 復帰後にだけ解禁する。
     //     active が playing に入ると deferForActive=false に戻り prefetch が解禁される。
     //   - rapid swipe 中 (deferForActive ではない): current+1 のみ許可し、+2/+3/-1 は
     //     targets から外して slot を +1 用に解放する (次に確実に表示される 1 本は温める)。
@@ -497,7 +499,7 @@ export function usePrefetchVideoBytes(
         .filter((t) => t.offset === PREFETCH_START_OFFSET)
         .map((t) => ({
           ...t,
-          preload: t.preload === "auto" ? "auto" : ACTIVE_BUFFERING_FALLBACK_PRELOAD,
+          preload: ACTIVE_BUFFERING_FALLBACK_PRELOAD,
         }));
     } else if (isRapidSwiping && targets.length > 0) {
       activeTargets = targets.filter((t) => t.offset === PREFETCH_START_OFFSET);

@@ -10,7 +10,8 @@ import { usePrefetchVideoBytes } from "@/components/feed/usePrefetchVideoBytes";
 import { useWarmResolveMp4 } from "@/components/feed/useWarmResolveMp4";
 import PrefetchVideoBuffer from "@/components/feed/PrefetchVideoBuffer";
 import { AD_FEED_INTERVAL, isAdZoneEnabled } from "@/lib/ads/config";
-import { primeResolveMp4Cache } from "@/lib/api/resolve-mp4";
+import { primeResolveMp4Cache, resolveMp4Url } from "@/lib/api/resolve-mp4";
+import { ensurePreconnect } from "@/lib/networkPrefs";
 
 const WINDOW_SIZE = 1;
 const RAPID_THRESHOLD_MS = 350;
@@ -52,6 +53,27 @@ const SWIPE_LOCK_THRESHOLD = 1;
  */
 const SWIPE_COMMIT_DISTANCE = 1;
 const SWIPE_COMMIT_MAX_MS   = 1500;
+
+/**
+ * スワイプ方向が確定したとみなす縦移動量 (px)。touchmove でこの量を超えた瞬間に
+ * 「進行方向の次/前の動画」を高優先度で resolve し始める = touchend (= 実際に
+ * スライドが切り替わる瞬間) を待たずに MP4 URL 解決と CDN への preconnect を
+ * 前倒しする。TikTok/Shorts 級の体感に近づけるための先読み強化。
+ *
+ * SWIPE_LOCK_THRESHOLD (1px) より十分大きくして、タップ時の指ブレでは発火させない
+ * (誤発火すると無駄な resolve が走る)。一方 SWIPE_COMMIT_DISTANCE まで動けば
+ * touchend でコミットされる可能性が高いので、指がまだ画面に触れている間に
+ * 解決を始められる猶予をここで稼ぐ。
+ */
+const DIRECTION_PREFETCH_THRESHOLD = 12;
+
+/**
+ * 方向が出たときに先読みする本数。1 = 進行方向の次の 1 本だけ。2 にすると
+ * 「次 + その次」まで温める。usePrefetchResolveMp4 / useWarmResolveMp4 が既に
+ * +1..+3 を resolve しているので、ここでは「今まさに向かっている 1〜2 本」を
+ * "high" priority で割り込ませて着地を早めることが目的。
+ */
+const DIRECTION_PREFETCH_COUNT = 2;
 
 /**
  * touchstart の target がテキスト入力系の要素 (input / textarea / contenteditable
@@ -204,9 +226,22 @@ export default function FeedViewer({
    * 自動で goNext を 1 回だけ走らせ、ユーザのスワイプ意図を取りこぼさない。
    */
   const pendingNextRef = useRef(false);
+  /**
+   * touch listener (一度だけ attach) から最新の slides を参照するための ref。
+   * 進行方向の「次に表示される動画スライド」を引いて、その slug を touchend より
+   * 早く resolve しに行く (方向先読み) のに使う。
+   */
+  const slidesRef = useRef<FeedSlide[]>([]);
+  /**
+   * 1 ジェスチャ内で方向先読みを 1 回だけに絞るためのフラグ。touchmove は
+   * 高頻度で発火するため、方向が確定した最初の 1 回だけ resolve をキックする。
+   * touchstart / touchend / touchcancel でリセットする。
+   */
+  const directionPrefetchedRef = useRef(false);
 
   // touch listener が参照するための ref を毎レンダー同期 (再 attach しないため)
   slidesLengthRef.current = slides.length;
+  slidesRef.current = slides;
 
   useEffect(() => {
     const now = Date.now();
@@ -332,6 +367,45 @@ export default function FeedViewer({
     const el = containerRef.current;
     if (!el) return;
 
+    /**
+     * スワイプ方向が確定した瞬間に「その方向の次/前の動画」を high priority で
+     * resolve し始める。touchend (= 実際にスライドが切り替わる瞬間) を待たないので、
+     * 指を離す前に MP4 URL 解決 + CDN preconnect が走り、再生開始が前倒しになる。
+     *
+     * dy < 0: 上スワイプ = 次の動画へ進む / dy > 0: 下スワイプ = 前の動画へ戻る。
+     * 広告スライドは飛ばし、動画スライドだけを進行方向に最大
+     * DIRECTION_PREFETCH_COUNT 本ぶん温める。resolveMp4Url 側の in-flight dedupe /
+     * 成功キャッシュにより、既に解決済みなら即返って二重取得は起きない。
+     */
+    const prefetchInDirection = (dy: number) => {
+      if (directionPrefetchedRef.current) return;
+      directionPrefetchedRef.current = true;
+      const step = dy < 0 ? 1 : -1;
+      const all = slidesRef.current;
+      let picked = 0;
+      let idx = currentIdxRef.current + step;
+      while (idx >= 0 && idx < all.length && picked < DIRECTION_PREFETCH_COUNT) {
+        const slide = all[idx];
+        idx += step;
+        if (!slide || slide.kind !== "video") continue;
+        const movie = slide.movie;
+        if (!movie.slug) continue;
+        picked += 1;
+        // 既に feed API 同梱 / prime 済みなら、その URL の CDN origin へ preconnect
+        // を前倒ししておく (TLS handshake を resolve 完了より早く始める)。
+        if (movie.low_mp4_url || movie.mp4_url) {
+          ensurePreconnect(movie.low_mp4_url || movie.mp4_url);
+        }
+        if (movie.high_mp4_url) ensurePreconnect(movie.high_mp4_url);
+        // 進行方向の最初の 1 本は最優先、その次は通常優先で割り込ませる。
+        void resolveMp4Url(movie.slug, {
+          priority: picked === 1 ? "high" : "normal",
+        }).catch(() => {
+          /* 先読み失敗はサムネ/通常 resolve にフォールバックするので無視 */
+        });
+      }
+    };
+
     const onTouchStart = (e: TouchEvent) => {
       if (modalOpenRef.current) return;
       const startY = e.touches[0].clientY;
@@ -355,6 +429,7 @@ export default function FeedViewer({
       touchStartedOnTextInputRef.current = false;
       touchStartedInNavRef.current = false;
       swipeLockedRef.current = false;
+      directionPrefetchedRef.current = false;
       isDragging.current = true;
       dragStartY.current = startY;
       dragStartYForEnd.current = startY;
@@ -378,6 +453,13 @@ export default function FeedViewer({
       }
       e.preventDefault();
 
+      // 方向が十分に出たら touchend を待たずに進行方向を先読みする (1 ジェスチャ
+      // 1 回)。SWIPE_LOCK_THRESHOLD (1px) では指ブレでも立つため、誤発火を避けて
+      // やや大きい DIRECTION_PREFETCH_THRESHOLD を別に設ける。
+      if (!directionPrefetchedRef.current && Math.abs(dy) >= DIRECTION_PREFETCH_THRESHOLD) {
+        prefetchInDirection(dy);
+      }
+
       const atEnd = currentIdxRef.current >= slidesLengthRef.current - 1;
       const atTop = currentIdxRef.current <= 0;
       setDragPx((dy > 0 && atTop) || (dy < 0 && atEnd) ? dy * 0.35 : dy);
@@ -396,6 +478,7 @@ export default function FeedViewer({
       if (!isDragging.current) return;
       isDragging.current = false;
       swipeLockedRef.current = false;
+      directionPrefetchedRef.current = false;
       setDragPx(0);
       const dy = e.changedTouches[0].clientY - dragStartYForEnd.current;
       const dt = Date.now() - dragStartTime.current;
@@ -405,6 +488,7 @@ export default function FeedViewer({
     const onTouchCancel = () => {
       isDragging.current = false;
       swipeLockedRef.current = false;
+      directionPrefetchedRef.current = false;
       touchStartedInNavRef.current = false;
       touchStartedOnTextInputRef.current = false;
       setDragPx(0);
@@ -425,6 +509,7 @@ export default function FeedViewer({
     const resetGesture = () => {
       isDragging.current = false;
       swipeLockedRef.current = false;
+      directionPrefetchedRef.current = false;
       touchStartedInNavRef.current = false;
       touchStartedOnTextInputRef.current = false;
       wheelLockRef.current = false;

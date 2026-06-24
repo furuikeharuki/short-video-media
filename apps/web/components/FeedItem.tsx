@@ -61,8 +61,23 @@ interface Props {
 // ハードタイムアウト: <video> が loadeddata も error も発火しないまま
 // これだけ経ったら、ネットワーク進行不能とみなして onError 相当のリトライを走らせる。
 const VIDEO_HARD_TIMEOUT_MS = 25000;
-const HIGH_QUALITY_UPGRADE_DELAY_MS = 1200;
+// 低画質で再生開始してから高画質 probe を始めるまでの待ち時間。
+// 旧値 1200ms は「canplay 直後」に高画質 Range を取りに行ってしまい、4G では
+// 低画質の初速バッファと帯域を奪い合って再生が止まる原因になっていた。
+// 「playing が観測でき、かつ一定時間 waiting/stalled に落ちずに安定している」
+// ことを別途条件にしたうえで、開始も 3500ms まで遅らせて初速を守る。
+const HIGH_QUALITY_UPGRADE_DELAY_MS = 3500;
 const HIGH_QUALITY_UPGRADE_TIMEOUT_MS = 7000;
+// 再生開始後の rebuffer 救済。waiting/stalled が短時間で戻らない場合、まず同 URL の
+// load/play を軽く蹴り直し、それでも復帰しなければ force resolve へ進める。
+// ユーザー体感では 5 秒超の停止が致命的なので、やや攻めた値にする。
+const REBUFFER_LOAD_KICK_MS = 2800;
+const REBUFFER_FORCE_RETRY_MS = 6200;
+const REBUFFER_MIN_PROGRESS_SEC = 0.25;
+// 高画質再生が waiting/stalled に落ちて自力回復しないとき、低画質へ落とすまでの待ち。
+// 低画質は再生開始時に実証済みで最も軽いので、force-resolve (REBUFFER_FORCE_RETRY_MS)
+// より前に低画質へ落として「高画質で止まったら低画質で再生継続」を実現する。
+const REBUFFER_HIGH_DOWNGRADE_MS = 2200;
 
 export default function FeedItem({ item, isActive, isAdjacent = false, isFirst, isSecond = false, isRapidSwiping = false }: Props) {
   const [modalSlug, setModalSlug] = useState<string | null>(null);
@@ -99,6 +114,9 @@ export default function FeedItem({ item, isActive, isAdjacent = false, isFirst, 
     forceResolveEpoch,
     highQualitySrc,
     upgradeToHighQuality,
+    downgradeToFastQuality,
+    currentQuality,
+    canDowngrade,
   } = useResolvedVideoSrc({
     slug: item.slug,
     enabled: isActive || isAdjacent,
@@ -135,6 +153,18 @@ export default function FeedItem({ item, isActive, isAdjacent = false, isFirst, 
   const activeReadyRef = useRef(false);
   const activePlayingRef = useRef(false);
   const pendingQualityUpgradeRef = useRef(false);
+  // 画質切替が「最初から再生」になるのを防ぐため、切替の種別を ref で持つ。
+  // upgrade (低→高) / downgrade (高→低) どちらも src が差し替わるので、
+  // videoSrc 変更を検知した reset effect で resume を適用する必要がある。
+  const pendingQualityDowngradeRef = useRef(false);
+  // playback-stability effect のクロージャから最新の画質状態を読むための ref。
+  // (effect は videoSrc 単位で貼り直すが、画質だけが変わったときに closure が
+  //  stale にならないよう ref 経由で参照する)。
+  const currentQualityRef = useRef<"fast" | "high" | null>(null);
+  const canDowngradeRef = useRef(false);
+  // この slug session で高画質 rebuffer を理由に低画質へ落としたかどうか。
+  // 一度落としたら自動再 upgrade を抑止して低⇄高の往復ループを防ぐ。
+  const highQualityDowngradedRef = useRef(false);
   // force-fallback の useEffect (上の方で定義) から呼ばれる
   // abandonPendingIfActiveReady の最新参照を保持するための ref。useCallback は
   // 下の方で宣言されるため直接クロージャに取り込むと TDZ / 古い参照問題があるので、
@@ -669,14 +699,41 @@ export default function FeedItem({ item, isActive, isAdjacent = false, isFirst, 
   }, [isActive, item.slug, item.genres]);
 
   const [videoReady, setVideoReadyState] = useState(false);
+  // 「active <video> が実際にフレームを進めている (playing 観測済み)」状態。
+  // canplay/loadeddata は『再生可能』止まりで、4G 等では直後に waiting/stalled に
+  // 落ちることがある。高画質切替はこの videoPlaying=true (= 安定再生) を必須条件に
+  // して、低画質の初速を高画質 Range 取得で潰さないようにする。playing で true、
+  // waiting/stalled/error/非 active 化/URL 変更で false に戻す。
+  const [videoPlaying, setVideoPlaying] = useState(false);
 
   const hardTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const videoSettledRef = useRef(false);
+  const rebufferLoadKickTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const rebufferForceRetryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // 高画質再生が詰まったときに低画質へ落とすためのタイマー。load-kick / force-resolve
+  // より前に発火させ、「高画質で止まったら低画質で再生継続」を最優先する。
+  const rebufferHighDowngradeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const rebufferStartRef = useRef<{ slug: string; time: number } | null>(null);
   const clearHardTimeout = useCallback(() => {
     if (hardTimeoutRef.current) {
       clearTimeout(hardTimeoutRef.current);
       hardTimeoutRef.current = null;
     }
+  }, []);
+  const clearRebufferRecovery = useCallback(() => {
+    if (rebufferLoadKickTimerRef.current) {
+      clearTimeout(rebufferLoadKickTimerRef.current);
+      rebufferLoadKickTimerRef.current = null;
+    }
+    if (rebufferForceRetryTimerRef.current) {
+      clearTimeout(rebufferForceRetryTimerRef.current);
+      rebufferForceRetryTimerRef.current = null;
+    }
+    if (rebufferHighDowngradeTimerRef.current) {
+      clearTimeout(rebufferHighDowngradeTimerRef.current);
+      rebufferHighDowngradeTimerRef.current = null;
+    }
+    rebufferStartRef.current = null;
   }, []);
 
   const handleOpenModal = useCallback((slug: string) => {
@@ -714,6 +771,8 @@ export default function FeedItem({ item, isActive, isAdjacent = false, isFirst, 
     handleMouseLeave,
     handlePcClick,
     recoverActiveAfterForceResolve,
+    noteQualitySwitch,
+    applyQualitySwitchResume,
   } = useFeedPlayback({
     slug: item.slug,
     title: item.title,
@@ -789,6 +848,17 @@ export default function FeedItem({ item, isActive, isAdjacent = false, isFirst, 
   useEffect(() => {
     isActiveRef.current = isActive;
   }, [isActive]);
+  // 画質状態を ref に同期 (playback-stability effect closure から最新値を読む)。
+  useEffect(() => {
+    currentQualityRef.current = currentQuality;
+  }, [currentQuality]);
+  useEffect(() => {
+    canDowngradeRef.current = canDowngrade;
+  }, [canDowngrade]);
+  // slug が変わったら高画質 downgrade ラッチをリセット (新作品では再 upgrade を許す)。
+  useEffect(() => {
+    highQualityDowngradedRef.current = false;
+  }, [item.slug]);
 
   const handleLoadStart = useCallback(() => {
     // ロード中のサムネ表示は thumbnail-cover で別経路。
@@ -844,17 +914,19 @@ export default function FeedItem({ item, isActive, isAdjacent = false, isFirst, 
   const handleLoadedData = useCallback(() => {
     videoSettledRef.current = true;
     clearHardTimeout();
+    clearRebufferRecovery();
     activeReadyRef.current = true;
     abandonPendingIfActiveReady("loadeddata-ready");
     setVideoReady(true);
     setVideoReadyState(true);
     setSpinnerVisible(false);
     setShimmerVisible(false);
-  }, [setVideoReady, setSpinnerVisible, setShimmerVisible, clearHardTimeout, abandonPendingIfActiveReady]);
+  }, [setVideoReady, setSpinnerVisible, setShimmerVisible, clearHardTimeout, clearRebufferRecovery, abandonPendingIfActiveReady]);
 
   const handleCanPlay = useCallback(() => {
     videoSettledRef.current = true;
     clearHardTimeout();
+    clearRebufferRecovery();
     activeReadyRef.current = true;
     abandonPendingIfActiveReady("loadeddata-ready");
     setVideoReady(true);
@@ -866,16 +938,17 @@ export default function FeedItem({ item, isActive, isAdjacent = false, isFirst, 
     // 4G 等で canplay 直後に waiting / stalled に落ちるケースで広告 provider が
     // 動画の critical path を奪う事故を防ぐため、playing/waiting/stalled の
     // 観測ベースで gate を駆動する (下の playback-stability effect)。
-  }, [setVideoReady, setSpinnerVisible, setShimmerVisible, clearHardTimeout, abandonPendingIfActiveReady]);
+  }, [setVideoReady, setSpinnerVisible, setShimmerVisible, clearHardTimeout, clearRebufferRecovery, abandonPendingIfActiveReady]);
 
   const handleSeeked = useCallback(() => {
     videoSettledRef.current = true;
     clearHardTimeout();
+    clearRebufferRecovery();
     setVideoReady(true);
     setVideoReadyState(true);
     setSpinnerVisible(false);
     setShimmerVisible(false);
-  }, [setVideoReady, setSpinnerVisible, setShimmerVisible, clearHardTimeout]);
+  }, [setVideoReady, setSpinnerVisible, setShimmerVisible, clearHardTimeout, clearRebufferRecovery]);
 
   // `playing` イベント経路。 autoplay が resolved まで進んでも canplay/loadeddata
   // が React 側に届かない (= reset useEffect で videoReadyState=false に巻き戻された
@@ -884,25 +957,40 @@ export default function FeedItem({ item, isActive, isAdjacent = false, isFirst, 
   const handlePlaying = useCallback(() => {
     videoSettledRef.current = true;
     clearHardTimeout();
+    clearRebufferRecovery();
     activeReadyRef.current = true;
     activePlayingRef.current = true;
     abandonPendingIfActiveReady("active-playing");
     setVideoReady(true);
     setVideoReadyState(true);
+    setVideoPlaying(true);
     setSpinnerVisible(false);
     setShimmerVisible(false);
-  }, [setVideoReady, setSpinnerVisible, setShimmerVisible, clearHardTimeout, abandonPendingIfActiveReady]);
+  }, [setVideoReady, setSpinnerVisible, setShimmerVisible, clearHardTimeout, clearRebufferRecovery, abandonPendingIfActiveReady]);
 
-  // 低画質で再生開始できた後だけ、高画質 URL を画面外 video で probe する。
-  // canplay 到達前には切り替えないため、低画質の初回再生を高画質 Range 取得で
-  // ブロックしない。probe 済み URL はブラウザキャッシュ / 接続再利用にも乗りやすい。
+  // 低画質で「安定して再生できている」ときだけ、高画質 URL を画面外 video で
+  // probe して切り替える。
+  //
+  // 旧実装は videoReady (= canplay/loadeddata) で発火していたが、canplay は
+  // 「再生可能」止まりで、4G などでは canplay 直後に waiting/stalled に落ちる。
+  // そこへ高画質 Range 取得を被せると低画質の初速バッファと帯域を奪い合い、
+  // 「再生がよく途中で止まる」症状を悪化させていた。対策として:
+  //   - videoPlaying (= playing 観測済みで waiting/stalled に落ちていない) を必須に
+  //   - shouldDeferPrefetch() (= active がバッファリング中) の間は probe しない
+  //   - 開始ディレイを 3500ms に延ばし、低画質が十分バッファしてから切替を試す
+  // videoPlaying は waiting/stalled/error/非 active 化/URL 変更で false に戻るため、
+  // 不安定化したらこの effect は cleanup され、再び playing に戻るまで probe しない。
   useEffect(() => {
     if (!isActive) return;
-    if (!videoReady) return;
+    if (!videoPlaying) return;
     if (!videoSrc) return;
     if (!highQualitySrc) return;
     if (highQualitySrc === videoSrc) return;
+    // この session で高画質 rebuffer により低画質へ落とした後は再 upgrade しない
+    // (低⇄高の往復で再生が何度も止まるのを防ぐ)。
+    if (highQualityDowngradedRef.current) return;
     if (isRapidSwiping) return;
+    if (shouldDeferPrefetch()) return;
     if (typeof document === "undefined") return;
 
     let cancelled = false;
@@ -934,6 +1022,8 @@ export default function FeedItem({ item, isActive, isAdjacent = false, isFirst, 
       if (cancelled) return;
       if (!isActiveRef.current) return;
       if (document.visibilityState === "hidden") return;
+      // ディレイ中に active が再びバッファリングへ落ちたら高画質 probe は見送る。
+      if (shouldDeferPrefetch()) return;
       const activeVideo = videoRef.current;
       if (!activeVideo || activeVideo.paused || activeVideo.readyState < 2) return;
 
@@ -954,10 +1044,21 @@ export default function FeedItem({ item, isActive, isAdjacent = false, isFirst, 
       const switchToHigh = () => {
         if (cancelled) return;
         const current = videoRef.current;
-        if (!isActiveRef.current || !current || current.paused || current.readyState < 2) {
+        if (
+          !isActiveRef.current ||
+          !current ||
+          current.paused ||
+          current.readyState < 2 ||
+          // 高画質 probe が canplay に達した時点でも、肝心の active が
+          // バッファリング中なら切替を見送る (帯域を active 回復に残す)。
+          shouldDeferPrefetch()
+        ) {
           cleanupProbe();
           return;
         }
+        // 切替で src が差し替わって currentTime=0 に戻る前に、現在位置を退避して
+        // 高画質 src の loadedmetadata で同位置へ復元する (最初から再生にしない)。
+        noteQualitySwitch();
         pendingQualityUpgradeRef.current = true;
         upgradeToHighQuality();
         cleanupProbe();
@@ -987,12 +1088,13 @@ export default function FeedItem({ item, isActive, isAdjacent = false, isFirst, 
     };
   }, [
     isActive,
-    videoReady,
+    videoPlaying,
     videoSrc,
     highQualitySrc,
     isRapidSwiping,
     videoRef,
     upgradeToHighQuality,
+    noteQualitySwitch,
   ]);
 
   // isActive を ref で参照することでハンドラ identity を安定させる。FeedItemVideo
@@ -1001,11 +1103,12 @@ export default function FeedItem({ item, isActive, isAdjacent = false, isFirst, 
   const handleVideoError = useCallback(() => {
     videoSettledRef.current = true;
     clearHardTimeout();
+    clearRebufferRecovery();
     if (!isActiveRef.current) {
       return;
     }
     handleError();
-  }, [handleError, clearHardTimeout]);
+  }, [handleError, clearHardTimeout, clearRebufferRecovery]);
 
   useEffect(() => {
     if (!isActive || !videoSrc) {
@@ -1077,13 +1180,23 @@ export default function FeedItem({ item, isActive, isAdjacent = false, isFirst, 
   }, [isActive, videoSrc, item.slug, handleError]);
 
   useEffect(() => {
-    if (pendingQualityUpgradeRef.current) {
+    // 画質切替 (低→高 upgrade / 高→低 downgrade) で videoSrc が差し替わったケース。
+    // この場合は「新しい作品にスワイプした」のではなく同一作品の URL 差し替えなので、
+    // videoReady / videoPlaying を false に巻き戻さない (サムネ/スピナーのチラつき防止)。
+    // 代わりに退避済みの再生位置へ復元して「最初から再生」を防ぐ。
+    // 復元の主経路は useFeedPlayback の loadedmetadata だが、同一要素の src 差し替えで
+    // loadedmetadata が再発火しないブラウザ向けに applyQualitySwitchResume() でも補う。
+    if (pendingQualityUpgradeRef.current || pendingQualityDowngradeRef.current) {
       pendingQualityUpgradeRef.current = false;
-      return;
+      pendingQualityDowngradeRef.current = false;
+      queueMicrotask(() => applyQualitySwitchResume());
+      const t = setTimeout(() => applyQualitySwitchResume(), 250);
+      return () => clearTimeout(t);
     }
     setVideoReadyState(false);
+    setVideoPlaying(false);
     activeReadyRef.current = false;
-  }, [item.slug, videoSrc]);
+  }, [item.slug, videoSrc, applyQualitySwitchResume]);
 
   // force-resolve が ready 完了して新しい URL (または同一 URL の再取得) を返したら、
   // active 要素を強制的に load()+play() リトライさせる。
@@ -1165,36 +1278,161 @@ export default function FeedItem({ item, isActive, isAdjacent = false, isFirst, 
       // この slug は中央でなくなった。active 動画が居ない扱いに戻して
       // byte-prefetch 抑制を解除する (次に中央化した slug が改めて駆動する)。
       markActiveIdle();
+      // 高画質切替ガードもリセット (再 active 化時に改めて playing を待つ)。
+      setVideoPlaying(false);
+      clearRebufferRecovery();
       return;
     }
-    if (!videoSrc) return;
+    if (!videoSrc || exhausted) {
+      // active 動画の URL 解決中は、まだ中央 <video> の初速バッファを持てない。
+      // この間に隠し <video preload="auto"> を走らせると、URL 解決直後の中央 Range
+      // request と競合しやすいので activePlayback を buffering に倒して先読みを絞る。
+      // exhausted は動画無しのフォールバックなので、prefetch 抑制は解除する。
+      setVideoPlaying(false);
+      clearRebufferRecovery();
+      if (exhausted) {
+        markActiveIdle();
+      } else {
+        markActiveBuffering();
+      }
+      return;
+    }
     const video = videoRef.current;
-    if (!video) return;
+    if (!video) {
+      setVideoPlaying(false);
+      clearRebufferRecovery();
+      markActiveBuffering();
+      return;
+    }
+
+    const hasRecoveredFromRebuffer = (target: HTMLVideoElement, startTime: number) => {
+      if (target.readyState >= 3 && !target.paused && !target.ended) return true;
+      return target.currentTime > startTime + REBUFFER_MIN_PROGRESS_SEC;
+    };
+
+    const armRebufferRecovery = (reason: "waiting" | "stalled") => {
+      if (
+        rebufferLoadKickTimerRef.current ||
+        rebufferForceRetryTimerRef.current ||
+        rebufferHighDowngradeTimerRef.current
+      )
+        return;
+      const startedAt = video.currentTime;
+      const sessionSlug = item.slug;
+      rebufferStartRef.current = { slug: sessionSlug, time: startedAt };
+
+      // 高画質で再生中かつ低画質へ戻せるなら、load-kick / force-resolve より先に
+      // 低画質へ落とす。低画質は開始時に実証済みで最も軽いので、帯域競合で高画質が
+      // 詰まったケースは低画質に落とすのが最短復帰。再生位置は noteQualitySwitch で
+      // 保持し、低画質 src の loadedmetadata で同位置から再開する (止めない)。
+      if (currentQualityRef.current === "high" && canDowngradeRef.current) {
+        rebufferHighDowngradeTimerRef.current = setTimeout(() => {
+          rebufferHighDowngradeTimerRef.current = null;
+          const live = videoRef.current;
+          const start = rebufferStartRef.current;
+          if (!isActiveRef.current) return;
+          if (itemSlugRef.current !== sessionSlug) return;
+          if (!live || !start || start.slug !== sessionSlug) return;
+          if (hasRecoveredFromRebuffer(live, start.time)) return;
+          if (currentQualityRef.current !== "high" || !canDowngradeRef.current) return;
+          if (isVideoTimingEnabled()) {
+            // eslint-disable-next-line no-console
+            console.debug(
+              `vt ${sessionSlug}: high-quality rebuffer -> downgrade reason=${reason} rs=${live.readyState} networkState=${live.networkState} currentTime=${live.currentTime.toFixed(2)}`,
+            );
+          }
+          // 以降の load-kick / force-resolve を止めて、低画質切替に一本化する。
+          clearRebufferRecovery();
+          // この session では再 upgrade しない (低⇄高の往復防止)。
+          highQualityDowngradedRef.current = true;
+          noteQualitySwitch();
+          pendingQualityDowngradeRef.current = true;
+          downgradeToFastQuality();
+        }, REBUFFER_HIGH_DOWNGRADE_MS);
+      }
+
+      rebufferLoadKickTimerRef.current = setTimeout(() => {
+        rebufferLoadKickTimerRef.current = null;
+        const live = videoRef.current;
+        const start = rebufferStartRef.current;
+        if (!isActiveRef.current) return;
+        if (itemSlugRef.current !== sessionSlug) return;
+        if (!live || !start || start.slug !== sessionSlug) return;
+        if (hasRecoveredFromRebuffer(live, start.time)) return;
+        // 既に Range request が走っているなら load() で中断せず、現在の読み込みを待つ。
+        // EMPTY / IDLE / NO_SOURCE / error のときだけ軽く蹴り直す。
+        if (live.networkState !== 2 || live.readyState === 0 || live.error !== null) {
+          if (isVideoTimingEnabled()) {
+            // eslint-disable-next-line no-console
+            console.debug(
+              `vt ${sessionSlug}: rebuffer load-kick reason=${reason} rs=${live.readyState} networkState=${live.networkState} currentTime=${live.currentTime.toFixed(2)}`,
+            );
+          }
+          const wasPlaying = !live.paused;
+          try { live.load(); } catch { /* ignore */ }
+          if (wasPlaying) {
+            try { void live.play(); } catch { /* ignore */ }
+          }
+        }
+      }, REBUFFER_LOAD_KICK_MS);
+
+      rebufferForceRetryTimerRef.current = setTimeout(() => {
+        rebufferForceRetryTimerRef.current = null;
+        const live = videoRef.current;
+        const start = rebufferStartRef.current;
+        if (!isActiveRef.current) return;
+        if (itemSlugRef.current !== sessionSlug) return;
+        if (!live || !start || start.slug !== sessionSlug) return;
+        if (hasRecoveredFromRebuffer(live, start.time)) return;
+        if (isVideoTimingEnabled()) {
+          // eslint-disable-next-line no-console
+          console.debug(
+            `vt ${sessionSlug}: rebuffer force-resolve reason=${reason} rs=${live.readyState} networkState=${live.networkState} currentTime=${live.currentTime.toFixed(2)} start=${start.time.toFixed(2)}`,
+          );
+        }
+        handleVideoError();
+      }, REBUFFER_FORCE_RETRY_MS);
+    };
 
     const onPlaying = () => {
       // active <video> が「実際にフレームを進めている」ことの確定シグナル。
       // late rebind (tryClaim の canplay 経路) はこのフラグを見て disrupt を抑止する。
       activePlayingRef.current = true;
+      clearRebufferRecovery();
       signalPlaying();
       // 安定再生に入った → byte-prefetch を解禁し「次の 1〜2 本」の先読みを進める。
       markActivePlaying();
+      // 高画質切替の前提となる「安定再生中」フラグを立てる。
+      setVideoPlaying(true);
+    };
+    const onCanPlay = () => {
+      clearRebufferRecovery();
     };
     // waiting / stalled / error は「現在動画がまだ安定して再生できていない」状態。
     // byte-prefetch を抑制して帯域を active のバッファ回復に集中させる。
+    // 高画質切替も中断したいので videoPlaying を倒す (再 playing で立て直す)。
     const onWaiting = () => {
       signalUnstable("waiting");
       markActiveBuffering();
+      setVideoPlaying(false);
+      armRebufferRecovery("waiting");
     };
     const onStalled = () => {
       signalUnstable("stalled");
       markActiveBuffering();
+      setVideoPlaying(false);
+      armRebufferRecovery("stalled");
     };
     const onError = () => {
       signalUnstable("error");
       markActiveBuffering();
+      setVideoPlaying(false);
+      clearRebufferRecovery();
     };
 
     video.addEventListener("playing", onPlaying);
+    video.addEventListener("canplay", onCanPlay);
+    video.addEventListener("canplaythrough", onCanPlay);
     video.addEventListener("waiting", onWaiting);
     video.addEventListener("stalled", onStalled);
     video.addEventListener("error", onError);
@@ -1203,8 +1441,10 @@ export default function FeedItem({ item, isActive, isAdjacent = false, isFirst, 
     // なら、playing イベントは発火しない可能性があるため明示的にトリガする。
     if (!video.paused && !video.ended && video.readyState >= 3) {
       activePlayingRef.current = true;
+      clearRebufferRecovery();
       signalPlaying();
       markActivePlaying();
+      setVideoPlaying(true);
     } else {
       // まだ安定再生していない (resolve 中 / canplay 前 / 再バッファ中)。
       // playing を観測するまでは byte-prefetch を抑制して、現在動画の
@@ -1213,12 +1453,15 @@ export default function FeedItem({ item, isActive, isAdjacent = false, isFirst, 
     }
 
     return () => {
+      clearRebufferRecovery();
       video.removeEventListener("playing", onPlaying);
+      video.removeEventListener("canplay", onCanPlay);
+      video.removeEventListener("canplaythrough", onCanPlay);
       video.removeEventListener("waiting", onWaiting);
       video.removeEventListener("stalled", onStalled);
       video.removeEventListener("error", onError);
     };
-  }, [isActive, videoSrc, videoRef, promotedElement]);
+  }, [isActive, videoSrc, exhausted, videoRef, promotedElement, item.slug, handleVideoError, clearRebufferRecovery, noteQualitySwitch, downgradeToFastQuality]);
 
   const showVideo =
     (isActive || isAdjacent) && videoSrc !== null && !exhausted;

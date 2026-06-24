@@ -29,6 +29,18 @@ MOVIES_KEY_PREFIX  = "movies:data:"
 RESOLVER_WARM_AHEAD = 3
 RESOLVER_INLINE_AHEAD = 3
 RESOLVER_INLINE_TIMEOUT_S = 0.65
+# 先頭ページ (offset=0 / 通常スクロール) だけは初回体感を最優先する。
+# 同梱 URL 率を上げるため、待つ件数と待ち時間を広げる。Redis / in-flight dedupe /
+# 成功キャッシュ + 事前 resolve job が効いていれば、ここはほぼ即時に返る
+# (DMM 実アクセスが必要な cold miss のときだけ最大 timeout まで待つ)。
+#
+# AHEAD は既定 page size (limit=20) と揃え、先頭ページを「完全 resolved feed」化
+# する (ユーザー要望「先頭 10〜20 件を完全 resolved に」)。間に合わなかった分は
+# cancel せず背景で継続し、resolver の成功キャッシュ / in-flight dedupe を温める
+# ため、フロントが直後に叩く /resolve-mp4 が即ヒットする。worst-case のレスポンス
+# 遅延は AHEAD ではなく TIMEOUT_S で頭打ちになる (件数を増やしても待ち時間は不変)。
+RESOLVER_INLINE_FIRST_PAGE_AHEAD = 20
+RESOLVER_INLINE_FIRST_PAGE_TIMEOUT_S = 1.2
 
 logger = logging.getLogger(__name__)
 _resolver_warm_tasks: set[asyncio.Task[None]] = set()
@@ -96,11 +108,17 @@ def _consume_inline_task(
         logger.debug("feed inline resolver background task failed", exc_info=True)
 
 
-async def _attach_inline_resolved_urls(items: list[MovieCard]) -> None:
+async def _attach_inline_resolved_urls(
+    items: list[MovieCard],
+    *,
+    ahead: int = RESOLVER_INLINE_AHEAD,
+    timeout_s: float = RESOLVER_INLINE_TIMEOUT_S,
+) -> None:
     """先頭数件だけ短時間待って MP4 URL を feed レスポンスに同梱する。
 
-    650ms 以内に解決できたものだけ `MovieCard` に反映する。間に合わない task は
-    cancel せずに継続し、resolver の in-flight dedupe / 成功キャッシュを温める。
+    `timeout_s` 以内に解決できたものだけ `MovieCard` に反映する。間に合わない
+    task は cancel せずに継続し、resolver の in-flight dedupe / 成功キャッシュを
+    温める (次ページ / 次リクエストが即ヒットする)。
     """
     targets: list[MovieCard] = []
     seen: set[str] = set()
@@ -109,7 +127,7 @@ async def _attach_inline_resolved_urls(items: list[MovieCard]) -> None:
             continue
         seen.add(item.content_id)
         targets.append(item)
-        if len(targets) >= RESOLVER_INLINE_AHEAD:
+        if len(targets) >= ahead:
             break
     if not targets:
         return
@@ -119,7 +137,7 @@ async def _attach_inline_resolved_urls(items: list[MovieCard]) -> None:
     except RuntimeError:
         return
 
-    done, pending = await asyncio.wait(tasks, timeout=RESOLVER_INLINE_TIMEOUT_S)
+    done, pending = await asyncio.wait(tasks, timeout=timeout_s)
     for task in done:
         card, resolved = task.result()
         if resolved is not None:
@@ -128,6 +146,17 @@ async def _attach_inline_resolved_urls(items: list[MovieCard]) -> None:
     for task in pending:
         _resolver_inline_tasks.add(task)
         task.add_done_callback(_consume_inline_task)
+
+
+def _inline_resolve_params(offset: int) -> tuple[int, float]:
+    """offset に応じた inline resolve の (件数, タイムアウト秒)。
+
+    先頭ページ (offset=0) は初回体感を優先して広めに待つ。2 ページ目以降は
+    既に再生に入っており warm / prefetch も効くので、軽め (既定値) に留める。
+    """
+    if offset <= 0:
+        return RESOLVER_INLINE_FIRST_PAGE_AHEAD, RESOLVER_INLINE_FIRST_PAGE_TIMEOUT_S
+    return RESOLVER_INLINE_AHEAD, RESOLVER_INLINE_TIMEOUT_S
 
 
 def _schedule_resolver_warm(items: list[MovieCard]) -> None:
@@ -376,6 +405,8 @@ async def get_feed_paginated(
     if sort is not None:
         advanced = True
 
+    inline_ahead, inline_timeout_s = _inline_resolve_params(offset)
+
     # advanced 経路: 必ず seed (= shuffle) が必要。seed 無しなら 0 で固定し、安定した順序にする。
     if advanced:
         effective_seed = seed if seed is not None else 0
@@ -402,7 +433,9 @@ async def get_feed_paginated(
 
         card_map = await _get_movies_with_cache(db, page_ids)
         items = [card_map[i] for i in page_ids if i in card_map]
-        await _attach_inline_resolved_urls(items)
+        await _attach_inline_resolved_urls(
+            items, ahead=inline_ahead, timeout_s=inline_timeout_s
+        )
         _schedule_resolver_warm(items)
         next_offset = offset + limit
         next_cursor = str(next_offset) if next_offset < total else None
@@ -419,7 +452,9 @@ async def get_feed_paginated(
 
         card_map = await _get_movies_with_cache(db, page_ids)
         items = [card_map[i] for i in page_ids if i in card_map]
-        await _attach_inline_resolved_urls(items)
+        await _attach_inline_resolved_urls(
+            items, ahead=inline_ahead, timeout_s=inline_timeout_s
+        )
         _schedule_resolver_warm(items)
 
         next_offset = offset + limit
@@ -430,7 +465,9 @@ async def get_feed_paginated(
         db, offset=offset, limit=limit, genres=genres_norm or None
     )
     items = [_to_card(m) for m in movies]
-    await _attach_inline_resolved_urls(items)
+    await _attach_inline_resolved_urls(
+        items, ahead=inline_ahead, timeout_s=inline_timeout_s
+    )
     _schedule_resolver_warm(items)
     next_offset = offset + limit
     next_cursor = str(next_offset) if next_offset < total else None

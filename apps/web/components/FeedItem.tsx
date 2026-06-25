@@ -61,13 +61,13 @@ interface Props {
 // ハードタイムアウト: <video> が loadeddata も error も発火しないまま
 // これだけ経ったら、ネットワーク進行不能とみなして onError 相当のリトライを走らせる。
 const VIDEO_HARD_TIMEOUT_MS = 25000;
-// 低画質で再生開始してから高画質 probe を始めるまでの待ち時間。
-// 旧値 1200ms は「canplay 直後」に高画質 Range を取りに行ってしまい、4G では
-// 低画質の初速バッファと帯域を奪い合って再生が止まる原因になっていた。
-// 「playing が観測でき、かつ一定時間 waiting/stalled に落ちずに安定している」
-// ことを別途条件にしたうえで、開始も 3500ms まで遅らせて初速を守る。
-const HIGH_QUALITY_UPGRADE_DELAY_MS = 3500;
-const HIGH_QUALITY_UPGRADE_TIMEOUT_MS = 7000;
+// 高画質切替は固定秒数ではなく、低画質の現在再生と高画質 probe のバッファ量で決める。
+// 低画質側に少し余裕ができるまでは高画質 Range を取りに行かず、高画質側も現在位置から
+// 先のバッファが十分たまるまで切り替えない。
+const LOW_QUALITY_PROBE_MIN_BUFFER_SEC = 2.5;
+const HIGH_QUALITY_READY_BUFFER_SEC = 5;
+const HIGH_QUALITY_PROBE_POLL_MS = 250;
+const HIGH_QUALITY_PROBE_SEEK_REFRESH_SEC = 1.5;
 // 再生開始後の rebuffer 救済。waiting/stalled が短時間で戻らない場合、まず同 URL の
 // load/play を軽く蹴り直し、それでも復帰しなければ force resolve へ進める。
 // ユーザー体感では 5 秒超の停止が致命的なので、やや攻めた値にする。
@@ -78,6 +78,29 @@ const REBUFFER_MIN_PROGRESS_SEC = 0.25;
 // 低画質は再生開始時に実証済みで最も軽いので、force-resolve (REBUFFER_FORCE_RETRY_MS)
 // より前に低画質へ落として「高画質で止まったら低画質で再生継続」を実現する。
 const REBUFFER_HIGH_DOWNGRADE_MS = 2200;
+
+function bufferedAheadSeconds(video: HTMLVideoElement, time = video.currentTime): number {
+  try {
+    const ranges = video.buffered;
+    for (let i = 0; i < ranges.length; i += 1) {
+      const start = ranges.start(i);
+      const end = ranges.end(i);
+      if (time >= start - 0.05 && time <= end + 0.05) {
+        return Math.max(0, end - Math.max(time, start));
+      }
+    }
+  } catch {
+    return 0;
+  }
+  return 0;
+}
+
+function requiredBufferAheadSeconds(video: HTMLVideoElement, time = video.currentTime): number {
+  const duration = video.duration;
+  if (!Number.isFinite(duration)) return HIGH_QUALITY_READY_BUFFER_SEC;
+  const remaining = Math.max(0, duration - time - 0.25);
+  return Math.min(HIGH_QUALITY_READY_BUFFER_SEC, Math.max(0.75, remaining));
+}
 
 export default function FeedItem({ item, isActive, isAdjacent = false, isFirst, isSecond = false, isRapidSwiping = false }: Props) {
   const [modalSlug, setModalSlug] = useState<string | null>(null);
@@ -106,7 +129,7 @@ export default function FeedItem({ item, isActive, isAdjacent = false, isFirst, 
   }, [isActive, item.slug]);
 
   // 表示する動画 URL の解決。フィードは低画質 URL で即開始し、active 再生が
-  // 安定してから高画質 URL を裏で canplay まで温めて切り替える。
+  // 安定してから高画質 URL を裏で現在位置付近まで温めて切り替える。
   const {
     videoSrc,
     exhausted,
@@ -977,7 +1000,7 @@ export default function FeedItem({ item, isActive, isAdjacent = false, isFirst, 
   // 「再生がよく途中で止まる」症状を悪化させていた。対策として:
   //   - videoPlaying (= playing 観測済みで waiting/stalled に落ちていない) を必須に
   //   - shouldDeferPrefetch() (= active がバッファリング中) の間は probe しない
-  //   - 開始ディレイを 3500ms に延ばし、低画質が十分バッファしてから切替を試す
+  //   - 固定の 3500ms 待ちではなく、低画質の余裕と高画質 probe の先読み秒数で判断する
   // videoPlaying は waiting/stalled/error/非 active 化/URL 変更で false に戻るため、
   // 不安定化したらこの effect は cleanup され、再び playing に戻るまで probe しない。
   useEffect(() => {
@@ -995,12 +1018,10 @@ export default function FeedItem({ item, isActive, isAdjacent = false, isFirst, 
 
     let cancelled = false;
     let probe: HTMLVideoElement | null = null;
-    let timeout: ReturnType<typeof setTimeout> | null = null;
+    let pollTimer: ReturnType<typeof setInterval> | null = null;
+    let probeFailed = false;
+    let lastProbeSeekTime: number | null = null;
     const cleanupProbe = () => {
-      if (timeout) {
-        clearTimeout(timeout);
-        timeout = null;
-      }
       if (!probe) return;
       try {
         probe.pause();
@@ -1018,72 +1039,142 @@ export default function FeedItem({ item, isActive, isAdjacent = false, isFirst, 
       }
       probe = null;
     };
-    const startTimer = setTimeout(() => {
-      if (cancelled) return;
-      if (!isActiveRef.current) return;
-      if (document.visibilityState === "hidden") return;
-      // ディレイ中に active が再びバッファリングへ落ちたら高画質 probe は見送る。
-      if (shouldDeferPrefetch()) return;
-      const activeVideo = videoRef.current;
-      if (!activeVideo || activeVideo.paused || activeVideo.readyState < 2) return;
 
-      probe = document.createElement("video");
-      probe.src = highQualitySrc;
-      probe.preload = "auto";
-      probe.muted = true;
-      probe.playsInline = true;
-      probe.setAttribute("aria-hidden", "true");
-      probe.tabIndex = -1;
-      probe.style.position = "fixed";
-      probe.style.top = "-9999px";
-      probe.style.left = "-9999px";
-      probe.style.width = "100px";
-      probe.style.height = "100px";
-      probe.style.opacity = "0";
-      probe.style.pointerEvents = "none";
-      const switchToHigh = () => {
-        if (cancelled) return;
-        const current = videoRef.current;
-        if (
-          !isActiveRef.current ||
-          !current ||
-          current.paused ||
-          current.readyState < 2 ||
-          // 高画質 probe が canplay に達した時点でも、肝心の active が
-          // バッファリング中なら切替を見送る (帯域を active 回復に残す)。
-          shouldDeferPrefetch()
-        ) {
-          cleanupProbe();
-          return;
-        }
-        // 切替で src が差し替わって currentTime=0 に戻る前に、現在位置を退避して
-        // 高画質 src の loadedmetadata で同位置へ復元する (最初から再生にしない)。
-        noteQualitySwitch();
-        pendingQualityUpgradeRef.current = true;
-        upgradeToHighQuality();
-        cleanupProbe();
-      };
-      const onError = () => cleanupProbe();
-      probe.addEventListener("loadeddata", switchToHigh, { once: true });
-      probe.addEventListener("canplay", switchToHigh, { once: true });
-      probe.addEventListener("error", onError, { once: true });
-      document.body.appendChild(probe);
+    const getStableActiveVideo = () => {
+      if (!isActiveRef.current) return null;
+      if (document.visibilityState === "hidden") return null;
+      if (shouldDeferPrefetch()) return null;
+      const activeVideo = videoRef.current;
+      if (!activeVideo || activeVideo.paused || activeVideo.readyState < 2) return null;
+      return activeVideo;
+    };
+
+    const activeHasProbeReserve = (activeVideo: HTMLVideoElement) => {
+      const required = Math.min(
+        LOW_QUALITY_PROBE_MIN_BUFFER_SEC,
+        requiredBufferAheadSeconds(activeVideo),
+      );
+      return activeVideo.readyState >= 4 || bufferedAheadSeconds(activeVideo) >= required;
+    };
+
+    const alignProbeToActive = (activeVideo: HTMLVideoElement, highProbe: HTMLVideoElement) => {
+      if (highProbe.readyState < 1) return;
+      const target = activeVideo.currentTime;
+      if (bufferedAheadSeconds(highProbe, target) > 0.25) return;
+      if (highProbe.seeking) return;
+      if (
+        lastProbeSeekTime !== null &&
+        Math.abs(lastProbeSeekTime - target) < HIGH_QUALITY_PROBE_SEEK_REFRESH_SEC
+      ) {
+        return;
+      }
+      const duration = highProbe.duration;
+      const seekTarget = Number.isFinite(duration)
+        ? Math.min(Math.max(0, target), Math.max(0, duration - 0.25))
+        : Math.max(0, target);
       try {
-        probe.load();
+        highProbe.currentTime = seekTarget;
+        lastProbeSeekTime = seekTarget;
       } catch {
         /* ignore */
       }
-      if (!probe) return;
-      if (probe.readyState >= 2) {
-        switchToHigh();
+    };
+
+    const highProbeCanContinue = (activeVideo: HTMLVideoElement, highProbe: HTMLVideoElement) => {
+      const target = activeVideo.currentTime;
+      const required = requiredBufferAheadSeconds(highProbe, target);
+      return bufferedAheadSeconds(highProbe, target) >= required;
+    };
+
+    const switchToHighIfReady = () => {
+      const current = getStableActiveVideo();
+      const highProbe = probe;
+      if (!current || !highProbe) return false;
+      alignProbeToActive(current, highProbe);
+      if (!highProbeCanContinue(current, highProbe)) return false;
+      if (isVideoTimingEnabled()) {
+        // eslint-disable-next-line no-console
+        console.debug(
+          `vt ${item.slug}: high-quality probe ready current=${current.currentTime.toFixed(2)} highAhead=${bufferedAheadSeconds(highProbe, current.currentTime).toFixed(2)}`,
+        );
+      }
+      // 切替で src が差し替わって currentTime=0 に戻る前に、現在位置を退避して
+      // 高画質 src の loadedmetadata で同位置へ復元する (最初から再生にしない)。
+      noteQualitySwitch();
+      pendingQualityUpgradeRef.current = true;
+      cancelled = true;
+      upgradeToHighQuality();
+      cleanupProbe();
+      return true;
+    };
+
+    const ensureProbe = () => {
+      if (probe || probeFailed) return;
+      const activeVideo = getStableActiveVideo();
+      if (!activeVideo) return;
+      if (!activeHasProbeReserve(activeVideo)) return;
+
+      const highProbe = document.createElement("video");
+      probe = highProbe;
+      highProbe.src = highQualitySrc;
+      highProbe.preload = "auto";
+      highProbe.muted = true;
+      highProbe.playsInline = true;
+      highProbe.setAttribute("aria-hidden", "true");
+      highProbe.tabIndex = -1;
+      highProbe.style.position = "fixed";
+      highProbe.style.top = "-9999px";
+      highProbe.style.left = "-9999px";
+      highProbe.style.width = "100px";
+      highProbe.style.height = "100px";
+      highProbe.style.opacity = "0";
+      highProbe.style.pointerEvents = "none";
+      const onProbeProgress = () => {
+        if (probe !== highProbe) return;
+        if (cancelled) return;
+        void switchToHighIfReady();
+      };
+      const onError = () => {
+        if (probe !== highProbe) return;
+        probeFailed = true;
+        cleanupProbe();
+      };
+      highProbe.addEventListener("loadedmetadata", onProbeProgress);
+      highProbe.addEventListener("loadeddata", onProbeProgress);
+      highProbe.addEventListener("canplay", onProbeProgress);
+      highProbe.addEventListener("canplaythrough", onProbeProgress);
+      highProbe.addEventListener("progress", onProbeProgress);
+      highProbe.addEventListener("seeked", onProbeProgress);
+      highProbe.addEventListener("error", onError, { once: true });
+      document.body.appendChild(highProbe);
+      try {
+        highProbe.load();
+      } catch {
+        /* ignore */
+      }
+      alignProbeToActive(activeVideo, highProbe);
+      void switchToHighIfReady();
+    };
+
+    const tick = () => {
+      if (cancelled) return;
+      const activeVideo = getStableActiveVideo();
+      if (!activeVideo) {
+        cleanupProbe();
         return;
       }
-      timeout = setTimeout(cleanupProbe, HIGH_QUALITY_UPGRADE_TIMEOUT_MS);
-    }, HIGH_QUALITY_UPGRADE_DELAY_MS);
+      ensureProbe();
+      if (!probe) return;
+      alignProbeToActive(activeVideo, probe);
+      void switchToHighIfReady();
+    };
+
+    tick();
+    pollTimer = setInterval(tick, HIGH_QUALITY_PROBE_POLL_MS);
 
     return () => {
       cancelled = true;
-      clearTimeout(startTimer);
+      if (pollTimer) clearInterval(pollTimer);
       cleanupProbe();
     };
   }, [

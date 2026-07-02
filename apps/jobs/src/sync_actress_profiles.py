@@ -42,14 +42,14 @@ from typing import Any
 
 import httpx
 from sqlalchemy import or_, select
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 
 # apps/api を import パスに追加 (モデルを共有するため)
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(_REPO_ROOT / "apps" / "api"))
 
 from app.db.models.actress import Actress  # noqa: E402
-from src.sync_catalog import _dmm_api_call  # noqa: E402
+from src.sync_catalog import _build_sessionmaker, _dmm_api_call  # noqa: E402
 
 
 DMM_ENDPOINT = "https://api.dmm.com/affiliate/v3/ActressSearch"
@@ -267,7 +267,10 @@ async def main(
         raise SystemExit("DATABASE_URL が設定されていません")
 
     engine = create_async_engine(_get_async_url(db_url))
-    Session = async_sessionmaker(engine, expire_on_commit=False)
+    # sync_catalog と同じく eager-load 抑止フック付き sessionmaker を使う。
+    # select(Actress) が Actress.movies / Actress.goods (selectin) を芋づる式に
+    # 全件ロードして OOM (exit 137) になるのを防ぐ。
+    Session = _build_sessionmaker(engine)
 
     counters = UpdateCounters()
 

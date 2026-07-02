@@ -49,9 +49,10 @@ from typing import Any, AsyncIterator
 
 import httpx
 from aiolimiter import AsyncLimiter
-from sqlalchemy import select
+from sqlalchemy import event, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+from sqlalchemy.orm import Session as SyncSession, noload
 
 # apps/api を import パスに追加 (モデルを共有するため)
 _REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -65,6 +66,74 @@ from app.db.models.series import Series  # noqa: E402
 
 
 DMM_ENDPOINT = "https://api.dmm.com/affiliate/v3/ItemList"
+
+# ───────────────────────────────────────────────────────────
+# リレーション eager-load 抑止 (OOM = exit 137 対策)
+# ───────────────────────────────────────────────────────────
+#
+# モデル側はフィード API 用に Genre.movies / Actress.movies / Actress.goods /
+# Series.movies / Movie.genres / Movie.actresses 等を lazy="selectin" (一部 joined)
+# で定義している。これは apps/api の一覧取得には最適だが、このバッチで
+# `select(Genre)` / `select(Actress)` / `select(Series)` / `select(Movie)` を投げると
+# selectin が芋づる式に関連オブジェクトを全件ロードしてしまう。
+#
+# 例: select(Genre) 1 本が
+#   genres → 各 genre.movies (全作品) → 各 movie.actresses / movie.genres
+#          → 各 actress.goods … と多段にカスケードし、
+# 本番規模 (285 genres / 9077 actresses / 8337 series + 数万 movies) では
+# プロセスメモリが VPS 上限を超えて SIGKILL(137) される。
+#
+# このジョブは女優/ジャンル/シリーズの「行そのもの」しか必要とせず、関連
+# コレクションは一切読まない (リンクは MovieGenre / MovieActress / ActressGoods を
+# 直接 INSERT する)。そこでセッション単位で do_orm_execute フックを張り、
+# トップレベルの ORM エンティティ SELECT には常に noload("*") を付けて
+# 関連の自動ロードを止める。列アクセス自体は通常どおり可能。
+#
+# apps/api 側はこのモジュールを import しないため、フィード/ランキングの
+# selectin ローディングには影響しない (このフックは本ジョブ専用の Session
+# サブクラス _CatalogSyncSession にのみ張る)。
+
+
+def _suppress_relationship_loading(orm_execute_state: Any) -> None:
+    """ORM エンティティの SELECT に noload("*") を注入して selectin カスケードを止める。
+
+    - is_select: SELECT 文のみ対象
+    - not is_column_load: `select(Actress.name)` のような列 SELECT は除外
+      (こちらは元々リレーションをロードしないので触らない)
+    - not is_relationship_load: 万一 lazy ロードが走ってもそれ自体は対象外にする
+    """
+    if (
+        orm_execute_state.is_select
+        and not orm_execute_state.is_column_load
+        and not orm_execute_state.is_relationship_load
+    ):
+        statement = orm_execute_state.statement
+        # text() などオプションを受けない文は素通しする
+        if hasattr(statement, "options"):
+            orm_execute_state.statement = statement.options(noload("*"))
+
+
+class _CatalogSyncSession(SyncSession):
+    """このジョブ専用の同期 Session サブクラス。
+
+    do_orm_execute フックをこのクラスにだけ張ることで、共有モデルの
+    リレーション設定 (selectin) を変えずに、本ジョブの全 SELECT で
+    eager-load を抑止する。async_sessionmaker(sync_session_class=...) 経由で使う。
+    """
+
+
+event.listen(
+    _CatalogSyncSession, "do_orm_execute", _suppress_relationship_loading
+)
+
+
+def _build_sessionmaker(engine: Any) -> async_sessionmaker[AsyncSession]:
+    """eager-load 抑止フック付きの async_sessionmaker を作る。"""
+    return async_sessionmaker(
+        engine,
+        expire_on_commit=False,
+        sync_session_class=_CatalogSyncSession,
+    )
 
 # DMM API 呼び出しのグローバル rate limiter。
 # - 旧実装: ページ間で time.sleep(1.0) していた (同期 sleep のため event loop そのものが止まる)
@@ -488,7 +557,12 @@ class GenreCache:
     async def warm(self, session: AsyncSession) -> None:
         if self.warmed:
             return
-        rows = (await session.execute(select(Genre))).scalars().all()
+        # noload("*") で Genre.movies (selectin) のカスケードを止める。
+        # session 経由のフックでも抑止されるが、テストが素の session で warm() を
+        # 直接呼ぶケースもあるため、ここでも明示的に付けて単体で安全にする。
+        rows = (
+            await session.execute(select(Genre).options(noload("*")))
+        ).scalars().all()
         self.by_name = {g.name: g for g in rows if g.name}
         self.warmed = True
 
@@ -531,7 +605,10 @@ class ActressCache:
     async def warm(self, session: AsyncSession) -> None:
         if self.warmed:
             return
-        rows = (await session.execute(select(Actress))).scalars().all()
+        # noload("*") で Actress.movies / Actress.goods (selectin) のカスケードを止める。
+        rows = (
+            await session.execute(select(Actress).options(noload("*")))
+        ).scalars().all()
         for a in rows:
             if a.content_id:
                 self.by_content_id[a.content_id] = a
@@ -563,13 +640,32 @@ class ActressCache:
         effective_slug = slug or _slugify(name, content_id or name)
         if actress is None and effective_slug:
             actress = self.by_slug.get(effective_slug)
+        if actress is None:
+            # 本番 DB では actresses が大きく、ジョブ起動時に全 ORM 行を warm すると
+            # VPS のメモリ上限で SIGKILL(137) になる。cache miss 時だけ DB を見て、
+            # 必要な actress だけをこのプロセス内 cache に乗せる。
+            lookup_stmts = []
+            if content_id:
+                lookup_stmts.append(select(Actress).where(Actress.content_id == content_id))
+            lookup_stmts.append(select(Actress).where(Actress.name == name).limit(1))
+            if effective_slug:
+                lookup_stmts.append(select(Actress).where(Actress.slug == effective_slug))
+            for stmt in lookup_stmts:
+                actress = (await session.execute(stmt)).scalar_one_or_none()
+                if actress is not None:
+                    break
         if actress is not None:
             # 補完 (content_id / ruby が後から判明したケース)
             if content_id and not actress.content_id:
                 actress.content_id = content_id
-                self.by_content_id[content_id] = actress
             if ruby and not actress.ruby:
                 actress.ruby = ruby
+            if actress.content_id:
+                self.by_content_id[actress.content_id] = actress
+            if actress.name:
+                self.by_name[actress.name] = actress
+            if actress.slug:
+                self.by_slug[actress.slug] = actress
             return actress
         # 新規作成。back_populates の遅延ロード (lazy="selectin") を抑止するため
         # 空 list を pre-populate しておく (Actress.movies / Actress.goods)。
@@ -633,7 +729,10 @@ class SeriesCache:
     async def warm(self, session: AsyncSession) -> None:
         if self.warmed:
             return
-        rows = (await session.execute(select(Series))).scalars().all()
+        # noload("*") で Series.movies (selectin) のカスケードを止める。
+        rows = (
+            await session.execute(select(Series).options(noload("*")))
+        ).scalars().all()
         for s in rows:
             if s.content_id:
                 self.by_content_id[s.content_id] = s
@@ -661,6 +760,20 @@ class SeriesCache:
                 cached.content_id = content_id
                 self.by_content_id[content_id] = cached
             return cached
+        # Series も全件 warm せず、必要な series だけ lazy lookup する。
+        for stmt in (
+            select(Series).where(Series.content_id == content_id),
+            select(Series).where(Series.slug == effective_slug),
+        ):
+            existing = (await session.execute(stmt)).scalar_one_or_none()
+            if existing is not None:
+                if not existing.content_id:
+                    existing.content_id = content_id
+                if existing.content_id:
+                    self.by_content_id[existing.content_id] = existing
+                if existing.slug:
+                    self.by_slug[existing.slug] = existing
+                return existing
         series = Series(
             id=str(uuid.uuid4()),
             content_id=content_id,
@@ -1299,8 +1412,9 @@ async def _link_goods_actresses(
     if not actress_names:
         return
 
-    # Actress レコードを解決
-    if actress_cache is not None:
+    # Actress レコードを解決。lazy cache 運用では cache が全件を表さないため、
+    # warmed 済みのときだけ in-memory 解決し、それ以外は必要名だけ DB から引く。
+    if actress_cache is not None and actress_cache.warmed:
         actresses = [
             a for a in (actress_cache.by_name.get(n) for n in actress_names) if a is not None
         ]
@@ -1310,6 +1424,14 @@ async def _link_goods_actresses(
                 select(Actress).where(Actress.name.in_(actress_names))
             )
         ).scalars().all()
+        if actress_cache is not None:
+            for actress in actresses:
+                if actress.content_id:
+                    actress_cache.by_content_id[actress.content_id] = actress
+                if actress.name:
+                    actress_cache.by_name[actress.name] = actress
+                if actress.slug:
+                    actress_cache.by_slug[actress.slug] = actress
     if not actresses:
         return
 
@@ -1593,13 +1715,13 @@ async def _rewarm_caches_after_outer_rollback(
     series_cache: SeriesCache | None,
     link_cache: MovieLinkCache | None,
 ) -> None:
-    """バッチ全体のロールバック後に、キャッシュをリセットして DB から再 warm する。
+    """バッチ全体のロールバック後に、キャッシュを安全な状態へ戻す。
 
     session.rollback() は identity_map 上のすべての ORM オブジェクトを expire する。
     expire 済みオブジェクトはどの属性 (`.id` 含む) に触っても sync 経路の SELECT を
     発火させ、async コンテキスト外からの IO となって greenlet_spawn エラーになる。
-    キャッシュ辞書から ORM 参照を完全に捨て、まっさらな状態から SELECT し直して
-    後続バッチが安全に動くようにする。
+    キャッシュ辞書から ORM 参照を完全に捨てる。genres は小さいので再 warm するが、
+    actresses / series は OOM 回避のため空の lazy cache として後続 lookup に委ねる。
     """
     if genre_cache is not None:
         genre_cache.by_name = {}
@@ -1623,10 +1745,6 @@ async def _rewarm_caches_after_outer_rollback(
         async with session.begin():
             if genre_cache is not None:
                 await genre_cache.warm(session)
-            if actress_cache is not None:
-                await actress_cache.warm(session)
-            if series_cache is not None:
-                await series_cache.warm(session)
     except Exception as e:  # noqa: BLE001
         # 再 warm 失敗時は ORM オブジェクトが入っていない空辞書のままにしておく。
         # 次バッチで get_or_create が DB lookup → INSERT に乗るのでジョブ自体は継続できる。
@@ -1802,7 +1920,8 @@ async def main(
         raise SystemExit("DATABASE_URL が設定されていません")
 
     engine = create_async_engine(_get_async_url(db_url))
-    Session = async_sessionmaker(engine, expire_on_commit=False)
+    # eager-load 抑止フック付きの sessionmaker を使う (OOM=137 対策)。
+    Session = _build_sessionmaker(engine)
 
     counters = UpsertCounters()
     # floors_filter 未指定 (cron 例) のときはデフォルトフロア (動画のみ) を使う
@@ -1824,7 +1943,9 @@ async def main(
 
     async with httpx.AsyncClient() as client:
         async with Session() as session:
-            # キャッシュをセッション開始時に 1 度だけ warm して N+1 SELECT を回避
+            # キャッシュをセッション開始時に準備する。genres は小さいので warm するが、
+            # actresses / series は本番 DB で大きくなり得るため全件 warm しない。
+            # 必要になった行だけ get_or_create() 内で lazy lookup する。
             genre_cache = GenreCache()
             actress_cache = ActressCache()
             series_cache = SeriesCache()
@@ -1841,23 +1962,18 @@ async def main(
             if not dry_run:
                 async with session.begin():
                     await genre_cache.warm(session)
-                    await actress_cache.warm(session)
-                    await series_cache.warm(session)
                 print(
-                    f"[sync_catalog] warmed caches: genres={len(genre_cache.by_name)} "
-                    f"actresses={len(actress_cache.by_name)} "
-                    f"series={len(series_cache.by_content_id)}"
+                    f"[sync_catalog] warmed caches: genres={len(genre_cache.by_name)}; "
+                    "actresses=lazy series=lazy"
                 )
 
-            # goods フロアで DB の女優と関連する作品だけ保存するため、女優キャッシュから直接取得
+            # goods フロアで DB の女優と関連する作品だけ保存するため、DB から名前だけ取得する。
+            # actress_cache は lazy で不完全なので filter 元には使わない。
             db_actress_names: set[str] | None = None
             if any(f[2] == "goods" for f in targets):
-                if not dry_run:
-                    db_actress_names = actress_cache.names()
-                else:
-                    # dry_run でも autobegin を残さないようトランザクションを閉じる
-                    async with session.begin():
-                        db_actress_names = await _load_db_actress_names(session)
+                # autobegin を残さないようトランザクションを閉じる。
+                async with session.begin():
+                    db_actress_names = await _load_db_actress_names(session)
                 print(f"[sync_catalog] loaded {len(db_actress_names)} actress names for goods filter")
 
             for site, service, floor, prefix in targets:

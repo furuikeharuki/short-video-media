@@ -150,7 +150,7 @@ export default function FeedItemVideo({
     promotedElement.style.left = "";
     promotedElement.style.width = "";
     promotedElement.style.height = "";
-    promotedElement.style.opacity = "0"; // useFeedPlayback が setVideoReady で 1 に
+    promotedElement.style.opacity = promotedElement.readyState >= 2 ? "1" : "0";
     promotedElement.style.pointerEvents = "";
     promotedElement.style.zIndex = "";
     promotedElement.className = "feed-video";

@@ -67,6 +67,9 @@ const LOW_QUALITY_PROBE_MIN_BUFFER_SEC = 0.75;
 const HIGH_QUALITY_READY_BUFFER_SEC = 1.25;
 const HIGH_QUALITY_PROBE_POLL_MS = 250;
 const HIGH_QUALITY_PROBE_SEEK_REFRESH_SEC = 0.75;
+const HIGH_QUALITY_HANDOFF_LEAD_SEC = 0.12;
+const HIGH_QUALITY_HANDOFF_MAX_DRIFT_SEC = 0.18;
+const HIGH_QUALITY_HANDOFF_MIN_BUFFER_SEC = 0.15;
 // 再生開始後の rebuffer 救済。waiting/stalled が短時間で戻らない場合、まず同 URL の
 // load/play を軽く蹴り直し、それでも復帰しなければ force resolve へ進める。
 // ユーザー体感では 5 秒超の停止が致命的なので、やや攻めた値にする。
@@ -1107,32 +1110,47 @@ export default function FeedItem({ item, isActive, isAdjacent = false, isFirst, 
       return bufferedAheadSeconds(highProbe, target) >= required;
     };
 
+    const getHandoffTarget = (activeVideo: HTMLVideoElement, highProbe: HTMLVideoElement) => {
+      const target = activeVideo.currentTime + HIGH_QUALITY_HANDOFF_LEAD_SEC;
+      const duration = highProbe.duration;
+      if (!Number.isFinite(duration)) return Math.max(0, target);
+      return Math.min(Math.max(0, target), Math.max(0, duration - 0.25));
+    };
+
+    const prepareProbeForHandoff = (
+      activeVideo: HTMLVideoElement,
+      highProbe: HTMLVideoElement,
+    ) => {
+      const target = getHandoffTarget(activeVideo, highProbe);
+      if (target + 0.02 < activeVideo.currentTime) return false;
+      if (bufferedAheadSeconds(highProbe, target) < HIGH_QUALITY_HANDOFF_MIN_BUFFER_SEC) {
+        return false;
+      }
+      if (highProbe.seeking) return false;
+      if (Math.abs(highProbe.currentTime - target) > HIGH_QUALITY_HANDOFF_MAX_DRIFT_SEC) {
+        try {
+          highProbe.currentTime = target;
+          lastProbeSeekTime = target;
+        } catch {
+          return false;
+        }
+      }
+      if (highProbe.seeking) return false;
+      return Math.abs(highProbe.currentTime - target) <= HIGH_QUALITY_HANDOFF_MAX_DRIFT_SEC;
+    };
+
     const switchToHighIfReady = () => {
       const current = getStableActiveVideo();
       const highProbe = probe;
       if (!current || !highProbe) return false;
       alignProbeToActive(current, highProbe);
       if (!highProbeCanContinue(current, highProbe)) return false;
+      if (!prepareProbeForHandoff(current, highProbe)) return false;
       if (isVideoTimingEnabled()) {
         // eslint-disable-next-line no-console
         console.debug(
           `vt ${item.slug}: high-quality probe ready current=${current.currentTime.toFixed(2)} highAhead=${bufferedAheadSeconds(highProbe, current.currentTime).toFixed(2)}`,
         );
-      }
-      // 切替直前に probe を「現在の再生位置」へ最終同期する。poll 間隔 (250ms) 分の
-      // ドリフトを詰めて、handoff 後に probe が数百 ms 巻き戻ったように見えるのを防ぐ。
-      const syncTarget = current.currentTime;
-      if (
-        Number.isFinite(syncTarget) &&
-        bufferedAheadSeconds(highProbe, syncTarget) > 0.1 &&
-        Math.abs(highProbe.currentTime - syncTarget) > 0.1 &&
-        !highProbe.seeking
-      ) {
-        try {
-          highProbe.currentTime = syncTarget;
-        } catch {
-          /* ignore */
-        }
       }
 
       // 切替で src が差し替わって currentTime=0 に戻る前に、現在位置を退避して

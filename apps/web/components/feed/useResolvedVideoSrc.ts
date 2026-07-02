@@ -31,9 +31,9 @@ import { createVideoTimer, isVideoTimingEnabled } from "@/lib/videoTiming";
  *   5. ただし、その後そのカードが再び可視になったとき (enabled=false→true) は
  *      リトライカウンタをリセットして再挑戦する。
  *
- * フィードでは初速優先で `low_mp4_url || mp4_url` から再生を開始する。
+ * フィードでは初回再生だけ `low_mp4_url || mp4_url` から開始する。
  * 高画質候補 (`high_mp4_url || mp4_url`) が別 URL なら Result として保持し、
- * 呼び出し側が active 再生安定後に `upgradeToHighQuality()` で切り替える。
+ * 呼び出し側が playing 到達後すぐ `upgradeToHighQuality()` で切り替える。
  */
 
 type State =
@@ -41,7 +41,7 @@ type State =
   | {
       phase: "ready";
       url: string;
-      /** 低画質スタート URL。upgrade 後も保持し、高画質が詰まったときの fallback 先にする。 */
+      /** 初回再生用の低画質 URL。upgrade 後も保持し、高画質が詰まりそうなときの fallback 先にする。 */
       fastUrl: string;
       highUrl: string | null;
       quality: "fast" | "high";
@@ -87,12 +87,12 @@ interface Result {
    * active session 切り替え (= slug 変更) で 0 にリセット。
    */
   forceResolveEpoch: number;
-  /** 現在の URL が低画質スタートで、高画質候補が別にある場合だけ入る。 */
+  /** 現在の URL が初回再生用の低画質で、高画質候補が別にある場合だけ入る。 */
   highQualitySrc: string | null;
   /** 高画質候補へ切り替える。候補が無い/既に高画質なら no-op。 */
   upgradeToHighQuality: () => void;
   /**
-   * 高画質再生が詰まったときに低画質スタート URL へ戻す。再生位置は呼び出し側
+   * 高画質再生が詰まりそうなときに初回再生用の低画質 URL へ戻す。再生位置は呼び出し側
    * (useFeedPlayback の resume) が保持する。戻したあとは highUrl を落として
    * 自動再 upgrade を抑止する (低⇄高の往復ループ防止)。
    */

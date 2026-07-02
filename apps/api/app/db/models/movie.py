@@ -1,6 +1,17 @@
 import uuid
+from datetime import datetime
 
-from sqlalchemy import Date, ForeignKey, Index, Integer, Numeric, String, Text, UniqueConstraint
+from sqlalchemy import (
+    Date,
+    DateTime,
+    ForeignKey,
+    Index,
+    Integer,
+    Numeric,
+    String,
+    Text,
+    UniqueConstraint,
+)
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -31,11 +42,28 @@ class Movie(Base):
     # 画像・動画URL
     image_url_list: Mapped[str | None] = mapped_column(String)
     image_url_large: Mapped[str | None] = mapped_column(String)
-    # sample_movie_url (MP4 直リンク) は DB に保持しない。
-    # apps/api 側の resolve-mp4 endpoint がユーザー再生時に in-process httpx で
-    # 都度抽出する (DB キャッシュ無し)。トークン寿命管理から解放されるため
-    # 期限切れ問題が原理的に発生しない。
     sample_embed_url: Mapped[str | None] = mapped_column(String)
+
+    # サンプル動画 MP4 直リンク (DMM の html5_player ページから抽出したもの)。
+    #
+    # 以前は「DMM のトークンが期限切れになる」ため DB に保持せず、再生のたびに
+    # resolver_client (in-process httpx) で都度抽出していた。しかし毎回の抽出は
+    # 高画質再生までのレイテンシが大きい (cold で数秒) ため、
+    #   1. 定期ジョブ (sync_video_urls) が事前に抽出して DB に保存する
+    #   2. 再生時 (resolve-mp4) は DB 値があればそれを即返す
+    #   3. DB に無い / 再生できない (force=true) ときだけ抽出し、結果で DB を更新する
+    # という「DB キャッシュ + 都度フォールバック」方式に変更した。
+    # DMM トークンは 32 日以上有効なので、月次ジョブで貼り直せば期限切れは実質起きない。
+    # 期限切れで再生失敗したケースは web 側の force=true リトライが再抽出 → DB 更新する。
+    #
+    # low / high は低画質ファースト戦略用の 2 候補。single-bitrate 作品では
+    # どちらも sample_mp4_url と同じ URL になることがある。
+    sample_mp4_url: Mapped[str | None] = mapped_column(String)
+    sample_low_mp4_url: Mapped[str | None] = mapped_column(String)
+    sample_high_mp4_url: Mapped[str | None] = mapped_column(String)
+    # 最後に MP4 URL を抽出して保存した時刻 (naive UTC)。月次リフレッシュや
+    # 監視で「いつのトークンか」を判断するために持つ。
+    sample_mp4_resolved_at: Mapped[datetime | None] = mapped_column(DateTime)
 
     # アフィリエイト
     affiliate_url: Mapped[str] = mapped_column(String, default="")

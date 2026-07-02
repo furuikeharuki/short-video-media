@@ -36,6 +36,14 @@ sync_actress_profiles
 SYNC_ACTRESS_LIMIT        : int (未設定なら全件処理)
 SYNC_ACTRESS_ONLY_MISSING : "1"/"true"/"yes" で --only-missing 相当
 SYNC_ACTRESS_DRY_RUN      : "1"/"true" で dry-run
+
+sync_video_urls (サンプル動画 MP4 URL を DB に事前保存する月次ジョブ)
+--------------------------------------------------------------
+SYNC_VIDEO_URLS_LIMIT       : int (未設定なら全件処理)
+SYNC_VIDEO_URLS_ONLY_MISSING: "1"/"true" で未保存のみ (未設定なら true)
+SYNC_VIDEO_URLS_FORCE       : "1"/"true" で全件貼り直し (only_missing を無効化)
+SYNC_VIDEO_URLS_DRY_RUN     : "1"/"true" で dry-run
+SYNC_VIDEO_URLS_CONCURRENCY : int (未設定なら 3)
 """
 from __future__ import annotations
 

@@ -8,7 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.db.models.movie import Movie
 from app.db.session import get_db
 from app.schemas.movie import MovieDetail
-from app.services import resolver_client
+from app.services import movie_video_url_service, resolver_client
 from app.services.movie_service import get_movie_by_slug_service
 
 logger = logging.getLogger(__name__)
@@ -25,21 +25,20 @@ async def read_movie(slug: str, db: AsyncSession = Depends(get_db)) -> MovieDeta
 
 
 # ─────────────────────────────────────────────
-# resolve-mp4: サンプル動画 URL をその都度動的に取得する
+# resolve-mp4: サンプル動画 URL を DB キャッシュ + 都度フォールバックで返す
 # ─────────────────────────────────────────────
-# 背景:
-#   - DMM のサンプル URL は /pv/<token>/<cid>.mp4 形式の動的署名付きで、
-#     URL を DB にキャッシュしてもトークン期限切れで再生不可になることがあった。
-#   - 現行実装は apps/api 内 (httpx) で DMM の html5_player ページから
-#     都度抽出するため、トークン期限切れ問題が原理的に発生しない。
-#   - resolver_client 側に in-process の in-flight デデュープ + 1 時間の短期
-#     成功キャッシュがあるので、連打 / バーストは抑制される。
-#   - 共有 httpx.AsyncClient で DMM への接続を keep-alive 維持し、毎回の
-#     TLS ハンドシェイクを省く。
-# UX:
-#   - 毎回 resolver を呼ぶが、in-process なので 1-2 秒程度。
-#   - <video> が再生失敗したら web 側が force=true でリトライ → 短期キャッシュを
-#     バイパスして再抽出。
+# 方針 (ユーザー要望):
+#   - 定期ジョブ (sync_video_urls) が低画質・高画質ともに DB に保存する。
+#   - 再生時はまず DB 値を返す (resolver を呼ばない → 高画質再生までのレイテンシ削減)。
+#   - DB に URL が無い / 再生できない (force=true) ときだけ resolver で抽出し、
+#     取得できた新しい URL で DB を更新する。
+#
+# 期限切れ対策:
+#   - DMM トークンは 32 日以上有効。月次ジョブで貼り直すので通常は期限切れしない。
+#   - まれに期限切れ等で再生失敗したら web 側が force=true でリトライ →
+#     resolver 再抽出 → DB 更新、で自己修復する。
+#   - resolver_client 側に in-flight デデュープ + 1 時間の短期成功キャッシュ +
+#     force 連打ガードがあるので、DMM への実アクセスは十分に抑制される。
 class ResolveMp4Response(BaseModel):
     content_id: str | None
     # 既存クライアント (旧 web ビルド・jobs 等) との互換のため、最良の MP4 URL を
@@ -57,21 +56,35 @@ class ResolveMp4Response(BaseModel):
     high_mp4_url: str | None = None
 
 
+def _to_response(
+    content_id: str | None, resolved: resolver_client.ResolvedMp4
+) -> ResolveMp4Response:
+    """正規化済み ResolvedMp4 をレスポンスに変換する (low/high は mp4_url フォールバック)。"""
+    low = resolved.low_mp4_url or resolved.mp4_url
+    high = resolved.high_mp4_url or resolved.mp4_url
+    return ResolveMp4Response(
+        content_id=content_id,
+        mp4_url=resolved.mp4_url,
+        low_mp4_url=low,
+        high_mp4_url=high,
+    )
+
+
 @router.get("/movies/{slug}/resolve-mp4", response_model=ResolveMp4Response)
 async def resolve_mp4(
     slug: str,
     request: Request,
     force: bool = Query(
         False,
-        description="True なら resolver_client 側の短期成功キャッシュをスキップして"
-        "必ず DMM へ再アクセスする。web 側で <video> がエラーになったリトライ時に true を使う。",
+        description="True なら DB キャッシュを短絡せず resolver_client で再抽出し、"
+        "取得した URL で DB を更新する。web 側で <video> がエラーになったリトライ時に true を使う。",
     ),
     db: AsyncSession = Depends(get_db),
 ) -> ResolveMp4Response | Response:
     """作品スラグに対して、実際に再生可能な MP4 URL を返す。
 
-    DB には MP4 URL を一切保存しない。毎回 resolver_client (in-process httpx)
-    で DMM の html5_player ページから抽出する。
+    - DB に URL が保存済みで force=false なら、それを即返す (resolver 非呼び出し)。
+    - DB に無い / force=true なら resolver で抽出し、取得した URL で DB を更新する。
 
     レート制限 (設計メモ):
         429 は endpoint で unconditional に返さず、resolver_client 内部で
@@ -79,17 +92,40 @@ async def resolve_mp4(
         短期成功キャッシュヒットはレート制限を消費しないため、フロントの
         prefetch (+1..+5) + warm (+6..+15) の同時バーストで 429 になりにくい。
     """
-    # content_id を取得 (resolver に必要)。
+    # id / content_id と保存済み MP4 URL 列を取得する。
     row = (
         await db.execute(
-            select(Movie.content_id).where(Movie.slug == slug)
+            select(
+                Movie.id,
+                Movie.content_id,
+                Movie.sample_mp4_url,
+                Movie.sample_low_mp4_url,
+                Movie.sample_high_mp4_url,
+            ).where(Movie.slug == slug)
         )
     ).first()
     if row is None:
         raise HTTPException(status_code=404, detail="Movie not found")
-    (content_id,) = row
+    movie_id, content_id, s_mp4, s_low, s_high = row
 
+    stored: resolver_client.ResolvedMp4 | None = None
+    if s_mp4:
+        stored = resolver_client.ResolvedMp4(
+            mp4_url=s_mp4,
+            low_mp4_url=s_low or s_mp4,
+            high_mp4_url=s_high or s_mp4,
+        )
+
+    # 通常再生 (force=false): DB に保存済み URL があれば resolver を呼ばずに即返す。
+    if not force and stored is not None:
+        return _to_response(content_id, stored)
+
+    # ここから先は resolver での抽出が必要。content_id が無いと抽出できない。
     if not content_id:
+        # content_id が無くても、DB に保存済み URL があれば最後の手段として返す
+        # (通常 content_id 無しの作品に保存済み URL は存在しないが、安全側)。
+        if stored is not None:
+            return _to_response(content_id, stored)
         raise HTTPException(
             status_code=404, detail="content_id missing for this movie"
         )
@@ -98,7 +134,7 @@ async def resolve_mp4(
     if await request.is_disconnected():
         return Response(status_code=499)
 
-    # 直近に force=true で抽出したばかりなら、連打を抑えるためキャッシュ値を返す。
+    # 直近に force=true で抽出したばかりなら、連打を抑えるため短期キャッシュ値を使う。
     # web 側の <video> リトライが暴発しても DMM への httpx は最大でも
     # _FORCE_RETRY_MIN_INTERVAL_S に 1 回しか走らない。
     effective_force = force
@@ -123,14 +159,7 @@ async def resolve_mp4(
             status_code=500, detail="resolver service is not configured"
         ) from e
 
-    # low_mp4_url / high_mp4_url が None なら、いずれも primary に揃えて返す。
-    # フロント側 (低画質ファースト → 高画質スワップ) が常に両方を見るだけで
-    # 良い状態にしておく。同 URL なら web はスワップを発火しない。
-    low = resolved.low_mp4_url or resolved.mp4_url
-    high = resolved.high_mp4_url or resolved.mp4_url
-    return ResolveMp4Response(
-        content_id=content_id,
-        mp4_url=resolved.mp4_url,
-        low_mp4_url=low,
-        high_mp4_url=high,
-    )
+    # 取得できた新しい URL で DB を更新する (再生時に取得したら DB を更新する要件)。
+    # 書き込み失敗は best-effort (再生は継続)。正規化済み結果をレスポンスに使う。
+    normalized = await movie_video_url_service.persist_resolved(db, movie_id, resolved)
+    return _to_response(content_id, normalized)

@@ -17,7 +17,7 @@ from app.repositories.movie_repository import (
 from app.repositories.search_repository import get_advanced_movie_ids
 from app.schemas.feed import FeedResponse
 from app.schemas.movie import MovieCard, PriceList
-from app.services import resolver_client
+from app.services import movie_video_url_service, resolver_client
 
 
 SortKey = Literal["new", "popular", "rating", "views", "bookmarks"]
@@ -52,7 +52,7 @@ def _to_card(movie) -> MovieCard:
     if movie.price_list:
         price_list = PriceList.model_validate(movie.price_list)
 
-    return MovieCard(
+    card = MovieCard(
         id=str(movie.id),
         content_id=movie.content_id,
         title=movie.title,
@@ -68,6 +68,12 @@ def _to_card(movie) -> MovieCard:
         genres=[g.name for g in movie.genres],
         series_name=movie.series.name if movie.series else None,
     )
+    # DB に保存済みの MP4 URL があれば card に載せておく (resolver を呼ばずに
+    # フィードへ同梱できる)。定期ジョブ (sync_video_urls) が事前に保存する想定。
+    stored = movie_video_url_service.stored_resolved(movie)
+    if stored is not None:
+        _attach_resolved_mp4(card, stored)
+    return card
 
 
 def _card_to_dict(card: MovieCard) -> dict:
@@ -109,6 +115,7 @@ def _consume_inline_task(
 
 
 async def _attach_inline_resolved_urls(
+    db: AsyncSession,
     items: list[MovieCard],
     *,
     ahead: int = RESOLVER_INLINE_AHEAD,
@@ -119,10 +126,17 @@ async def _attach_inline_resolved_urls(
     `timeout_s` 以内に解決できたものだけ `MovieCard` に反映する。間に合わない
     task は cancel せずに継続し、resolver の in-flight dedupe / 成功キャッシュを
     温める (次ページ / 次リクエストが即ヒットする)。
+
+    DB に保存済み URL があるカード (= `mp4_url` が既に載っている) は resolver を
+    呼ばずにスキップする。新規に解決できたものは DB にも書き戻して、次回以降は
+    resolver を呼ばずに済むようにする (再生時取得 → DB 更新の要件)。
     """
     targets: list[MovieCard] = []
     seen: set[str] = set()
     for item in items:
+        # 既に DB 由来の URL が載っているカードは resolver を呼ばない。
+        if item.mp4_url:
+            continue
         if not item.content_id or item.content_id in seen:
             continue
         seen.add(item.content_id)
@@ -138,14 +152,22 @@ async def _attach_inline_resolved_urls(
         return
 
     done, pending = await asyncio.wait(tasks, timeout=timeout_s)
+    resolved_by_movie_id: dict[str, resolver_client.ResolvedMp4] = {}
     for task in done:
         card, resolved = task.result()
         if resolved is not None:
             _attach_resolved_mp4(card, resolved)
+            # card.id は movie.id (feed の MovieCard.id は str(movie.id))。
+            resolved_by_movie_id[card.id] = resolved
 
     for task in pending:
         _resolver_inline_tasks.add(task)
         task.add_done_callback(_consume_inline_task)
+
+    # timeout 内に解決できた分だけ、request scope の db でまとめて永続化する。
+    # (pending の遅延解決分は request 終了後に db が閉じられている可能性があるため
+    #  DB へは書かず、resolver のキャッシュ温めだけに使う。)
+    await movie_video_url_service.persist_resolved_many(db, resolved_by_movie_id)
 
 
 def _inline_resolve_params(offset: int) -> tuple[int, float]:
@@ -168,6 +190,9 @@ def _schedule_resolver_warm(items: list[MovieCard]) -> None:
     content_ids: list[str] = []
     seen: set[str] = set()
     for item in items:
+        # 既に DB 由来 URL が載っているカードは温める必要がない。
+        if item.mp4_url:
+            continue
         if not item.content_id or item.content_id in seen:
             continue
         seen.add(item.content_id)
@@ -434,7 +459,7 @@ async def get_feed_paginated(
         card_map = await _get_movies_with_cache(db, page_ids)
         items = [card_map[i] for i in page_ids if i in card_map]
         await _attach_inline_resolved_urls(
-            items, ahead=inline_ahead, timeout_s=inline_timeout_s
+            db, items, ahead=inline_ahead, timeout_s=inline_timeout_s
         )
         _schedule_resolver_warm(items)
         next_offset = offset + limit
@@ -453,7 +478,7 @@ async def get_feed_paginated(
         card_map = await _get_movies_with_cache(db, page_ids)
         items = [card_map[i] for i in page_ids if i in card_map]
         await _attach_inline_resolved_urls(
-            items, ahead=inline_ahead, timeout_s=inline_timeout_s
+            db, items, ahead=inline_ahead, timeout_s=inline_timeout_s
         )
         _schedule_resolver_warm(items)
 
@@ -466,7 +491,7 @@ async def get_feed_paginated(
     )
     items = [_to_card(m) for m in movies]
     await _attach_inline_resolved_urls(
-        items, ahead=inline_ahead, timeout_s=inline_timeout_s
+        db, items, ahead=inline_ahead, timeout_s=inline_timeout_s
     )
     _schedule_resolver_warm(items)
     next_offset = offset + limit

@@ -144,12 +144,15 @@ services:
   #       → Actions から SSH して VPS 上で docker compose run --rm で 1 発実行 (DB はローカル socket)
   #   - incremental sync_actress_profiles (日 1 回): .github/workflows/jobs-sync-actress.yml
   #       → 同上
+  #   - sync_video_urls (月 1 回): .github/workflows/jobs-sync-video-urls.yml
+  #       → 同上。サンプル動画 MP4 URL (低/高) を DB に貼り直す。
   #   - bootstrap (手動 dispatch): .github/workflows/jobs-bootstrap.yml
   #       → Actions runner (RAM 7GB) で matrix 年並列 + SSH トンネルで DB に接続
   #
   # ジョブを手動で走らせたい場合 (VPS で SSH ログイン中):
   #   docker compose -f infra/xserver/docker-compose.yml run --rm jobs python -m src.sync_catalog --mode incremental
   #   docker compose -f infra/xserver/docker-compose.yml run --rm jobs python -m src.sync_actress_profiles --only-missing
+  #   docker compose -f infra/xserver/docker-compose.yml run --rm jobs python -m src.sync_video_urls --force
   # --------------------------------------------------------------------------
   jobs:
     # 一回実行用の CLI イメージ。 デフォルト profile には含めないので

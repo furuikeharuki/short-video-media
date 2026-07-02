@@ -6,9 +6,10 @@
     成功キャッシュ (Redis があれば `resolver:mp4:<content_id>`、無ければ API プロセス
     の in-process LRU) に載せておく。
 
-    DB には MP4 URL を保存しない方針 (apps/api/app/db/models/movie.py 参照) を維持し、
-    保存先は既存 resolver と同じキャッシュ層に限定する。これによりトークン期限管理を
-    resolver_client の TTL に一元化できる。
+    このサービスの温め先は resolver_client のキャッシュ層 (Redis / in-process LRU)
+    に限定する。MP4 URL の DB 永続化は別系統 (定期ジョブ sync_video_urls と、
+    再生時 resolve-mp4 の書き戻し) が担うため、ここでは DB に触れない。
+    フィード初回の resolve 待ちを消すための短命キャッシュ温めに専念する。
 
 起動方法は 2 通り:
     1. API プロセス内 (推奨 / Redis 不要):

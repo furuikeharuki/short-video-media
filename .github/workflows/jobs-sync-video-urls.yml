@@ -1,0 +1,149 @@
+# ============================================================================
+# .github/workflows/jobs-sync-video-urls.yml
+# ----------------------------------------------------------------------------
+# Xserver VPS 上で sync_video_urls を「月 1 回」実行し、サンプル動画 MP4 URL
+# (低画質 / 高画質) を DB に貼り直す。
+#
+# 設計は jobs-sync-catalog.yml / jobs-sync-actress.yml と同じハイブリッド構成:
+#   GitHub Actions cron → SSH → VPS で docker compose run --rm jobs
+#
+# なぜ月 1:
+#   DMM のサンプル動画 URL は署名付き (トークン ~32 日有効)。月 1 で貼り直せば
+#   期限切れは実質起きない。抽出は DMM への外部アクセスなので高頻度で回さない。
+#
+# なぜ既定 --force:
+#   月次実行の主目的は「トークンが切れる前に全作品の URL を貼り直す」こと。
+#   差分 (--only-missing) だと既存 URL が古いまま残るため、cron 既定は
+#   全件フルリフレッシュ (--force) にする。URL 未保存だけを埋めたいときは
+#   workflow_dispatch で force=false を指定する。
+#
+# 必要な GitHub Secrets は jobs-sync-catalog.yml と共通。
+#
+# スケジュール:
+#   - 毎月 1 日 18:00 UTC = 毎月 2 日 03:00 JST
+#     (sync_catalog 08:00/14:00/20:00 JST・actress 13:00 JST とぶつからない時間帯)
+#
+# 手動実行: Actions → "Jobs: sync_video_urls (monthly)" → Run workflow
+# ============================================================================
+name: Jobs - sync_video_urls (monthly)
+
+on:
+  schedule:
+    - cron: "0 18 1 * *"  # 毎月 1 日 18:00 UTC = 毎月 2 日 03:00 JST
+  workflow_dispatch:
+    inputs:
+      force:
+        description: "全作品を再抽出して貼り直すか (false で URL 未保存のみ埋める)"
+        required: false
+        default: "true"
+      limit:
+        description: "処理件数上限 (空なら env SYNC_VIDEO_URLS_LIMIT → 無制限)"
+        required: false
+        default: ""
+      concurrency:
+        description: "同時抽出数 (空なら env SYNC_VIDEO_URLS_CONCURRENCY → 3)"
+        required: false
+        default: ""
+
+# 同じジョブが重ならないようにする (前回実行が長引いた時の二重起動防止)。
+concurrency:
+  group: jobs-sync-video-urls
+  cancel-in-progress: false
+
+jobs:
+  sync-video-urls:
+    name: sync_video_urls on Xserver VPS
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
+    environment: production
+
+    steps:
+      - name: Set up SSH
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.XSERVER_SSH_KEY }}
+          KNOWN_HOSTS: ${{ secrets.XSERVER_KNOWN_HOSTS }}
+        run: |
+          set -euo pipefail
+          mkdir -p ~/.ssh
+          chmod 700 ~/.ssh
+          eval "$(ssh-agent -s)"
+          printenv SSH_PRIVATE_KEY | ssh-add - >/dev/null
+          echo "SSH_AUTH_SOCK=$SSH_AUTH_SOCK" >> "$GITHUB_ENV"
+          echo "SSH_AGENT_PID=$SSH_AGENT_PID" >> "$GITHUB_ENV"
+          printf '%s\n' "$KNOWN_HOSTS" > ~/.ssh/known_hosts
+          chmod 600 ~/.ssh/known_hosts
+
+      - name: Run sync_video_urls via SSH
+        env:
+          HOST: ${{ secrets.XSERVER_SSH_HOST }}
+          USER: ${{ secrets.XSERVER_SSH_USER }}
+          PORT: ${{ secrets.XSERVER_SSH_PORT }}
+          REPO_DIR: ${{ secrets.XSERVER_REPO_DIR }}
+          # workflow_dispatch 由来の値。cron ではデフォルト全件貼り直しにしたいので
+          # force は空なら "true" にフォールバックする。limit / concurrency が空の
+          # ときは sync_video_urls 側で env → 既定値の順にフォールバックする。
+          FORCE: ${{ github.event.inputs.force || 'true' }}
+          LIMIT: ${{ github.event.inputs.limit || '' }}
+          CONCURRENCY: ${{ github.event.inputs.concurrency || '' }}
+        run: |
+          set -euo pipefail
+          : "${HOST:?XSERVER_SSH_HOST not set}"
+          : "${USER:?XSERVER_SSH_USER not set}"
+          : "${REPO_DIR:?XSERVER_REPO_DIR not set}"
+          PORT_OPT=""
+          if [ -n "${PORT}" ]; then
+            PORT_OPT="-p ${PORT}"
+          fi
+
+          # force=true なら --force、false なら --no-only-missing は付けず
+          # (URL 未保存のみを埋める既定 --only-missing 挙動に委ねる)。
+          FORCE_ARG=""
+          if [ "${FORCE}" = "true" ]; then
+            FORCE_ARG="--force"
+          fi
+          LIMIT_ARG=""
+          if [ -n "${LIMIT}" ]; then
+            LIMIT_ARG="--limit ${LIMIT}"
+          fi
+          CONCURRENCY_ARG=""
+          if [ -n "${CONCURRENCY}" ]; then
+            CONCURRENCY_ARG="--concurrency ${CONCURRENCY}"
+          fi
+
+          # SYNC_VIDEO_URLS_* は infra/xserver/.env から docker compose の
+          # env_file 経由で jobs コンテナに渡り、CLI 未指定時のフォールバックとして
+          # スクリプトに参照される。
+          #
+          # 抽出は DMM へ 1 件ずつアクセスするため、全件フルリフレッシュは分〜十数分
+          # 級になりうる。SSH keepalive と PYTHONUNBUFFERED は他ジョブと同じ意図。
+          ssh ${PORT_OPT} \
+            -o BatchMode=yes \
+            -o ServerAliveInterval=30 \
+            -o ServerAliveCountMax=10 \
+            -o TCPKeepAlive=yes \
+            "${USER}@${HOST}" bash -s <<EOF
+          set -euo pipefail
+          trap 'echo "[remote] exit_status=\$?" >&2' EXIT
+          echo "[remote] start \$(date -u +%FT%TZ)"
+          cd "${REPO_DIR}/infra/xserver"
+          echo "[remote] docker compose build start \$(date -u +%FT%TZ)"
+          docker compose --profile cli build jobs
+          echo "[remote] docker compose build done \$(date -u +%FT%TZ)"
+          echo "[remote] sync_video_urls run start \$(date -u +%FT%TZ)"
+          docker compose --profile cli run --rm -T \
+            -e PYTHONUNBUFFERED=1 \
+            jobs \
+            python -m src.sync_video_urls \
+              ${FORCE_ARG} \
+              ${LIMIT_ARG} \
+              ${CONCURRENCY_ARG}
+          echo "[remote] sync_video_urls run done \$(date -u +%FT%TZ)"
+          EOF
+
+      - name: Tear down ssh-agent
+        if: always()
+        run: |
+          if [ -n "${SSH_AGENT_PID:-}" ]; then
+            kill "$SSH_AGENT_PID" 2>/dev/null || true
+          fi
+          rm -f ~/.ssh/known_hosts

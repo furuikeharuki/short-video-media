@@ -11,6 +11,7 @@ apps/jobs/
 ├── src/
 │   ├── __init__.py
 │   ├── sync_catalog.py        # ★ DMM ItemList API から作品を取得
+│   ├── sync_video_urls.py     # ★ サンプル動画 MP4 URL を DB に事前保存 (月次)
 │   ├── backfill_slugs.py      # (将来) slug 欠落作品を埋める
 │   ├── generate_related.py    # (将来) 関連作品を生成
 │   ├── rebuild_cache.py       # (将来) Redis キャッシュを再構築
@@ -138,6 +139,62 @@ python -m src.sync_catalog --dry-run
 
 `.github/workflows/sync-catalog.yml` で 1 時間ごとに実行。
 
+## sync_video_urls.py (サンプル動画 MP4 URL の DB キャッシュ)
+
+サンプル動画の MP4 直リンク (低画質 / 高画質) を事前に抽出して DB に保存する
+バッチ。`movies.sample_mp4_url` / `sample_low_mp4_url` / `sample_high_mp4_url` /
+`sample_mp4_resolved_at` を埋める。
+
+### なぜ必要か
+
+- 再生時に毎回 resolver で抽出すると高画質再生までのレイテンシが大きい。
+- そこで「低画質・高画質ともに DB に保存 → 再生時 (API `/resolve-mp4` / フィード)
+  は DB 値を即返す。DB に無い / 再生できない (`force=true`) ときだけ resolver で
+  抽出して DB を更新する」方式にした。
+- DMM のサンプル URL は署名付き (トークン ~32 日有効)。月 1 で貼り直せば
+  期限切れは実質起きない。
+
+### 対象
+
+- `is_visible=True` かつ `content_id` を持つ作品 (review_count 降順)。
+- 既定 (`--only-missing`) は URL 未保存の作品だけ (差分 / 初回バックフィル)。
+- `--force` で全作品を再抽出して貼り直す (月次フルリフレッシュ; `--only-missing` を無効化)。
+
+### 環境変数
+
+`sync_video_urls` (`jobs-sync-video-urls.yml` が月次で叩く):
+
+| 変数 | 型 | デフォルト | 説明 |
+| --- | --- | --- | --- |
+| `SYNC_VIDEO_URLS_LIMIT` | int (≥1) | (無制限) | 処理件数上限 |
+| `SYNC_VIDEO_URLS_ONLY_MISSING` | `1` / `0` / `true` / `false` | `true` | URL 未保存の作品だけ処理 |
+| `SYNC_VIDEO_URLS_FORCE` | `1` / `0` / `true` / `false` | `false` | 全作品を再抽出して貼り直す (only_missing を無効化) |
+| `SYNC_VIDEO_URLS_DRY_RUN` | `1` / `0` / `true` / `false` | `false` | 1 で DB に書かない |
+| `SYNC_VIDEO_URLS_CONCURRENCY` | int (≥1) | `3` | 同時抽出数 (DMM 負荷を抑えるため低め) |
+
+resolver が DMM を叩くため `DMM_AFFILIATE_ID` が必須。
+
+### 使い方
+
+```bash
+# URL 未保存の作品を埋める (差分)
+python -m src.sync_video_urls
+
+# 全作品を再抽出して貼り直す (月次フルリフレッシュ)
+python -m src.sync_video_urls --force
+
+# 先頭 500 件だけ / DB に書かずログだけ
+python -m src.sync_video_urls --limit 500
+python -m src.sync_video_urls --dry-run
+```
+
+### GitHub Actions cron
+
+`.github/workflows/jobs-sync-video-urls.yml` が毎月 1 日 18:00 UTC
+(= 毎月 2 日 03:00 JST) に SSH → VPS で `docker compose run --rm jobs` として
+`--force` 付きで実行する。他ジョブ (catalog / actress) と時間帯が重ならないよう
+調整してある。
+
 ## post_to_x.py (X 自動投稿ボット)
 
 AV Shorts の流入施策として、自分の X (旧 Twitter) アカウントへ定期的に
@@ -218,6 +275,7 @@ python -m src.post_to_x                       # Secrets が揃っていれば実
 ## 定期実行が増えたら
 
 - `sync_catalog`: 1 時間ごと (新着取得)
+- `sync_video_urls`: 月 1 (サンプル動画 MP4 URL を DB に貼り直す)
 - `rebuild_cache`: 30 分ごと (Redis ランキング再構築)
 - `recompute_rankings`: 日次 (DB 上の集計テーブル更新)
 - `generate_related`: 日次 (関連作品ベクトル更新)

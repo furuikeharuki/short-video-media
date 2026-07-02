@@ -1,11 +1,50 @@
 from datetime import date, timedelta
 
-from sqlalchemy import desc, func, select
+from sqlalchemy import desc, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.models.movie import Movie
 from app.db.models.genre import Genre
 from app.db.models.movie import MovieGenre
+
+
+async def get_movie_video_url_targets(
+    db: AsyncSession,
+    *,
+    only_missing: bool = True,
+    limit: int | None = None,
+) -> list[tuple[str, str]]:
+    """sync_video_urls ジョブ向けに (id, content_id) の一覧を返す。
+
+    - 可視 (is_visible=True) かつ content_id を持つ作品だけを対象にする
+      (content_id が無いと resolver を呼べない)。
+    - `only_missing=True` (既定) なら、まだ MP4 URL を保存していない
+      (sample_mp4_url / sample_low_mp4_url / sample_high_mp4_url のいずれかが NULL)
+      作品だけを返す。差分実行 (毎回の cron / 初回バックフィル) 用。
+    - `only_missing=False` なら全対象を返す。月次のトークン貼り直し (full refresh) 用。
+
+    並び順は「初回再生で当たりやすい人気作から埋める」ため review_count 降順。
+    ORM オブジェクト (selectin relationship) を読むと OOM しやすいので、
+    id / content_id の 2 カラムだけを返す。
+    """
+    stmt = (
+        select(Movie.id, Movie.content_id)
+        .where(Movie.is_visible.is_(True))
+        .where(Movie.content_id.is_not(None))
+    )
+    if only_missing:
+        stmt = stmt.where(
+            or_(
+                Movie.sample_mp4_url.is_(None),
+                Movie.sample_low_mp4_url.is_(None),
+                Movie.sample_high_mp4_url.is_(None),
+            )
+        )
+    stmt = stmt.order_by(desc(Movie.review_count), desc(Movie.primary_date), Movie.id)
+    if limit is not None:
+        stmt = stmt.limit(limit)
+    result = await db.execute(stmt)
+    return [(mid, cid) for mid, cid in result.all() if cid]
 
 
 async def get_movie_by_slug(db: AsyncSession, slug: str) -> Movie | None:

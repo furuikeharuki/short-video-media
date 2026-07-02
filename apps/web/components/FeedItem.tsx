@@ -1021,7 +1021,15 @@ export default function FeedItem({ item, isActive, isAdjacent = false, isFirst, 
     let pollTimer: ReturnType<typeof setInterval> | null = null;
     let probeFailed = false;
     let lastProbeSeekTime: number | null = null;
+    // probe 要素へ貼った readiness リスナを剥がすためのクリーンアップ。
+    // probe を handoff (promote) する際に「元 probe に残ったリスナ」がリークして
+    // active 要素へ紛れ込むのを防ぐため、破棄・昇格どちらの経路でも必ず呼ぶ。
+    let detachProbeListeners: (() => void) | null = null;
     const cleanupProbe = () => {
+      if (detachProbeListeners) {
+        detachProbeListeners();
+        detachProbeListeners = null;
+      }
       if (!probe) return;
       try {
         probe.pause();
@@ -1098,13 +1106,69 @@ export default function FeedItem({ item, isActive, isAdjacent = false, isFirst, 
           `vt ${item.slug}: high-quality probe ready current=${current.currentTime.toFixed(2)} highAhead=${bufferedAheadSeconds(highProbe, current.currentTime).toFixed(2)}`,
         );
       }
+      // 切替直前に probe を「現在の再生位置」へ最終同期する。poll 間隔 (250ms) 分の
+      // ドリフトを詰めて、handoff 後に probe が数百 ms 巻き戻ったように見えるのを防ぐ。
+      const syncTarget = current.currentTime;
+      if (
+        Number.isFinite(syncTarget) &&
+        bufferedAheadSeconds(highProbe, syncTarget) > 0.1 &&
+        Math.abs(highProbe.currentTime - syncTarget) > 0.1 &&
+        !highProbe.seeking
+      ) {
+        try {
+          highProbe.currentTime = syncTarget;
+        } catch {
+          /* ignore */
+        }
+      }
+
       // 切替で src が差し替わって currentTime=0 に戻る前に、現在位置を退避して
-      // 高画質 src の loadedmetadata で同位置へ復元する (最初から再生にしない)。
+      // handoff 後に同位置から再生を続ける (最初から再生にしない)。
+      // この時点では videoRef.current はまだ旧 (低画質) 要素なので、旧要素の
+      // currentTime が退避される。
       noteQualitySwitch();
       pendingQualityUpgradeRef.current = true;
       cancelled = true;
+      if (pollTimer) {
+        clearInterval(pollTimer);
+        pollTimer = null;
+      }
+
+      // ここが今回の肝: 旧実装は probe を破棄して active 要素の src を高画質へ
+      // 差し替えて load() し直していた。MP4 単一ファイル再生では load() が
+      // バッファを捨てて Range を取り直すため、切替のたびに 再バッファ (スムーズ
+      // でない) + currentTime=0 への巻き戻り (最初から再生) が起きていた。
+      //
+      // 代わりに、既に現在位置ぶんのバッファを持つ probe 要素をそのまま active に
+      // 昇格 (handoff) する。prefetch handoff と同じ setPromotedElement 経路に乗せる
+      // ことで、FeedItemVideo が probe を host に adopt し、videoRef を差し替え、
+      // useFeedPlayback の autoplay(promote) が同位置から再生を継続する。load() は
+      // 走らないので再バッファも巻き戻りも起きない。
+      //
+      // probe のリスナは剥がし、effect cleanup で破棄されないよう probe 参照を手放す
+      // (handoff 済み要素は promotedElement 側のライフサイクルで管理される)。
+      if (detachProbeListeners) {
+        detachProbeListeners();
+        detachProbeListeners = null;
+      }
+      probe = null;
+
+      // 旧 active 要素は二重再生/二重音声を避けるため即座に一時停止する。
+      // - promote 済み要素だったケース: FeedItemVideo の adopt cleanup でも pause+破棄
+      //   されるが、ここで先に止めておくと切替の瞬間の音の被りが無い。
+      // - JSX <video> だったケース: React が unmount するが、その前に止める。
+      try {
+        current.pause();
+      } catch {
+        /* ignore */
+      }
+
+      // handoff。promotedSlugRef を立てて prefetch 系 claim と競合しないようにする。
+      promotedSlugRef.current = item.slug;
+      setPromotedElement(highProbe);
+      // videoSrc を高画質へ確定。probe.src は既に highQualitySrc なので、
+      // FeedItemVideo の src 同期 effect は「一致」で早期 return し load() を撃たない。
       upgradeToHighQuality();
-      cleanupProbe();
       return true;
     };
 
@@ -1146,6 +1210,18 @@ export default function FeedItem({ item, isActive, isAdjacent = false, isFirst, 
       highProbe.addEventListener("progress", onProbeProgress);
       highProbe.addEventListener("seeked", onProbeProgress);
       highProbe.addEventListener("error", onError, { once: true });
+      // handoff (promote) 時は要素を破棄せず active に流用するため、破棄ではなく
+      // リスナだけ剥がせる経路を用意する。cleanupProbe / switchToHighIfReady の
+      // どちらからでも一度だけ実行する。
+      detachProbeListeners = () => {
+        highProbe.removeEventListener("loadedmetadata", onProbeProgress);
+        highProbe.removeEventListener("loadeddata", onProbeProgress);
+        highProbe.removeEventListener("canplay", onProbeProgress);
+        highProbe.removeEventListener("canplaythrough", onProbeProgress);
+        highProbe.removeEventListener("progress", onProbeProgress);
+        highProbe.removeEventListener("seeked", onProbeProgress);
+        highProbe.removeEventListener("error", onError);
+      };
       document.body.appendChild(highProbe);
       try {
         highProbe.load();

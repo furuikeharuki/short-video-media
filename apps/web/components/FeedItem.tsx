@@ -142,8 +142,8 @@ export default function FeedItem({ item, isActive, isAdjacent = false, isFirst, 
     };
   }, [isActive, item.slug]);
 
-  // 表示する動画 URL の解決。フィードは低画質 URL で即開始し、active 再生が
-  // 安定してから高画質 URL を裏で現在位置付近まで温めて切り替える。
+  // 表示する動画 URL の解決。初回は低画質 URL で即開始するが、次動画の高画質
+  // prefetch が canplay 済みなら active 化時点でそのまま高画質 URL を採用する。
   const {
     videoSrc,
     exhausted,

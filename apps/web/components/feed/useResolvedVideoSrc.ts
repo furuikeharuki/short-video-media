@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 
 import {
   extractBasename,
@@ -15,6 +15,7 @@ import {
 } from "@/lib/api/resolve-mp4";
 import { ensurePreconnect } from "@/lib/networkPrefs";
 import { createVideoTimer, isVideoTimingEnabled } from "@/lib/videoTiming";
+import { hasPromotableElement } from "@/lib/videoHandoff";
 
 /**
  * フィード上の 1 作品について「実際に再生可能な MP4 URL」を解決して保持する hook。
@@ -34,6 +35,8 @@ import { createVideoTimer, isVideoTimingEnabled } from "@/lib/videoTiming";
  * フィードでは初回再生だけ `low_mp4_url || mp4_url` から開始する。
  * 高画質候補 (`high_mp4_url || mp4_url`) が別 URL なら Result として保持し、
  * 呼び出し側が playing 到達後すぐ `upgradeToHighQuality()` で切り替える。
+ * ただし次動画の高画質 hidden video が既に canplay 済みなら、active 化時点で
+ * 初回 URL も高画質に寄せ、そのまま handoff して再生する。
  */
 
 type State =
@@ -116,16 +119,16 @@ function normalizeResolved(value: InitialResolvedMp4 | null | undefined): Resolv
   };
 }
 
-function readyStateFromResolved(res: ResolveMp4Response): ReadyState {
-  const url = pickFastStartUrl(res);
+function readyStateFromResolved(slug: string, res: ResolveMp4Response): ReadyState {
+  const fastUrl = pickFastStartUrl(res);
   const highUrl = pickHighQualityUrl(res);
-  const upgradeUrl = highUrl !== url ? highUrl : null;
+  const canStartHigh = highUrl !== fastUrl && hasPromotableElement(slug, highUrl);
   return {
     phase: "ready",
-    url,
-    fastUrl: url,
-    highUrl: upgradeUrl,
-    quality: upgradeUrl ? "fast" : "high",
+    url: canStartHigh ? highUrl : fastUrl,
+    fastUrl,
+    highUrl: canStartHigh || highUrl === fastUrl ? null : highUrl,
+    quality: canStartHigh || highUrl === fastUrl ? "high" : "fast",
   };
 }
 
@@ -192,7 +195,7 @@ export function useResolvedVideoSrc({
   const [state, setState] = useState<State>(() => {
     const initial = normalizeResolved(initialResolved);
     return initial
-      ? readyStateFromResolved(initial)
+      ? readyStateFromResolved(slug, initial)
       : { phase: "resolving", url: null, highUrl: null };
   });
   // force-resolve が ready を生成した回数。slug 変更 / 初回 resolve では増えない。
@@ -224,7 +227,7 @@ export function useResolvedVideoSrc({
     const initial = normalizeResolved(initialResolved);
     if (initial) {
       primeResolveMp4Cache(slug, initial);
-      const nextState = readyStateFromResolved(initial);
+      const nextState = readyStateFromResolved(slug, initial);
       logSelectedQuality(
         slug,
         initial,
@@ -250,7 +253,44 @@ export function useResolvedVideoSrc({
     if (state.phase !== "ready") return;
     ensurePreconnect(state.url);
     if (state.highUrl) ensurePreconnect(state.highUrl);
+    if (state.fastUrl !== state.url) ensurePreconnect(state.fastUrl);
   }, [state]);
+
+  useLayoutEffect(() => {
+    if (!isActive) return;
+    if (state.phase !== "ready") return;
+    if (state.quality !== "fast") return;
+    if (!state.highUrl) return;
+    if (!hasPromotableElement(slug, state.highUrl)) return;
+    setState((prev) => {
+      if (prev.phase !== "ready") return prev;
+      if (prev.quality !== "fast") return prev;
+      if (!prev.highUrl) return prev;
+      if (!hasPromotableElement(slug, prev.highUrl)) return prev;
+      if (isVideoTimingEnabled()) {
+        logSelectedQuality(
+          slug,
+          {
+            mp4_url: prev.fastUrl,
+            low_mp4_url: prev.fastUrl,
+            high_mp4_url: prev.highUrl,
+          },
+          prev.highUrl,
+          "quality-upgrade",
+          "active",
+        );
+      }
+      ensurePreconnect(prev.highUrl);
+      ensurePreconnect(prev.fastUrl);
+      return {
+        phase: "ready",
+        url: prev.highUrl,
+        fastUrl: prev.fastUrl,
+        highUrl: null,
+        quality: "high",
+      };
+    });
+  });
 
   useEffect(() => {
     if (!enabled) return;
@@ -278,25 +318,18 @@ export function useResolvedVideoSrc({
         }
         if (res?.mp4_url) {
           timer.mark("resolve:ok");
-          const url = pickFastStartUrl(res);
-          const highUrl = pickHighQualityUrl(res);
-          const upgradeUrl = highUrl !== url ? highUrl : null;
+          const nextState = readyStateFromResolved(slug, res);
           logSelectedQuality(
             slug,
             res,
-            url,
+            nextState.url,
             "active",
             isActiveRef.current ? "active" : "adjacent",
           );
-          ensurePreconnect(url);
-          if (upgradeUrl) ensurePreconnect(upgradeUrl);
-          setState({
-            phase: "ready",
-            url,
-            fastUrl: url,
-            highUrl: upgradeUrl,
-            quality: upgradeUrl ? "fast" : "high",
-          });
+          ensurePreconnect(nextState.url);
+          if (nextState.highUrl) ensurePreconnect(nextState.highUrl);
+          if (nextState.fastUrl !== nextState.url) ensurePreconnect(nextState.fastUrl);
+          setState(nextState);
         } else {
           timer.mark("resolve:exhausted");
           setState({ phase: "exhausted", url: null, highUrl: null });

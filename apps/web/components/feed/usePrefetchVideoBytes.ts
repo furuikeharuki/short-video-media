@@ -12,6 +12,7 @@ import {
   extractHost,
   inferQualityTier,
   pickFastStartUrl,
+  pickHighQualityUrl,
   resolveMp4Url,
 } from "@/lib/api/resolve-mp4";
 import { ensurePreconnect, getPrefetchPolicy } from "@/lib/networkPrefs";
@@ -153,9 +154,9 @@ function vtPrefetchLog(message: string) {
 /**
  * prefetch が選んだ URL の画質ティアを vt ログに残す。
  *
- * 不変条件: 隠し <video> と active <video> は同じ初回 URL を使う。
- * フィード初速優先のため、ここでは `low_mp4_url || mp4_url` を採用する。
- * `drift=low->high` は、再生安定後に高画質へ切り替える余地がある作品。
+ * +1 の auto preload は高画質を直接温める。active 側は高画質が canplay 済みなら
+ * 初回 URL も高画質に寄せ、そうでなければ低画質で開始する。
+ * `drift=low->high` は、低画質 fallback と高画質候補が別 URL であることを示す。
  */
 function logPrefetchQuality(
   slug: string,
@@ -179,6 +180,20 @@ function logPrefetchQuality(
   vtPrefetchLog(
     `quality slug=${slug} offset=${fmtOffset(offset)} quality=${tier} host=${host} drift=${drift}${extra}`,
   );
+}
+
+function pickPrefetchSlotUrl(
+  res: {
+    mp4_url: string;
+    low_mp4_url?: string | null;
+    high_mp4_url?: string | null;
+  },
+  target: Pick<Target, "offset" | "preload">,
+): string {
+  if (target.offset === PREFETCH_START_OFFSET && target.preload === "auto") {
+    return pickHighQualityUrl(res);
+  }
+  return pickFastStartUrl(res);
 }
 
 interface PrefetchSlot {
@@ -649,13 +664,15 @@ export function usePrefetchVideoBytes(
         .then((res) => {
           if (controller.signal.aborted) return;
           if (!res?.mp4_url) return;
-          // active (useResolvedVideoSrc) の初回 URL と同じ低画質開始 URL を使う。
-          // ここで high_mp4_url を採用すると、active は低画質、hidden は高画質になり
-          // videoHandoff の src 比較で promote-src-mismatch になる。
-          const url = pickFastStartUrl(res);
+          // +1 が auto preload できる環境では高画質を直接温める。active 側は
+          // 高画質 hidden video が canplay 済みなら初回 URL を高画質に寄せるため、
+          // src mismatch を起こさずそのまま handoff できる。
+          const url = pickPrefetchSlotUrl(res, target);
           logPrefetchQuality(target.slug, res, url, target.offset);
           // 解決した CDN origin に dyn preconnect (TCP/TLS handshake を前倒し)。
           ensurePreconnect(url);
+          const fastUrl = pickFastStartUrl(res);
+          if (fastUrl !== url) ensurePreconnect(fastUrl);
           // readiness は隠し <video> の loadedmetadata / canplay を待って判定する
           // (resolve 成功時点ではまだバイトを取り始めてさえいない可能性があるため)。
           setSlots((prev) => {
@@ -755,9 +772,6 @@ export function usePrefetchVideoBytes(
         .then((res) => {
           if (controller.signal.aborted) return;
           if (!res?.mp4_url) return;
-          // self-heal 後も active 初回 URL と同じ低画質開始 URL を使う (src-mismatch 防止)。
-          const url = pickFastStartUrl(res);
-          ensurePreconnect(url);
           const id = slugToIdRef.current.get(slug);
           if (!id) return; // 既に対象範囲外
           setSlots((prev) => {
@@ -770,6 +784,13 @@ export function usePrefetchVideoBytes(
             const existingTargetIndex = existing?.targetIndex ?? -1;
             const existingPreload = existing?.preload ?? policy.preload;
             const existingMinStart = existing?.minStart ?? 0;
+            const url = pickPrefetchSlotUrl(res, {
+              offset: existingOffset,
+              preload: existingPreload,
+            });
+            ensurePreconnect(url);
+            const fastUrl = pickFastStartUrl(res);
+            if (fastUrl !== url) ensurePreconnect(fastUrl);
             const next: PrefetchSlot = {
               id,
               slug,

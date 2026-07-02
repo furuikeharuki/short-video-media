@@ -44,17 +44,22 @@ def normalize_resolved(
     return resolver_client.ResolvedMp4(mp4_url=mp4, low_mp4_url=low, high_mp4_url=high)
 
 
-def stored_resolved(movie: Movie) -> resolver_client.ResolvedMp4 | None:
+def stored_resolved(movie: object) -> resolver_client.ResolvedMp4 | None:
     """Movie に保存済みの MP4 URL があれば正規化して返す。無ければ None。
 
     「使える」判定は `sample_mp4_url` が入っていること。low/high が欠けていても
     mp4_url にフォールバックする。
+
+    `_to_card` は feed / ranking / search / home など複数箇所から呼ばれ、
+    ORM の `Movie` だけでなく、MP4 URL 列を持たない Movie ライクなオブジェクト
+    (テストダブルや部分投影) が渡ることもある。そのため属性は `getattr` で
+    安全に読み、列が無いオブジェクトは「保存済み URL なし」(None) として扱う。
     """
-    mp4 = movie.sample_mp4_url
+    mp4 = getattr(movie, "sample_mp4_url", None)
     if not mp4:
         return None
-    low = movie.sample_low_mp4_url or mp4
-    high = movie.sample_high_mp4_url or mp4
+    low = getattr(movie, "sample_low_mp4_url", None) or mp4
+    high = getattr(movie, "sample_high_mp4_url", None) or mp4
     return resolver_client.ResolvedMp4(mp4_url=mp4, low_mp4_url=low, high_mp4_url=high)
 
 

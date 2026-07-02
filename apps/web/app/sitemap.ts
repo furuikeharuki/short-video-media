@@ -25,9 +25,12 @@ const API_BASE_URL =
   process.env.NEXT_PUBLIC_API_BASE_URL ||
   "http://127.0.0.1:8000";
 
-// sitemap.xml は Next.js 側で 1 時間キャッシュする。API 側でも軽い処理だが
-// クローラがリトライしてきても DB に負荷をかけないようにしておく。
-export const revalidate = 3600;
+// /api/v1/sitemap/urls は 4 万件規模になると Next Data Cache の 2MB 上限を超える。
+// Vercel build 時の data-cache warning を避けるため、sitemap.xml は request 時に生成し、
+// 巨大 JSON を Next の fetch cache へ保存しない。
+export const dynamic = "force-dynamic";
+export const revalidate = 0;
+export const fetchCache = "force-no-store";
 
 function parseLastModified(s: string | null | undefined, fallback: Date): Date {
   if (!s) return fallback;
@@ -38,7 +41,7 @@ function parseLastModified(s: string | null | undefined, fallback: Date): Date {
 async function fetchSitemapUrls(): Promise<SitemapUrls> {
   try {
     const res = await fetch(`${API_BASE_URL}/api/v1/sitemap/urls`, {
-      next: { revalidate: 3600 },
+      cache: "no-store",
     });
     if (!res.ok) {
       return { movies: [], actresses: [], genres: [] };

@@ -36,6 +36,7 @@ class SitemapUrls(BaseModel):
     movies: list[MovieSitemapEntry]
     actresses: list[ActressSitemapEntry]
     genres: list[GenreSitemapEntry] = []
+    movie_total: int | None = None
 
 
 # Google が 1 つの sitemap.xml に許す URL 数の上限は 50,000。
@@ -50,9 +51,11 @@ DEFAULT_GENRE_LIMIT = 2_000
 @router.get("/urls", response_model=SitemapUrls, response_model_exclude_unset=True)
 async def get_sitemap_urls(
     movie_limit: int = Query(DEFAULT_MOVIE_LIMIT, ge=1, le=50_000),
+    movie_offset: int = Query(0, ge=0, le=1_000_000),
     actress_limit: int = Query(DEFAULT_ACTRESS_LIMIT, ge=0, le=50_000),
     genre_limit: int = Query(DEFAULT_GENRE_LIMIT, ge=0, le=50_000),
     include_video_meta: bool = Query(False),
+    include_movie_total: bool = Query(False),
     db: AsyncSession = Depends(get_db),
 ) -> SitemapUrls:
     """sitemap.xml 生成用の URL 一覧を返す。
@@ -61,6 +64,15 @@ async def get_sitemap_urls(
     - actresses: 出演作品が 1 件でもある女優名を、最新出演日降順で返す
     - genres: 公開作品が 1 件以上あるジャンル名を、最新作品日降順で返す
     """
+    movie_total = None
+    if include_movie_total:
+        movie_total = int(
+            await db.scalar(
+                select(func.count(Movie.id)).where(Movie.is_visible.is_(True))
+            )
+            or 0
+        )
+
     # 公開作品の slug。lastmod は primary_date を採用 (配信開始日 or 発売日)。
     if include_video_meta:
         movie_stmt = (
@@ -76,6 +88,7 @@ async def get_sitemap_urls(
             )
             .where(Movie.is_visible.is_(True))
             .order_by(desc(Movie.primary_date), Movie.id)
+            .offset(movie_offset)
             .limit(movie_limit)
         )
         movie_rows = (await db.execute(movie_stmt)).all()
@@ -106,6 +119,7 @@ async def get_sitemap_urls(
             select(Movie.slug, Movie.primary_date)
             .where(Movie.is_visible.is_(True))
             .order_by(desc(Movie.primary_date), Movie.id)
+            .offset(movie_offset)
             .limit(movie_limit)
         )
         movie_rows = (await db.execute(movie_stmt)).all()
@@ -163,4 +177,9 @@ async def get_sitemap_urls(
     else:
         genres = []
 
-    return SitemapUrls(movies=movies, actresses=actresses, genres=genres)
+    return SitemapUrls(
+        movies=movies,
+        actresses=actresses,
+        genres=genres,
+        movie_total=movie_total,
+    )

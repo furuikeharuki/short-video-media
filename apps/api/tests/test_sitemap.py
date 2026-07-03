@@ -37,20 +37,26 @@ class _FakeSession:
         movie_rows: list[tuple],
         actress_rows: list[tuple],
         genre_rows: list[tuple],
+        movie_total: int | None = None,
     ) -> None:
         self._queue: list[list[tuple]] = [movie_rows, actress_rows, genre_rows]
+        self._movie_total = movie_total
 
     async def execute(self, statement: Any):  # type: ignore[no-untyped-def]
         rows = self._queue.pop(0) if self._queue else []
         return _FakeAllResult(rows)
+
+    async def scalar(self, statement: Any):  # type: ignore[no-untyped-def]
+        return self._movie_total
 
 
 def _make_client(
     movie_rows: list[tuple],
     actress_rows: list[tuple],
     genre_rows: list[tuple] | None = None,
+    movie_total: int | None = None,
 ) -> TestClient:
-    session = _FakeSession(movie_rows, actress_rows, genre_rows or [])
+    session = _FakeSession(movie_rows, actress_rows, genre_rows or [], movie_total)
 
     async def _fake_get_db():  # type: ignore[no-untyped-def]
         yield session
@@ -109,6 +115,23 @@ def test_sitemap_urls_returns_empty_lists_when_no_rows() -> None:
     resp = client.get("/api/v1/sitemap/urls")
     assert resp.status_code == 200
     assert resp.json() == {"movies": [], "actresses": [], "genres": []}
+
+
+def test_sitemap_urls_includes_movie_total_only_when_requested() -> None:
+    client = _make_client([], [], [], movie_total=0)
+
+    resp = client.get(
+        "/api/v1/sitemap/urls",
+        params={"include_movie_total": "true"},
+    )
+
+    assert resp.status_code == 200
+    assert resp.json() == {
+        "movies": [],
+        "actresses": [],
+        "genres": [],
+        "movie_total": 0,
+    }
 
 
 def test_sitemap_urls_respects_limit_query_params() -> None:

@@ -177,6 +177,8 @@ async def get_sitemap_urls(
     else:
         genres = []
 
+    if movie_total is None:
+        return SitemapUrls(movies=movies, actresses=actresses, genres=genres)
     return SitemapUrls(
         movies=movies,
         actresses=actresses,

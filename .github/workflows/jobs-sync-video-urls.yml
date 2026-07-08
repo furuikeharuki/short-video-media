@@ -17,6 +17,19 @@
 #   全件フルリフレッシュ (--force) にする。URL 未保存だけを埋めたいときは
 #   workflow_dispatch で force=false を指定する。
 #
+# なぜシャード分割 (shard):
+#   全件フルリフレッシュは数万件を DMM へ 1 件ずつ抽出するため数時間かかり、
+#   GitHub Actions のジョブ単位タイムアウト (ホストランナーは最大 6h) に張り付く。
+#   実際 5 万件の実行が 4h で "The operation was canceled" になった。
+#   そこで対象を N 分割 (shard) し、各シャードを別ジョブ (= 別タイムアウト予算) に
+#   割り当てて順番に流す。1 ジョブあたりの実行時間を 1/N に抑えられ、合計では
+#   N×6h ぶんの実行余地を確保できる。
+#   分割は movie_id の安定ハッシュで行うため、直列実行中に前のシャードが DB を
+#   更新しても後続シャードの担当範囲がずれない。
+#   ※ sync_video_urls は advisory lock で同時 1 本しか走れない。シャードを並列に
+#     すると 2 本目以降が "another instance is running; skip" で空振りするため、
+#     max-parallel は必ず 1 (直列) にする。
+#
 # 必要な GitHub Secrets は jobs-sync-catalog.yml と共通。
 #
 # スケジュール:
@@ -44,18 +57,79 @@ on:
         description: "同時抽出数 (空なら env SYNC_VIDEO_URLS_CONCURRENCY → 3)"
         required: false
         default: ""
+      shard_count:
+        description: "対象を何分割して直列実行するか (既定 4; 1 で分割なし)"
+        required: false
+        default: "4"
+      shard_index:
+        description: "特定シャードだけ再実行する番号 (空なら 0..shard_count-1 を全部実行)"
+        required: false
+        default: ""
 
-# 同じジョブが重ならないようにする (前回実行が長引いた時の二重起動防止)。
+# 同じ「実行 (run)」が重ならないようにする (前回実行が長引いた時の二重起動防止)。
+# ※ これは run 単位の制御。1 run 内のシャード matrix ジョブは別枠で直列に流れる。
 concurrency:
   group: jobs-sync-video-urls
   cancel-in-progress: false
 
 jobs:
-  sync-video-urls:
-    name: sync_video_urls on Xserver VPS
+  # --------------------------------------------------------------------------
+  # 何シャードに分割するかを決めて matrix 用の JSON 配列 (例: [0,1,2,3]) を出力する。
+  # workflow_dispatch の shard_count 入力、cron では既定 4。
+  # shard_index が指定された場合は、その 1 シャードだけを再実行できる。
+  # --------------------------------------------------------------------------
+  plan-shards:
+    name: plan shards
     runs-on: ubuntu-latest
-    timeout-minutes: 240
+    outputs:
+      shards: ${{ steps.compute.outputs.shards }}
+      shard_count: ${{ steps.compute.outputs.shard_count }}
+    steps:
+      - id: compute
+        env:
+          SHARD_COUNT_INPUT: ${{ github.event.inputs.shard_count || '4' }}
+          SHARD_INDEX_INPUT: ${{ github.event.inputs.shard_index || '' }}
+        run: |
+          set -euo pipefail
+          n="${SHARD_COUNT_INPUT}"
+          if ! printf '%s' "$n" | grep -Eq '^[0-9]+$' || [ "$n" -lt 1 ]; then
+            echo "shard_count は 1 以上の整数で指定してください (got '$n')" >&2
+            exit 1
+          fi
+          n=$((10#$n))
+          if [ -n "${SHARD_INDEX_INPUT}" ]; then
+            if ! printf '%s' "$SHARD_INDEX_INPUT" | grep -Eq '^[0-9]+$'; then
+              echo "shard_index は 0..$((n - 1)) の整数で指定してください (got '$SHARD_INDEX_INPUT')" >&2
+              exit 1
+            fi
+            shard_index=$((10#$SHARD_INDEX_INPUT))
+            if [ "$shard_index" -ge "$n" ]; then
+              echo "shard_index は 0..$((n - 1)) の整数で指定してください (got '$SHARD_INDEX_INPUT')" >&2
+              exit 1
+            fi
+            shards="${shard_index}"
+          else
+            shards="$(seq 0 $((n - 1)) | paste -sd, -)"
+          fi
+          echo "shards=[${shards}]" >> "$GITHUB_OUTPUT"
+          echo "shard_count=${n}" >> "$GITHUB_OUTPUT"
+          echo "planned ${n} shard(s): [${shards}]"
+
+  sync-video-urls:
+    name: sync_video_urls shard ${{ matrix.shard }} on Xserver VPS
+    needs: plan-shards
+    runs-on: ubuntu-latest
+    # シャードごとに別ジョブ = 別タイムアウト予算。1 シャードは全体の 1/N なので
+    # ホストランナー上限 (6h=360min) に十分収まる。念のため上限手前まで許容する。
+    timeout-minutes: 350
     environment: production
+    strategy:
+      # advisory lock があるためシャードは必ず直列 (並列だと 2 本目以降が空振り)。
+      max-parallel: 1
+      # 1 シャードが失敗しても残りのシャードは貼り直しを続けたい。
+      fail-fast: false
+      matrix:
+        shard: ${{ fromJSON(needs.plan-shards.outputs.shards) }}
 
     steps:
       - name: Set up SSH
@@ -85,6 +159,10 @@ jobs:
           FORCE: ${{ github.event.inputs.force || 'true' }}
           LIMIT: ${{ github.event.inputs.limit || '' }}
           CONCURRENCY: ${{ github.event.inputs.concurrency || '' }}
+          # このジョブが担当するシャード。SHARD_COUNT は全体の分割数、SHARD_INDEX は
+          # このジョブが処理する 0 始まりの番号。plan-shards の出力と matrix から渡す。
+          SHARD_COUNT: ${{ needs.plan-shards.outputs.shard_count }}
+          SHARD_INDEX: ${{ matrix.shard }}
         run: |
           set -euo pipefail
           : "${HOST:?XSERVER_SSH_HOST not set}"
@@ -109,6 +187,11 @@ jobs:
           if [ -n "${CONCURRENCY}" ]; then
             CONCURRENCY_ARG="--concurrency ${CONCURRENCY}"
           fi
+          # シャード指定。SHARD_COUNT<=1 のときは分割なし (--shard-* を付けない)。
+          SHARD_ARG=""
+          if [ -n "${SHARD_COUNT}" ] && [ "${SHARD_COUNT}" -gt 1 ]; then
+            SHARD_ARG="--shard-count ${SHARD_COUNT} --shard-index ${SHARD_INDEX}"
+          fi
 
           # SYNC_VIDEO_URLS_* は infra/xserver/.env から docker compose の
           # env_file 経由で jobs コンテナに渡り、CLI 未指定時のフォールバックとして
@@ -124,7 +207,7 @@ jobs:
             "${USER}@${HOST}" bash -s <<EOF
           set -euo pipefail
           trap 'echo "[remote] exit_status=\$?" >&2' EXIT
-          echo "[remote] start \$(date -u +%FT%TZ)"
+          echo "[remote] start \$(date -u +%FT%TZ) shard=${SHARD_INDEX}/${SHARD_COUNT}"
           cd "${REPO_DIR}/infra/xserver"
           echo "[remote] docker compose build start \$(date -u +%FT%TZ)"
           docker compose --profile cli build jobs
@@ -136,7 +219,8 @@ jobs:
             python -m src.sync_video_urls \
               ${FORCE_ARG} \
               ${LIMIT_ARG} \
-              ${CONCURRENCY_ARG}
+              ${CONCURRENCY_ARG} \
+              ${SHARD_ARG}
           echo "[remote] sync_video_urls run done \$(date -u +%FT%TZ)"
           EOF
 

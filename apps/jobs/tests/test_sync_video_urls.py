@@ -53,6 +53,8 @@ def _clear_env(monkeypatch):
         "SYNC_VIDEO_URLS_FORCE",
         "SYNC_VIDEO_URLS_DRY_RUN",
         "SYNC_VIDEO_URLS_CONCURRENCY",
+        "SYNC_VIDEO_URLS_SHARD_COUNT",
+        "SYNC_VIDEO_URLS_SHARD_INDEX",
     ):
         monkeypatch.delenv(k, raising=False)
 
@@ -66,6 +68,8 @@ def test_cli_defaults(monkeypatch):
         force=False,
         dry_run=False,
         concurrency=sync_video_urls.DEFAULT_CONCURRENCY,
+        shard_count=1,
+        shard_index=0,
     )
 
 
@@ -106,6 +110,84 @@ def test_invalid_env_raises_systemexit(monkeypatch):
     monkeypatch.setenv("SYNC_VIDEO_URLS_LIMIT", "abc")
     with pytest.raises(SystemExit):
         sync_video_urls._resolve_cli_args([])
+
+
+# ---------------------------------------------------------------------------
+# シャード分割 (分割実行 / タイムアウト回避)
+# ---------------------------------------------------------------------------
+def test_shard_cli_flags(monkeypatch):
+    _clear_env(monkeypatch)
+    cfg = sync_video_urls._resolve_cli_args(
+        ["--shard-count", "4", "--shard-index", "2"]
+    )
+    assert cfg["shard_count"] == 4
+    assert cfg["shard_index"] == 2
+
+
+def test_shard_env_fallback(monkeypatch):
+    _clear_env(monkeypatch)
+    monkeypatch.setenv("SYNC_VIDEO_URLS_SHARD_COUNT", "3")
+    monkeypatch.setenv("SYNC_VIDEO_URLS_SHARD_INDEX", "1")
+    cfg = sync_video_urls._resolve_cli_args([])
+    assert cfg["shard_count"] == 3
+    assert cfg["shard_index"] == 1
+
+
+def test_shard_cli_overrides_env(monkeypatch):
+    _clear_env(monkeypatch)
+    monkeypatch.setenv("SYNC_VIDEO_URLS_SHARD_COUNT", "8")
+    monkeypatch.setenv("SYNC_VIDEO_URLS_SHARD_INDEX", "7")
+    cfg = sync_video_urls._resolve_cli_args(
+        ["--shard-count", "2", "--shard-index", "0"]
+    )
+    assert cfg["shard_count"] == 2
+    assert cfg["shard_index"] == 0
+
+
+def test_shard_index_out_of_range_raises(monkeypatch):
+    _clear_env(monkeypatch)
+    # shard_index == shard_count は範囲外 (0..count-1)
+    with pytest.raises(SystemExit):
+        sync_video_urls._resolve_cli_args(["--shard-count", "4", "--shard-index", "4"])
+
+
+def test_shard_count_below_one_raises(monkeypatch):
+    _clear_env(monkeypatch)
+    # env_int(minimum=1) 違反で SystemExit
+    monkeypatch.setenv("SYNC_VIDEO_URLS_SHARD_COUNT", "0")
+    with pytest.raises(SystemExit):
+        sync_video_urls._resolve_cli_args([])
+
+
+def test_select_shard_hash_partitions_all():
+    targets = [(str(i), f"cid{i}") for i in range(10)]
+    shard_count = 3
+    collected: list = []
+    for idx in range(shard_count):
+        collected.extend(
+            sync_video_urls._select_shard(
+                targets, shard_count=shard_count, shard_index=idx
+            )
+        )
+    # 各シャードは重複なく、全体で元集合を完全被覆する
+    assert sorted(collected) == sorted(targets)
+    # ID ベースなので入力順が変わっても同じ作品は同じ shard に入る
+    assert sync_video_urls._select_shard(
+        list(reversed(targets)), shard_count=3, shard_index=0
+    ) == list(
+        reversed(
+            sync_video_urls._select_shard(
+                targets, shard_count=3, shard_index=0
+            )
+        )
+    )
+
+
+def test_select_shard_count_one_returns_all():
+    targets = [(str(i), f"cid{i}") for i in range(5)]
+    assert sync_video_urls._select_shard(
+        targets, shard_count=1, shard_index=0
+    ) == targets
 
 
 # ---------------------------------------------------------------------------

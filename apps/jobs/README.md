@@ -171,6 +171,8 @@ python -m src.sync_catalog --dry-run
 | `SYNC_VIDEO_URLS_FORCE` | `1` / `0` / `true` / `false` | `false` | 全作品を再抽出して貼り直す (only_missing を無効化) |
 | `SYNC_VIDEO_URLS_DRY_RUN` | `1` / `0` / `true` / `false` | `false` | 1 で DB に書かない |
 | `SYNC_VIDEO_URLS_CONCURRENCY` | int (≥1) | `3` | 同時抽出数 (DMM 負荷を抑えるため低め) |
+| `SYNC_VIDEO_URLS_SHARD_COUNT` | int (≥1) | `1` | 分割実行の分割数 (`1` で分割なし) |
+| `SYNC_VIDEO_URLS_SHARD_INDEX` | int (0 始まり) | `0` | この実行が担当するシャード番号 |
 
 resolver が DMM を叩くため `DMM_AFFILIATE_ID` が必須。
 
@@ -183,6 +185,9 @@ python -m src.sync_video_urls
 # 全作品を再抽出して貼り直す (月次フルリフレッシュ)
 python -m src.sync_video_urls --force
 
+# 全件を 4 分割し、0 番目のシャードだけ処理する (時間切れ対策 / 再実行用)
+python -m src.sync_video_urls --force --shard-count 4 --shard-index 0
+
 # 先頭 500 件だけ / DB に書かずログだけ
 python -m src.sync_video_urls --limit 500
 python -m src.sync_video_urls --dry-run
@@ -193,7 +198,9 @@ python -m src.sync_video_urls --dry-run
 `.github/workflows/jobs-sync-video-urls.yml` が毎月 1 日 18:00 UTC
 (= 毎月 2 日 03:00 JST) に SSH → VPS で `docker compose run --rm jobs` として
 `--force` 付きで実行する。他ジョブ (catalog / actress) と時間帯が重ならないよう
-調整してある。
+調整してある。全件更新は時間がかかるため既定では 4 シャードに分け、各シャードを
+直列の別ジョブとして実行する。`workflow_dispatch` の `shard_index` を指定すると、
+失敗した 1 シャードだけ再実行できる。
 
 ## post_to_x.py (X 自動投稿ボット)
 

@@ -44,6 +44,8 @@ SYNC_VIDEO_URLS_ONLY_MISSING: "1"/"true" で未保存のみ (未設定なら tru
 SYNC_VIDEO_URLS_FORCE       : "1"/"true" で全件貼り直し (only_missing を無効化)
 SYNC_VIDEO_URLS_DRY_RUN     : "1"/"true" で dry-run
 SYNC_VIDEO_URLS_CONCURRENCY : int (未設定なら 3)
+SYNC_VIDEO_URLS_SHARD_COUNT : int (未設定なら 1 = 分割なし)。対象を何分割するか
+SYNC_VIDEO_URLS_SHARD_INDEX : int (未設定なら 0)。担当シャード番号 0 始まり
 """
 from __future__ import annotations
 

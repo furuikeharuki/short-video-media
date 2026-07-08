@@ -21,6 +21,18 @@
   python -m src.sync_video_urls --force         # 全作品を再抽出して貼り直す (月次)
   python -m src.sync_video_urls --limit 500     # 先頭 500 件だけ
   python -m src.sync_video_urls --dry-run       # DB に書かずログだけ
+  # 全件を 4 分割し、その 0 番目だけを処理する (分割実行 / タイムアウト回避)
+  python -m src.sync_video_urls --force --shard-count 4 --shard-index 0
+
+分割実行 (シャード):
+  - 全件フルリフレッシュ (--force) は DMM へ 1 件ずつアクセスするため数万件だと
+    数時間かかり、CI のジョブ単位タイムアウトに引っかかりやすい。
+  - --shard-count N / --shard-index I を指定すると、対象一覧を決定的に N 分割し
+    その I 番目 (0 始まり) だけを処理する。CI 側で I=0..N-1 を別ジョブ (別タイム
+    アウト) に割り当てれば、1 ジョブあたりの実行時間を 1/N に抑えられる。
+  - 分割は movie_id の安定ハッシュで決める。同じ movie_id は常に同じシャードに
+    入るため、直列実行中に前のシャードが DB を更新しても後続シャードの担当範囲が
+    ずれない。
 
 環境変数 (CLI 未指定時のフォールバック):
   - DMM_AFFILIATE_ID              : resolver が DMM を叩くのに必須
@@ -30,11 +42,14 @@
   - SYNC_VIDEO_URLS_FORCE         : bool, true で全件貼り直し (only_missing を無効化)
   - SYNC_VIDEO_URLS_DRY_RUN       : bool, true で書き込みなし
   - SYNC_VIDEO_URLS_CONCURRENCY   : int, 同時抽出数 (既定 3; DMM 負荷を抑える)
+  - SYNC_VIDEO_URLS_SHARD_COUNT   : int, 分割数 (既定 1 = 分割なし)
+  - SYNC_VIDEO_URLS_SHARD_INDEX   : int, 担当シャード番号 0 始まり (既定 0)
 """
 from __future__ import annotations
 
 import argparse
 import asyncio
+import hashlib
 import os
 import sys
 from dataclasses import dataclass
@@ -114,6 +129,33 @@ def _chunked(seq: list, size: int):
         yield seq[i : i + size]
 
 
+def _shard_for_movie_id(movie_id: str, *, shard_count: int) -> int:
+    """movie_id から安定的に担当シャード番号を決める。"""
+    digest = hashlib.blake2s(movie_id.encode("utf-8"), digest_size=4).digest()
+    return int.from_bytes(digest, "big") % shard_count
+
+
+def _select_shard(
+    targets: list[tuple[str, str]], *, shard_count: int, shard_index: int
+) -> list[tuple[str, str]]:
+    """対象一覧を決定的に shard_count 分割し、shard_index 番目だけ返す。
+
+    movie_id の安定ハッシュで選ぶ。targets[shard_index::shard_count] のような
+    位置ベース分割だと、only_missing=True の直列実行で前のシャードが DB を更新した
+    後、後続シャードの対象一覧が短くなり、担当範囲がずれて取りこぼす可能性がある。
+    ID ベースなら同じ作品は常に同じシャードへ入る。
+
+    shard_count<=1 のときは分割なしで全件返す。
+    """
+    if shard_count <= 1:
+        return targets
+    return [
+        target
+        for target in targets
+        if _shard_for_movie_id(target[0], shard_count=shard_count) == shard_index
+    ]
+
+
 async def _process_chunk(
     session,
     chunk: list[tuple[str, str]],
@@ -178,6 +220,8 @@ async def main(
     force: bool,
     dry_run: bool,
     concurrency: int,
+    shard_count: int = 1,
+    shard_index: int = 0,
 ) -> None:
     if not os.getenv("DMM_AFFILIATE_ID"):
         raise SystemExit("DMM_AFFILIATE_ID が設定されていません")
@@ -185,12 +229,23 @@ async def main(
     if not db_url:
         raise SystemExit("DATABASE_URL が設定されていません")
 
+    if shard_count < 1:
+        raise SystemExit(
+            f"shard_count は 1 以上で指定してください (got {shard_count})"
+        )
+    if not 0 <= shard_index < shard_count:
+        raise SystemExit(
+            f"shard_index は 0..{shard_count - 1} で指定してください "
+            f"(got {shard_index})"
+        )
+
     # force=True のときは only_missing を無効化して全件貼り直す。
     effective_only_missing = only_missing and not force
 
     print(
         f"[sync_video_urls] start: limit={limit} only_missing={effective_only_missing} "
-        f"force={force} dry_run={dry_run} concurrency={concurrency}"
+        f"force={force} dry_run={dry_run} concurrency={concurrency} "
+        f"shard={shard_index}/{shard_count}"
     )
 
     engine = create_async_engine(_get_async_url(db_url))
@@ -207,8 +262,18 @@ async def main(
                 targets = await get_movie_video_url_targets(
                     session, only_missing=effective_only_missing, limit=limit
                 )
+                total_all = len(targets)
+                if shard_count > 1:
+                    targets = _select_shard(
+                        targets, shard_count=shard_count, shard_index=shard_index
+                    )
+                    print(
+                        f"[sync_video_urls] shard {shard_index}/{shard_count}: "
+                        f"{len(targets)}/{total_all} movies to process"
+                    )
+                else:
+                    print(f"[sync_video_urls] {total_all} movies to process")
                 total = len(targets)
-                print(f"[sync_video_urls] {total} movies to process")
                 if total == 0:
                     return
 
@@ -293,6 +358,20 @@ def _resolve_cli_args(argv: list[str] | None = None) -> dict:
             f"{DEFAULT_CONCURRENCY})"
         ),
     )
+    parser.add_argument(
+        "--shard-count", dest="shard_count", type=int, default=None,
+        help=(
+            "対象を何分割するか (未指定なら env SYNC_VIDEO_URLS_SHARD_COUNT → 1)。"
+            " 分割実行でジョブ単位のタイムアウトを避けるのに使う"
+        ),
+    )
+    parser.add_argument(
+        "--shard-index", dest="shard_index", type=int, default=None,
+        help=(
+            "担当シャード番号 0 始まり (未指定なら env SYNC_VIDEO_URLS_SHARD_INDEX"
+            " → 0)。0 <= shard_index < shard_count であること"
+        ),
+    )
     args = parser.parse_args(argv)
 
     try:
@@ -318,12 +397,31 @@ def _resolve_cli_args(argv: list[str] | None = None) -> dict:
             concurrency = cfg.env_int("SYNC_VIDEO_URLS_CONCURRENCY", minimum=1)
         if concurrency is None:
             concurrency = DEFAULT_CONCURRENCY
+
+        shard_count = args.shard_count
+        if shard_count is None:
+            shard_count = cfg.env_int("SYNC_VIDEO_URLS_SHARD_COUNT", minimum=1)
+        if shard_count is None:
+            shard_count = 1
+
+        shard_index = args.shard_index
+        if shard_index is None:
+            shard_index = cfg.env_int("SYNC_VIDEO_URLS_SHARD_INDEX", minimum=0)
+        if shard_index is None:
+            shard_index = 0
+
+        if not 0 <= shard_index < shard_count:
+            raise cfg.EnvConfigError(
+                f"shard_index は 0..{shard_count - 1} で指定してください "
+                f"(shard_count={shard_count}, shard_index={shard_index})"
+            )
     except cfg.EnvConfigError as e:
         raise SystemExit(f"[sync_video_urls] 設定エラー: {e}") from e
 
     print(
         f"[sync_video_urls] resolved config: limit={limit} only_missing={only_missing} "
-        f"force={force} dry_run={dry_run} concurrency={concurrency}"
+        f"force={force} dry_run={dry_run} concurrency={concurrency} "
+        f"shard_count={shard_count} shard_index={shard_index}"
     )
     return dict(
         limit=limit,
@@ -331,6 +429,8 @@ def _resolve_cli_args(argv: list[str] | None = None) -> dict:
         force=force,
         dry_run=dry_run,
         concurrency=concurrency,
+        shard_count=shard_count,
+        shard_index=shard_index,
     )
 
 

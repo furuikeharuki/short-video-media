@@ -34,6 +34,10 @@ const PREFETCH_AHEAD = 3;
 const PREFETCH_DEBOUNCE_MS = 80;
 /** 失敗 (null) を覚えておく時間。これを過ぎたら再度 prefetch を試みる。 */
 const FAILURE_TTL_MS = 30_000;
+// resolved / failed の永続 Set/Map は長時間セッションで slug 数ぶん増え続ける。
+// 本 hook が参照するのは active〜+3 とその直近だけなので、近傍だけ保持する。
+const RETAIN_BACK = 2;
+const RETAIN_AHEAD = PREFETCH_AHEAD + 2;
 
 function vtPrefetchLog(message: string) {
   if (!isVideoTimingEnabled()) return;
@@ -56,6 +60,19 @@ export function usePrefetchResolveMp4(
     const inFlight = inFlightRef.current;
     const resolved = resolvedSlugsRef.current;
     const failed = failedSlugsRef.current;
+
+    const retainedSlugs = new Set<string>();
+    for (let idx = currentIndex - RETAIN_BACK; idx <= currentIndex + RETAIN_AHEAD; idx += 1) {
+      if (idx < 0 || idx >= items.length) continue;
+      const slug = items[idx]?.slug;
+      if (slug) retainedSlugs.add(slug);
+    }
+    for (const slug of resolved) {
+      if (!retainedSlugs.has(slug)) resolved.delete(slug);
+    }
+    for (const slug of failed.keys()) {
+      if (!retainedSlugs.has(slug)) failed.delete(slug);
+    }
 
     /** 既に resolve 済み or 失敗 TTL 内なら true。 */
     const isAlreadyHandled = (slug: string): boolean => {

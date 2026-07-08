@@ -134,7 +134,7 @@ async def search_movies(
     # 集まるまで読む」プランを選べる (top-K 早期打ち切り)。
     stmt = (
         select(Movie)
-        .where(where)
+        .where(Movie.is_visible.is_(True), where)
         .order_by(Movie.primary_date.desc().nullslast(), Movie.id)
     )
     if offset:
@@ -167,7 +167,7 @@ async def search_movies_by_exact_field(
     複数指定時は AND。いずれも None なら空リストと total=0 を返す。
     series は Series.name (Movie.series リレーション) を完全一致で照合する。
     """
-    conditions = []
+    conditions = [Movie.is_visible.is_(True)]
     if director:
         conditions.append(Movie.director_name == director)
     if maker:
@@ -182,7 +182,9 @@ async def search_movies_by_exact_field(
             Movie.series_id.in_(select(Series.id).where(Series.name == series))
         )
 
-    if not conditions:
+    # conditions には常に is_visible 条件が入るため、フィールド指定が
+    # 一つも無い (= director/maker/label/series すべて None) 場合は空を返す。
+    if not (director or maker or label or series):
         return [], 0
 
     # `total` は next_cursor の has_more 判定にしか使わないため、別 COUNT クエリを

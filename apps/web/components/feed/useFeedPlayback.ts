@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useCallback, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useCallback, useState } from "react";
 
 import { createVideoTimer, isVideoTimingEnabled } from "@/lib/videoTiming";
 import {
@@ -128,8 +128,9 @@ export function useFeedPlayback({ slug, title, isActive, videoSrc, boundElement 
   const skipLowerBoundRef = useRef(0);
   // プロ女優判定の最新値を ref に同期。playVideo は useCallback で deps を絞っていて
   // 再生成したくないので、ref 経由で最新の isProActress を読めるようにしておく。
-  // (props の isProActress は useEffect で ref に書き写される)
-  const isProActressRef = useRef(false);
+  // 初期値を prop から取ることで、初回 active mount (autoplay が最初に走る前) でも
+  // 5 秒スキップ判定を取り逃がさない。以降の変化は下の useLayoutEffect で同期する。
+  const isProActressRef = useRef(isProActress);
 
   // 同 slug 作品で「直近の再生位置」を記憶しておく ref。
   // 再生中に <video> が onError → force リトライで src が差し替わったときに、
@@ -1971,6 +1972,21 @@ export function useFeedPlayback({ slug, title, isActive, videoSrc, boundElement 
         proActressSeekDeadlineRef.current = null;
       }
       proActressSeekInFlightRef.current = false;
+      // ジェスチャ系タイマーもアンマウントで確実に破棄する。これらが残っていると
+      // アンマウント後に fireTogglePlay や setState が走り、"unmounted component
+      // での更新" 警告や、破棄済み要素への副作用を引き起こす。
+      if (longPressTimerRef.current != null) {
+        clearTimeout(longPressTimerRef.current);
+        longPressTimerRef.current = null;
+      }
+      if (tapTimerRef.current != null) {
+        clearTimeout(tapTimerRef.current);
+        tapTimerRef.current = null;
+      }
+      if (pcClickTimerRef.current != null) {
+        clearTimeout(pcClickTimerRef.current);
+        pcClickTimerRef.current = null;
+      }
     };
   }, []);
 
@@ -2057,9 +2073,11 @@ export function useFeedPlayback({ slug, title, isActive, videoSrc, boundElement 
   }, [isActive, setShimmerVisible, setSpinnerVisible, setFastBadge, stopProgressLoop, clearProActressSeekInFlight]);
 
   // props.isProActress を ref に同期。playVideo (useCallback) から最新値を参照できるようにする。
-  // この同期は他の effect より先に走らせたいので、useLayoutEffect を使い、React 18 の
-  // 同期コミット直後 (= 子の useEffect が走る前) に確実に書き込む。
-  useEffect(() => {
+  // この同期は他の effect (特に autoplay 系の useEffect) より先に走らせたいので、
+  // useLayoutEffect を使い、React のコミット直後 (= 子の useEffect が走る前) に
+  // 確実に書き込む。以前は useEffect だったためコメントと実装が乖離しており、
+  // 初回 active mount で autoplay が古い ref 値 (false) を読む余地があった。
+  useLayoutEffect(() => {
     isProActressRef.current = isProActress;
   }, [isProActress]);
 
@@ -2666,7 +2684,20 @@ export function useFeedPlayback({ slug, title, isActive, videoSrc, boundElement 
       video.removeEventListener("canplaythrough", handleCanPlayThrough);
       video.removeEventListener("stalled", handleStalled);
     };
-  }, [isActive, setSpinnerVisible, slug, clearProActressSeekInFlight]);
+    // videoSrc / boundElement / fallbackEpoch は videoRef.current が指す実要素を
+    // 差し替える (promote / remount / fallback) トリガー。これらを deps に含めない
+    // と、要素が入れ替わったときに旧要素へリスナが残り、新要素の playing による
+    // spinner clear や activePlayingObservedRef 更新を取り逃がす。autoplay 側の
+    // effect (同じ 4 つを deps に持つ) と貼り替えタイミングを一致させる。
+  }, [
+    isActive,
+    videoSrc,
+    boundElement,
+    fallbackEpoch,
+    setSpinnerVisible,
+    slug,
+    clearProActressSeekInFlight,
+  ]);
 
   // フォールバック: 念のため IntersectionObserver でも監視する。
   // (端末向きを変えたときや SSR ハイドレート直後など、isActive prop の同期前に発火するケースに備える)
@@ -2779,7 +2810,16 @@ export function useFeedPlayback({ slug, title, isActive, videoSrc, boundElement 
       video.muted = false;
       isMutedRef.current = false;
       setIsMuted(false);
-      if (video.paused) { video.play().catch(() => {}); isPlayingRef.current = true; startProgressLoop(); }
+      if (video.paused) {
+        // 再生状態 / progress loop は play() が実際に成功してから更新する。
+        // 以前は play() の解決を待たずに isPlayingRef=true + startProgressLoop()
+        // していたため、play() が拒否されても「再生中」扱いになり progress loop
+        // だけが空回りしていた。
+        video.play().then(() => {
+          isPlayingRef.current = true;
+          startProgressLoop();
+        }).catch(() => { /* 再生できなければ状態は据え置き (停止のまま) */ });
+      }
     } else {
       globalIsMuted = true;
       video.muted = true;

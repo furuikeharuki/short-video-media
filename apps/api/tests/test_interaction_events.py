@@ -94,6 +94,32 @@ def test_rejects_oversized_metadata(fake_db: _FakeDb) -> None:
     assert fake_db.added == []
 
 
+def test_rejects_metadata_over_byte_limit(fake_db: _FakeDb) -> None:
+    client = TestClient(app)
+    resp = client.post(
+        "/api/v1/interaction-events",
+        json={"event_name": "play", "slug": "abc", "metadata": {"note": "あ" * 5000}},
+    )
+    assert resp.status_code == 400
+    assert "metadata too large" in resp.text
+    assert fake_db.added == []
+
+
+def test_rejects_too_deep_metadata(fake_db: _FakeDb) -> None:
+    client = TestClient(app)
+    resp = client.post(
+        "/api/v1/interaction-events",
+        json={
+            "event_name": "play",
+            "slug": "abc",
+            "metadata": {"a": {"b": {"c": {"d": {"e": 1}}}}},
+        },
+    )
+    assert resp.status_code == 400
+    assert "metadata too deeply nested" in resp.text
+    assert fake_db.added == []
+
+
 def test_progress_ratio_bounds(fake_db: _FakeDb) -> None:
     client = TestClient(app)
     # 1.0 超は pydantic で 422

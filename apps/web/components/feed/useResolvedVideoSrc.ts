@@ -353,6 +353,10 @@ export function useResolvedVideoSrc({
     if (inFlightRef.current) {
       inFlightRef.current.abort();
     }
+    // 予約済みの backoff timer があれば必ず解除する。これをしないと、
+    // 前回失敗で仕込んだ backoff timer が後から発火して runForceResolve() を
+    // 二重に呼び、handleError 起点の手動リトライと衝突して二重リトライになる。
+    clearBackoff();
     const controller = new AbortController();
     inFlightRef.current = controller;
     setState((prev) => ({ phase: "retrying", url: prev.url, highUrl: prev.highUrl }));

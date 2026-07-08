@@ -104,27 +104,30 @@ export default function FeedItemVideo({
   const onSeekedRef = useRef(onSeeked);
   const onPlayingRef = useRef(onPlaying);
   const onErrorRef = useRef(onError);
-  useEffect(() => {
+  // handler ref の同期は useLayoutEffect で行う。adopt lifecycle (下の (A) の
+  // useLayoutEffect) は promoted 要素を同期採用し、その場で合成 readiness event
+  // (onCanPlay / onLoadedData / onPlaying 等) を呼ぶ。handler 同期が passive な
+  // useEffect だと、同一コミットで handler props と promoted 要素が同時に変わった
+  // 場合に「古い handler ref を合成イベントで呼ぶ」余地があった。useLayoutEffect
+  // 同士は宣言順に実行され、この同期は adopt effect より前に宣言しているため、
+  // adopt が走る時点で必ず最新 handler が入っている。
+  useLayoutEffect(() => {
     onLoadStartRef.current = onLoadStart;
-  }, [onLoadStart]);
-  useEffect(() => {
     onLoadedMetadataRef.current = onLoadedMetadata;
-  }, [onLoadedMetadata]);
-  useEffect(() => {
     onLoadedDataRef.current = onLoadedData;
-  }, [onLoadedData]);
-  useEffect(() => {
     onCanPlayRef.current = onCanPlay;
-  }, [onCanPlay]);
-  useEffect(() => {
     onSeekedRef.current = onSeeked;
-  }, [onSeeked]);
-  useEffect(() => {
     onPlayingRef.current = onPlaying;
-  }, [onPlaying]);
-  useEffect(() => {
     onErrorRef.current = onError;
-  }, [onError]);
+  }, [
+    onLoadStart,
+    onLoadedMetadata,
+    onLoadedData,
+    onCanPlay,
+    onSeeked,
+    onPlaying,
+    onError,
+  ]);
 
   // (A) adopt / destroy lifecycle。promotedElement が実際に変わった (= 別要素に
   // rebind された、または null になった) ときだけ走る。preload や handler 変動では

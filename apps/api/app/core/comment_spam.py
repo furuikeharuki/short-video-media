@@ -85,9 +85,14 @@ class DuplicateBodyGuard:
         while len(self._store) > self._max_entries:
             self._store.popitem(last=False)
 
-    def check_and_record(self, identity: str, normalized_body: str) -> None:
+    def check(self, identity: str, normalized_body: str) -> None:
         """同一 identity + 同一 normalized_body が window_sec 以内に既に
-        記録されていれば 429 を投げる。問題なければ now を記録する。"""
+        記録されていれば 429 を投げる。**記録はしない** (副作用なし)。
+
+        「重複判定」と「記録」を分離することで、後続の検証 (親コメント存在
+        チェック等) で 4xx になるリクエストの本文を誤って記録し、正しい
+        再試行まで重複扱いにしてしまう問題を避ける。記録は投稿成功後に
+        `record()` を呼ぶ。"""
         key = (identity, normalized_body)
         now = time.monotonic()
         with self._lock:
@@ -98,9 +103,24 @@ class DuplicateBodyGuard:
                     status_code=status.HTTP_429_TOO_MANY_REQUESTS,
                     detail="Duplicate comment posted recently",
                 )
+
+    def record(self, identity: str, normalized_body: str) -> None:
+        """`identity` + `normalized_body` の投稿時刻を記録する (投稿成功後に呼ぶ)。"""
+        key = (identity, normalized_body)
+        now = time.monotonic()
+        with self._lock:
+            self._evict_locked(now)
             # OrderedDict の末尾に置き直すことで LRU 性を維持
             self._store.pop(key, None)
             self._store[key] = now
+
+    def check_and_record(self, identity: str, normalized_body: str) -> None:
+        """`check()` して問題なければ `record()` する後方互換ヘルパ。
+
+        重複記録による再試行の巻き添えを避けたい呼び出し元 (コメント作成
+        エンドポイント) は `check()` と `record()` を個別に使うこと。"""
+        self.check(identity, normalized_body)
+        self.record(identity, normalized_body)
 
     # ---------- testing helpers --------------------------------------------
     def _size_for_tests(self) -> int:

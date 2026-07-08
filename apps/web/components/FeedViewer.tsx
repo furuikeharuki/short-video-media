@@ -96,7 +96,24 @@ function isTextInputTarget(target: EventTarget | null): boolean {
 
 type FeedSlide =
   | { kind: "video"; movie: MovieCard; videoIndex: number }
-  | { kind: "ad"; adIndex: number; key: string };
+  | { kind: "ad"; adIndex: number; key: string; nextVideoIndex: number };
+
+function videoCountForSlide(slide: FeedSlide | undefined): number {
+  if (!slide) return 0;
+  return slide.kind === "video" ? slide.videoIndex + 1 : slide.nextVideoIndex;
+}
+
+function videoCountForSlides(slides: FeedSlide[]): number {
+  return videoCountForSlide(slides[slides.length - 1]);
+}
+
+function adCountForSlides(slides: FeedSlide[]): number {
+  for (let i = slides.length - 1; i >= 0; i -= 1) {
+    const slide = slides[i];
+    if (slide.kind === "ad") return slide.adIndex + 1;
+  }
+  return 0;
+}
 
 function appendSlides(
   prev: FeedSlide[],
@@ -105,14 +122,19 @@ function appendSlides(
   adEnabled: boolean,
 ): FeedSlide[] {
   if (newMovies.length === 0) return prev;
-  let videoCount = prev.filter(s => s.kind === "video").length;
-  let adCount    = prev.filter(s => s.kind === "ad").length;
+  let videoCount = videoCountForSlides(prev);
+  let adCount    = adCountForSlides(prev);
   const added: FeedSlide[] = [];
   for (const movie of newMovies) {
     added.push({ kind: "video", movie, videoIndex: videoCount });
     videoCount++;
     if (adEnabled && interval > 0 && videoCount % interval === 0) {
-      added.push({ kind: "ad", adIndex: adCount, key: `ad-${adCount}` });
+      added.push({
+        kind: "ad",
+        adIndex: adCount,
+        key: `ad-${adCount}`,
+        nextVideoIndex: videoCount,
+      });
       adCount++;
     }
   }
@@ -153,10 +175,6 @@ export default function FeedViewer({
   const lastIndexChangeRef = useRef(0);
   const rapidSettleTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  const movieItems = slides
-    .filter((s): s is Extract<FeedSlide, { kind: "video" }> => s.kind === "video")
-    .map((s) => s.movie);
-
   useEffect(() => {
     for (const item of items) {
       primeResolveMp4Cache(item.slug, item);
@@ -177,22 +195,19 @@ export default function FeedViewer({
   const currentVideoIndex =
     activeSlide?.kind === "video"
       ? activeSlide.videoIndex
-      : slides
-          .slice(0, currentIndex + 1)
-          .filter((s): s is Extract<FeedSlide, { kind: "video" }> => s.kind === "video")
-          .length;
+      : activeSlide?.nextVideoIndex ?? videoCountForSlide(slides[currentIndex - 1]);
 
-  usePrefetchResolveMp4(movieItems, currentVideoIndex, isRapidSwiping);
+  usePrefetchResolveMp4(items, currentVideoIndex, isRapidSwiping);
   // 遠距離 (current+6..+15) を低優先度でバックグラウンド resolve。
   // 近距離 prefetch / active と同じ resolveCache を共有するので、ユーザーが
   // そこに到達するまでに URL が温まっている確率を上げる。
-  useWarmResolveMp4(movieItems, currentVideoIndex, isRapidSwiping);
+  useWarmResolveMp4(items, currentVideoIndex, isRapidSwiping);
   const {
     slots: prefetchSlots,
     handleSlotError,
     handleSlotMetadata,
     handleSlotCanPlay,
-  } = usePrefetchVideoBytes(movieItems, currentVideoIndex, isRapidSwiping);
+  } = usePrefetchVideoBytes(items, currentVideoIndex, isRapidSwiping);
 
   const [dragPx, setDragPx] = useState(0);
   const dragStartY         = useRef(0);
@@ -331,10 +346,8 @@ export default function FeedViewer({
       setCurrentIndex(nextIdx);
       updateWindow(nextIdx, prevSlides);
       onIndexChange?.(nextIdx);
-      const movieCount = prevSlides.filter(s => s.kind === "video").length;
-      const passedMovies = prevSlides
-        .slice(0, nextIdx + 1)
-        .filter(s => s.kind === "video").length;
+      const movieCount = videoCountForSlides(prevSlides);
+      const passedMovies = videoCountForSlide(prevSlides[nextIdx]);
       if (movieCount - passedMovies <= 5) onNearEnd?.(nextIdx);
       return prevSlides;
     });

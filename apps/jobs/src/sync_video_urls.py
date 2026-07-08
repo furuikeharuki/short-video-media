@@ -213,7 +213,10 @@ async def _process_chunk(
     )
 
     # 2) 直列 DB 書き込み (単一セッション)。commit はチャンク末尾で 1 回。
-    wrote = False
+    #    counters.saved は「実際に commit が成功して DB に書けた件数」を表す。
+    #    commit 前に加算すると、末尾の commit が失敗したチャンク分を過大計上して
+    #    しまうため、staged 件数をローカルに数え、commit 成功後にまとめて足す。
+    staged = 0
     for (movie_id, content_id), resolved in zip(chunk, results):
         if resolved is None:
             continue
@@ -231,18 +234,22 @@ async def _process_chunk(
         await movie_video_url_service.persist_resolved(
             session, movie_id, resolved, commit=False
         )
-        counters.saved += 1
-        wrote = True
+        staged += 1
 
-    if wrote:
+    if staged:
         try:
             await session.commit()
         except Exception as e:  # noqa: BLE001
             print(f"  [error] chunk commit failed: {e}")
+            # commit できていないので saved には計上しない。失敗として扱う。
+            counters.errors += staged
             try:
                 await session.rollback()
             except Exception:  # noqa: BLE001
                 pass
+        else:
+            # commit 成功時のみ実書き込み件数を計上する。
+            counters.saved += staged
 
 
 async def main(

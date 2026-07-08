@@ -78,8 +78,10 @@ def _to_comment_out(c: Comment, replies: list[Comment] | None = None) -> Comment
 
 
 async def _resolve_movie_id(db: AsyncSession, slug: str) -> str:
-    """slug → movie_id を引く。見つからなければ 404。"""
-    result = await db.execute(select(Movie.id).where(Movie.slug == slug))
+    """slug → movie_id を引く。見つからない / 非表示なら 404。"""
+    result = await db.execute(
+        select(Movie.id).where(Movie.slug == slug, Movie.is_visible.is_(True))
+    )
     movie_id = result.scalar_one_or_none()
     if movie_id is None:
         raise HTTPException(
@@ -190,8 +192,12 @@ async def create_comment(
 
     # 3) 同一 identity + 同一本文の短時間連投を防ぐ。
     #    ログイン中はユーザー ID、匿名は IP を identity に使う。
+    #    ここでは「重複判定」だけ行い、記録は投稿成功後 (後述) に回す。
+    #    先に record してしまうと、この後の親コメント検証で 4xx になった
+    #    リクエストの本文まで記録され、正しい再試行が重複扱いになるため。
     identity = identity_for_request(request, user.id if user is not None else None)
-    dup_guard.check_and_record(identity, normalize_body(text))
+    normalized = normalize_body(text)
+    dup_guard.check(identity, normalized)
 
     if body.parent_id is not None:
         parent_q = select(Comment).where(
@@ -222,6 +228,10 @@ async def create_comment(
     )
     db.add(comment)
     await db.commit()
+    # 投稿が確定した後にだけ重複ガードへ記録する (再試行の巻き添え防止)。
+    # commit 後・refresh 前に記録することで、commit は成功したが refresh が失敗した
+    # 場合の再試行でも同一本文の二重作成を防ぐ。
+    dup_guard.record(identity, normalized)
     await db.refresh(comment)
     return _to_comment_out(comment, [])
 

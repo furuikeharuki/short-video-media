@@ -48,7 +48,9 @@ async def get_movie_video_url_targets(
 
 
 async def get_movie_by_slug(db: AsyncSession, slug: str) -> Movie | None:
-    result = await db.execute(select(Movie).where(Movie.slug == slug))
+    result = await db.execute(
+        select(Movie).where(Movie.slug == slug, Movie.is_visible.is_(True))
+    )
     return result.scalar_one_or_none()
 
 
@@ -59,13 +61,17 @@ async def get_all_movie_ids(db: AsyncSession, genres: list[str] | None = None) -
         query = (
             select(Movie.id)
             .join(Movie.genres)
-            .where(Genre.name.in_(genres))
+            .where(Movie.is_visible.is_(True), Genre.name.in_(genres))
             .group_by(Movie.id)
             .having(func.count(Genre.id.distinct()) == len(genres))
             .order_by(Movie.id)
         )
     else:
-        query = select(Movie.id).order_by(Movie.id)
+        query = (
+            select(Movie.id)
+            .where(Movie.is_visible.is_(True))
+            .order_by(Movie.id)
+        )
     result = await db.execute(query)
     return list(result.scalars().all())
 
@@ -74,7 +80,9 @@ async def get_movies_by_ids(db: AsyncSession, ids: list[str]) -> dict[str, Movie
     """指定IDの作品を一括取得し、id -> Movie の dict で返す。"""
     if not ids:
         return {}
-    result = await db.execute(select(Movie).where(Movie.id.in_(ids)))
+    result = await db.execute(
+        select(Movie).where(Movie.id.in_(ids), Movie.is_visible.is_(True))
+    )
     movies = result.scalars().all()
     return {m.id: m for m in movies}
 
@@ -111,7 +119,7 @@ async def get_movies_paginated(
         subq = (
             select(Movie.id)
             .join(Movie.genres)
-            .where(Genre.name.in_(genres))
+            .where(Movie.is_visible.is_(True), Genre.name.in_(genres))
             .group_by(Movie.id)
             .having(func.count(Genre.id.distinct()) == len(genres))
             .subquery()
@@ -119,8 +127,12 @@ async def get_movies_paginated(
         base_query = select(Movie).where(Movie.id.in_(select(subq)))
         count_query = select(func.count()).select_from(subq)
     else:
-        base_query = select(Movie)
-        count_query = select(func.count()).select_from(Movie)
+        base_query = select(Movie).where(Movie.is_visible.is_(True))
+        count_query = (
+            select(func.count())
+            .select_from(Movie)
+            .where(Movie.is_visible.is_(True))
+        )
 
     count_result = await db.execute(count_query)
     total = count_result.scalar_one()

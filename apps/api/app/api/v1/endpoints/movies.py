@@ -101,7 +101,7 @@ async def resolve_mp4(
                 Movie.sample_mp4_url,
                 Movie.sample_low_mp4_url,
                 Movie.sample_high_mp4_url,
-            ).where(Movie.slug == slug)
+            ).where(Movie.slug == slug, Movie.is_visible.is_(True))
         )
     ).first()
     if row is None:

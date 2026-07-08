@@ -367,6 +367,30 @@ async def test_extract_direct_fallback_returns_low_and_high(
 
 
 @pytest.mark.asyncio
+async def test_extract_args_src_uses_direct_fallback_high_as_primary(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """args.src が低画質でも、直リンク fallback に高画質があれば mp4_url も高画質にする。"""
+    raw_html = (
+        '<script>var args = {'
+        '"src": "https://cc3001.dmm.co.jp/pv/zz/q_dm_w.mp4"'
+        '};</script>'
+        '<source src="//cc3001.dmm.co.jp/pv/zz/q_dm_w.mp4">'
+        '<source src="//cc3001.dmm.co.jp/pv/zz/q_mhb_w.mp4">'
+    )
+    handler = _two_stage_handler(
+        litevideo_body=_litevideo_html(),
+        player_body=raw_html,
+    )
+    _install_transport(monkeypatch, handler)
+
+    result = await extract_mp4_url("args_low_direct_high", "affi-001")
+    assert result.low_mp4_url == "https://cc3001.dmm.co.jp/pv/zz/q_dm_w.mp4"
+    assert result.high_mp4_url == "https://cc3001.dmm.co.jp/pv/zz/q_mhb_w.mp4"
+    assert result.mp4_url == "https://cc3001.dmm.co.jp/pv/zz/q_mhb_w.mp4"
+
+
+@pytest.mark.asyncio
 async def test_extract_args_without_trailing_semicolon(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

@@ -197,6 +197,9 @@ const resolveCache = new Map<string, CacheEntry>();
  * TTL は API 側と揃えて 1 時間。
  */
 const SUCCESS_CACHE_TTL_MS = 60 * 60 * 1000;
+// 長時間フィードを見続けると 1 時間 TTL 内に数百〜数千 slug が溜まり得る。
+// 体感に効くのは直近で表示/先読みした近傍だけなので、挿入順 LRU で上限を設ける。
+const SUCCESS_CACHE_MAX_ENTRIES = 256;
 type SuccessEntry = { value: ResolveMp4Response; storedAt: number };
 const successCache = new Map<string, SuccessEntry>();
 
@@ -207,11 +210,20 @@ function readSuccessCache(slug: string): ResolveMp4Response | null {
     successCache.delete(slug);
     return null;
   }
+  // Map の挿入順を更新して LRU として扱う。
+  successCache.delete(slug);
+  successCache.set(slug, entry);
   return entry.value;
 }
 
 function writeSuccessCache(slug: string, value: ResolveMp4Response): void {
+  if (successCache.has(slug)) successCache.delete(slug);
   successCache.set(slug, { value, storedAt: Date.now() });
+  while (successCache.size > SUCCESS_CACHE_MAX_ENTRIES) {
+    const oldest = successCache.keys().next().value;
+    if (oldest === undefined) break;
+    successCache.delete(oldest);
+  }
 }
 
 export function primeResolveMp4Cache(

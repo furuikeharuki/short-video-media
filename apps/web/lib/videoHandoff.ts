@@ -150,8 +150,16 @@ function ensureCleanupTimer() {
   }, POOL_CLEANUP_INTERVAL_MS);
 }
 
+function stopCleanupTimer() {
+  if (cleanupTimer != null) {
+    clearInterval(cleanupTimer);
+    cleanupTimer = null;
+  }
+}
+
 function cleanupExpired() {
   const now = Date.now();
+  let evicted = 0;
   for (const [slug, entry] of registry) {
     if (!entry.detached) continue;
     if (entry.pinned) continue;
@@ -159,12 +167,23 @@ function cleanupExpired() {
       entry.readiness === "canplay" ? POOL_TTL_CANPLAY_MS : POOL_TTL_PENDING_MS;
     if (now - entry.pooledAt > ttl) {
       disposeEntry(entry);
+      evicted += 1;
       vtHandoffLog(
         `pool evict slug=${slug} reason=ttl readiness=${entry.readiness} age=${now - entry.pooledAt}ms`,
       );
     }
   }
-  notify();
+  // 実際に eviction (= registry の変化) があったときだけ購読者へ通知する。
+  // 以前は毎周期 notify() していたため、registry/listeners が空でも 2.5 秒ごとに
+  // 不要な再描画コールバックが走っていた。
+  if (evicted > 0) {
+    notify();
+  }
+  // クリーンアップ対象が無くなったらタイマーを止める (idle 時に回し続けない)。
+  // 新しい要素が register されたら ensureCleanupTimer() で再始動する。
+  if (registry.size === 0) {
+    stopCleanupTimer();
+  }
 }
 
 function notify() {

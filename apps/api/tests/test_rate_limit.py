@@ -10,15 +10,38 @@ from typing import Iterator
 import pytest
 from fastapi import HTTPException
 
-from app.core.rate_limit import SlidingWindowRateLimiter
+from app.core import rate_limit
+from app.core.rate_limit import SlidingWindowRateLimiter, client_ip
+
+
+class _FakeClient:
+    def __init__(self, host: str) -> None:
+        self.host = host
 
 
 class _FakeRequest:
     """check() が呼ぶ headers / client.host だけを持つ最低限のスタブ。"""
 
-    def __init__(self, ip: str) -> None:
+    def __init__(self, ip: str, *, peer: str = "127.0.0.1") -> None:
         self.headers: dict[str, str] = {"x-forwarded-for": ip}
-        self.client = None  # 使われない (x-forwarded-for を優先するため)
+        self.client = _FakeClient(peer)
+
+
+def test_client_ip_uses_trusted_proxy_hops_from_right(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """XFF 左端の自称 IP ではなく、信頼 proxy 段数ぶん右から読んだ IP を採用する。"""
+    monkeypatch.setattr(rate_limit.settings, "TRUSTED_PROXY_HOPS", 1)
+    req = _FakeRequest("spoofed, 203.0.113.9", peer="10.0.0.10")
+    assert client_ip(req) == "203.0.113.9"
+
+
+def test_client_ip_ignores_headers_when_proxy_hops_zero(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(rate_limit.settings, "TRUSTED_PROXY_HOPS", 0)
+    req = _FakeRequest("spoofed, 203.0.113.9", peer="10.0.0.10")
+    assert client_ip(req) == "10.0.0.10"
 
 
 def test_per_second_limit_raises_429() -> None:

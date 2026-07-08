@@ -68,19 +68,19 @@ class _ResultWithScalars:
 class _FakeStore:
     """テスト用の最小 in-memory DB スタブ。
 
-    - movies: dict[slug, movie_id]
+    - movies: dict[slug, dict("id" -> movie_id, "is_visible" -> bool)]
     - users: dict[user_id, dict("display_name" -> str|None)]
     - comments: dict[id, dict]
     """
 
     def __init__(self) -> None:
-        self.movies: dict[str, str] = {}
+        self.movies: dict[str, dict[str, Any]] = {}
         self.users: dict[str, dict[str, Any]] = {}
         self.comments: dict[str, dict[str, Any]] = {}
 
-    def add_movie(self, slug: str) -> str:
+    def add_movie(self, slug: str, *, is_visible: bool = True) -> str:
         movie_id = str(uuid.uuid4())
-        self.movies[slug] = movie_id
+        self.movies[slug] = {"id": movie_id, "is_visible": is_visible}
         return movie_id
 
     def add_user(self, user_id: str, display_name: str | None = None) -> None:
@@ -144,13 +144,18 @@ class _FakeDB:
                 )
             )
 
-        # SELECT movies.id FROM movies WHERE movies.slug = X
+        # SELECT movies.id FROM movies WHERE movies.slug = X AND movies.is_visible IS true
         if "movies.slug" in sql and "movies.id" in sql:
             import re
 
             m = re.search(r"slug\s*=\s*'([^']+)'", sql)
             slug = m.group(1) if m else None
-            return _Row(self.store.movies.get(slug))
+            movie = self.store.movies.get(slug) if slug is not None else None
+            if movie is None:
+                return _Row(None)
+            if "is_visible" in sql and not movie["is_visible"]:
+                return _Row(None)
+            return _Row(movie["id"])
 
         # SELECT comments.* FROM comments WHERE movie_id = X AND parent_id IS NULL ORDER BY created_at DESC
         if "comments" in sql.lower() and "parent_id is null" in sql.lower():
@@ -325,6 +330,17 @@ def test_list_returns_404_for_unknown_slug(store: _FakeStore) -> None:
     client = _make_client(store, user_id=None)
     res = client.get("/api/v1/movies/unknown-slug/comments")
     assert res.status_code == 404
+
+
+def test_hidden_movie_comments_are_not_public(store: _FakeStore) -> None:
+    store.add_movie("hidden-movie", is_visible=False)
+    client = _make_client(store, user_id=None)
+    listed = client.get("/api/v1/movies/hidden-movie/comments")
+    created = client.post(
+        "/api/v1/movies/hidden-movie/comments", json={"body": "should not post"}
+    )
+    assert listed.status_code == 404
+    assert created.status_code == 404
 
 
 def test_anonymous_create_uses_default_display_name(store: _FakeStore) -> None:

@@ -33,18 +33,49 @@ from app.core.config import settings
 
 
 def client_ip(request: Request) -> str:
-    """リバースプロキシ越しに信頼できる client IP を返す。
+    """リバースプロキシ越しの「信頼できる」 client IP を返す。
 
-    Vercel / Railway / Cloudflare などの一般的なヘッダを優先し、最後に
-    request.client.host にフォールバックする。proxy が信頼できない環境では
-    ヘッダを偽装される余地はあるが、現状の Railway / Xserver 構成は
-    内部のリバースプロキシのみが付与するため許容する。
+    セキュリティ上の前提:
+        X-Forwarded-For (XFF) の *左端* はクライアントが自由に詐称できる。
+        素朴に左端を採用すると、攻撃者が毎回別の偽 IP を送るだけで per-IP
+        レートリミットを丸ごと回避できてしまう。そこで「信頼できるリバース
+        プロキシの段数」(settings.TRUSTED_PROXY_HOPS) を使い、XFF の *右側*
+        (= 各信頼プロキシが追記した実 peer IP) から数えて該当位置を採用する。
+
+    アルゴリズム:
+        - hops <= 0: ヘッダを一切信用せず request.client.host を返す
+          (プロキシ無しで直接公開する構成)。
+        - hops >= 1: XFF を右から数えて hops 番目 (parts[-hops]) を返す。
+          これは「最も外側の信頼プロキシが観測した接続元 IP」であり、
+          その左側 (= クライアント自称部分) は無視されるので詐称できない。
+        - XFF が期待する段数より短い / 存在しない場合は、信頼プロキシが
+          セットする単値ヘッダ (x-real-ip / cf-connecting-ip) → 最後に
+          request.client.host の順にフォールバックする (fail-closed)。
     """
-    for header in ("x-forwarded-for", "x-real-ip", "cf-connecting-ip"):
+    peer = request.client.host if request.client else "unknown"
+
+    hops = settings.TRUSTED_PROXY_HOPS
+    if hops < 0:
+        hops = 0
+    if hops == 0:
+        # プロキシを信頼しない構成: 実 TCP peer のみを使う。
+        return peer
+
+    xff = request.headers.get("x-forwarded-for")
+    if xff:
+        parts = [p.strip() for p in xff.split(",") if p.strip()]
+        if len(parts) >= hops:
+            # 右から hops 番目 = 最外側の信頼プロキシが観測した接続元。
+            return parts[-hops]
+        # XFF が期待段数より短い (構成ミス / プロキシがヘッダを削った等)。
+        # 左端は詐称可能なので採用せず、下の単値ヘッダ / peer にフォールバック。
+
+    # 信頼プロキシが上書きセットする単値ヘッダ。XFF が使えない時の保険。
+    for header in ("x-real-ip", "cf-connecting-ip"):
         v = request.headers.get(header)
         if v:
             return v.split(",")[0].strip()
-    return request.client.host if request.client else "unknown"
+    return peer
 
 
 class SlidingWindowRateLimiter:

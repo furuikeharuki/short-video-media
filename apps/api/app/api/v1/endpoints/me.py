@@ -92,9 +92,13 @@ async def add_bookmark(
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> BookmarkStateResponse:
     """ブックマーク追加 (既にある場合は何もしない)。"""
-    # 作品の存在チェック
+    # 作品の存在チェック (非表示作品はブックマーク不可)
     exists = (
-        await db.execute(select(Movie.id).where(Movie.id == body.movie_id))
+        await db.execute(
+            select(Movie.id).where(
+                Movie.id == body.movie_id, Movie.is_visible.is_(True)
+            )
+        )
     ).scalar_one_or_none()
     if exists is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Movie not found")
@@ -158,7 +162,11 @@ async def record_view(
 ) -> None:
     """視聴を1件記録する。存在すれば view_count += 1 / last_viewed_at 更新。"""
     exists = (
-        await db.execute(select(Movie.id).where(Movie.id == body.movie_id))
+        await db.execute(
+            select(Movie.id).where(
+                Movie.id == body.movie_id, Movie.is_visible.is_(True)
+            )
+        )
     ).scalar_one_or_none()
     if exists is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Movie not found")

@@ -209,6 +209,35 @@ def test_post_same_body_different_users_not_blocked() -> None:
     assert r2.status_code == 201
 
 
+def test_invalid_parent_does_not_poison_duplicate_guard() -> None:
+    """親コメント検証で 404 になった本文は記録せず、正しい再投稿を通す。"""
+    store = _FakeStore()
+    store.add_movie("movie-1")
+
+    _override_db(store)
+    _override_anon_user()
+    _override_limiter()
+    guard = _override_dup_guard(window_sec=60)
+
+    client = TestClient(app)
+    bad = client.post(
+        "/api/v1/movies/movie-1/comments",
+        json={"body": "retry me", "parent_id": "does-not-exist"},
+    )
+    good = client.post(
+        "/api/v1/movies/movie-1/comments",
+        json={"body": "retry me"},
+    )
+    duplicate = client.post(
+        "/api/v1/movies/movie-1/comments",
+        json={"body": "retry me"},
+    )
+    assert bad.status_code == 404
+    assert good.status_code == 201
+    assert duplicate.status_code == 429
+    assert guard._size_for_tests() == 1
+
+
 # ---------- endpoint: NG word ----------
 
 

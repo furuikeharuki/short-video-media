@@ -6,6 +6,9 @@
 
 from __future__ import annotations
 
+import json
+from typing import Any
+
 from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -16,6 +19,44 @@ from app.repositories.interaction_event_repository import (
     insert_interaction_event,
 )
 from app.schemas.interaction_event import InteractionEventAck, InteractionEventCreate
+
+
+# metadata の防御的な上限。JSONB に任意ネストの巨大 JSON を保存されると
+# ストレージ / クエリコストが膨らむため、キー数だけでなく「直列化後のバイト数」
+# と「ネスト深さ」も制限する。
+_METADATA_MAX_KEYS = 32
+_METADATA_MAX_BYTES = 4096
+_METADATA_MAX_DEPTH = 4
+
+
+def _json_depth(value: Any, _current: int = 1) -> int:
+    """dict / list のネスト深さを返す (スカラは 0、最上位 dict/list は 1)。"""
+    if isinstance(value, dict):
+        if not value:
+            return _current
+        return max(_json_depth(v, _current + 1) for v in value.values())
+    if isinstance(value, list):
+        if not value:
+            return _current
+        return max(_json_depth(v, _current + 1) for v in value)
+    return _current - 1
+
+
+def _validate_metadata(metadata: dict[str, Any] | None) -> None:
+    """metadata の防御的なサイズ / 深さチェック。超過時は 400 を投げる。"""
+    if metadata is None:
+        return
+    if len(metadata) > _METADATA_MAX_KEYS:
+        raise HTTPException(status_code=400, detail="metadata too large")
+    # 直列化してバイト数と JSON 妥当性を同時に確認する。
+    try:
+        encoded = json.dumps(metadata, ensure_ascii=False, separators=(",", ":"))
+    except (TypeError, ValueError) as e:
+        raise HTTPException(status_code=400, detail="metadata not serializable") from e
+    if len(encoded.encode("utf-8")) > _METADATA_MAX_BYTES:
+        raise HTTPException(status_code=400, detail="metadata too large")
+    if _json_depth(metadata) > _METADATA_MAX_DEPTH:
+        raise HTTPException(status_code=400, detail="metadata too deeply nested")
 
 
 router = APIRouter()
@@ -36,10 +77,10 @@ async def create_interaction_event(
     if payload.event_name not in ALLOWED_INTERACTION_EVENTS:
         raise HTTPException(status_code=400, detail="invalid event_name")
 
-    # metadata は PII を含めないよう、サイズも控えめに制限する。
+    # metadata は PII を含めないよう、サイズ (キー数 / バイト数 / 深さ) を
+    # 控えめに制限する。
     metadata = payload.metadata
-    if metadata is not None and len(metadata) > 32:
-        raise HTTPException(status_code=400, detail="metadata too large")
+    _validate_metadata(metadata)
 
     await insert_interaction_event(
         db,

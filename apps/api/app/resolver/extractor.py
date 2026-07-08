@@ -387,7 +387,11 @@ def _parse_mp4_candidates(html: str) -> _Candidates:
                         # primary を high 側に揃え、低画質候補を fallback の low から拾う。
                         low = fallback.low if _suffix_rank(fallback.low) < _suffix_rank(primary) else primary
                         high = primary if _suffix_rank(primary) >= _suffix_rank(fallback.high) else fallback.high
-                        return _Candidates(low=low, high=high, primary=primary)
+                        # mp4_url (= primary) は「最良の 1 本」を表す互換フィールド。
+                        # ここで high が args.src より高画質になり得るため、primary を
+                        # high に揃えて mp4_url が低画質に据え置かれないようにする
+                        # (コメントの意図どおり。直リンク側に高品質が有るケースを救う)。
+                        return _Candidates(low=low, high=high, primary=high)
                     return _Candidates(low=primary, high=primary, primary=primary)
                 return from_bitrates
             if from_bitrates is not None:

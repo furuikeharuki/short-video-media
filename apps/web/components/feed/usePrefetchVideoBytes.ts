@@ -379,7 +379,15 @@ export function usePrefetchVideoBytes(
   // metadata なら metadata、canplay なら canplay。これにより「ログ上は canplay
   // なのに promote 不能」という乖離は構造的に発生しない。
   useEffect(() => {
-    if (!isVideoTimingEnabled()) return;
+    // 注: このエフェクトは「診断ログ」と「機能ロジック (stale/justClaimed signal の
+    // 消費 + active/+1 の緊急 resolve warm)」の両方を担う。以前は先頭で
+    // isVideoTimingEnabled() を見て全体を return していたが、そうすると通常
+    // (計測フラグ off) の本番で:
+    //   - consumeStaleClaim / consumeJustClaimed が消費されず signal が残留し、
+    //   - active/+1 の緊急 resolve warm も一切走らない、
+    // という機能欠落が起きていた。vtPrefetchLog 自体が内部で計測フラグを見て
+    // no-op になるため、ここではゲートせず常に機能ロジックを走らせ、純粋な
+    // ログ専用の追加作業 (readiness window の文字列生成) だけを条件付きにする。
     const activeItem = items[currentIndex];
     if (!activeItem || !activeItem.slug) return;
     if (lastActiveSlugRef.current === activeItem.slug) return;
@@ -412,26 +420,29 @@ export function usePrefetchVideoBytes(
     // readiness window: current-1..+3。各セルとも registry を直接読む。
     // window セルでも stale-claim signal を peek (consume せず) して、立っている
     // 間は false 表示する。consume は当該 slug が active に来たときに行う。
-    const cells: string[] = [];
-    for (let d = NEAR_PROTECT_MIN_OFFSET; d <= NEAR_PROTECT_MAX_OFFSET; d += 1) {
-      const idx = currentIndex + d;
-      const it = idx >= 0 && idx < items.length ? items[idx] : null;
-      const cellKey = d === 0 ? "current" : fmtOffset(d);
-      if (!it || !it.slug) {
-        cells.push(`${cellKey}=oob`);
-        continue;
+    // この window 生成は純粋にログ用途なので、計測フラグ off のときはスキップする。
+    if (isVideoTimingEnabled()) {
+      const cells: string[] = [];
+      for (let d = NEAR_PROTECT_MIN_OFFSET; d <= NEAR_PROTECT_MAX_OFFSET; d += 1) {
+        const idx = currentIndex + d;
+        const it = idx >= 0 && idx < items.length ? items[idx] : null;
+        const cellKey = d === 0 ? "current" : fmtOffset(d);
+        if (!it || !it.slug) {
+          cells.push(`${cellKey}=oob`);
+          continue;
+        }
+        let label: string;
+        if (d === 0) {
+          label = activeLabel;
+        } else if (peekStaleClaim(it.slug) !== null) {
+          label = "false";
+        } else {
+          label = registryLabel(it.slug);
+        }
+        cells.push(`${cellKey}=${label}`);
       }
-      let label: string;
-      if (d === 0) {
-        label = activeLabel;
-      } else if (peekStaleClaim(it.slug) !== null) {
-        label = "false";
-      } else {
-        label = registryLabel(it.slug);
-      }
-      cells.push(`${cellKey}=${label}`);
+      vtPrefetchLog(`readiness window ${cells.join(" ")}`);
     }
-    vtPrefetchLog(`readiness window ${cells.join(" ")}`);
     if (activeLabel !== "canplay") {
       vtPrefetchLog(
         `active not-ready slug=${activeItem.slug} readiness=${activeLabel} index=${currentIndex}`,
@@ -497,6 +508,18 @@ export function usePrefetchVideoBytes(
   useEffect(() => {
     const inFlight = inFlightRef.current;
     const slugToId = slugToIdRef.current;
+    const healed = healedRef.current;
+
+    const retainedSlugs = new Set<string>();
+    for (let d = NEAR_PROTECT_MIN_OFFSET; d <= NEAR_PROTECT_MAX_OFFSET; d += 1) {
+      const idx = currentIndex + d;
+      if (idx < 0 || idx >= items.length) continue;
+      const slug = items[idx]?.slug;
+      if (slug) retainedSlugs.add(slug);
+    }
+    for (const slug of healed) {
+      if (!retainedSlugs.has(slug)) healed.delete(slug);
+    }
 
     // 抑制ロジック (現在動画優先):
     //   - 現在動画がバッファリング中 (deferForActive): +2 以遠は止めるが、+1 だけは

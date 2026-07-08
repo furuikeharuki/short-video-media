@@ -42,6 +42,10 @@ import {
 const WARM_START = 4;
 const WARM_END = 12;
 const FAILURE_TTL_MS = 30_000;
+// resolved / failed の履歴は遠距離 warm 窓の少し外だけ保持する。
+// これをしないと長時間セッションで見た slug 数ぶん Set/Map が増え続ける。
+const RETAIN_BACK = 2;
+const RETAIN_AHEAD = WARM_END + 2;
 /**
  * バッチ内で resolveMp4Url を呼び出す間に挟む小休止。
  * 同 slug が active や近距離 prefetch とぶつかると in-flight 共有でタダ乗りされるが、
@@ -80,6 +84,19 @@ export function useWarmResolveMp4(
     const inFlight = inFlightRef.current;
     const resolved = resolvedSlugsRef.current;
     const failed = failedSlugsRef.current;
+
+    const retainedSlugs = new Set<string>();
+    for (let idx = currentIndex - RETAIN_BACK; idx <= currentIndex + RETAIN_AHEAD; idx += 1) {
+      if (idx < 0 || idx >= items.length) continue;
+      const slug = items[idx]?.slug;
+      if (slug) retainedSlugs.add(slug);
+    }
+    for (const slug of resolved) {
+      if (!retainedSlugs.has(slug)) resolved.delete(slug);
+    }
+    for (const slug of failed.keys()) {
+      if (!retainedSlugs.has(slug)) failed.delete(slug);
+    }
 
     // 現在動画がバッファリング中は warm を全停止して、active の URL 解決 / Range
     // 取得に帯域とリクエストスロットを譲る。active が playing に入ったら再開する。

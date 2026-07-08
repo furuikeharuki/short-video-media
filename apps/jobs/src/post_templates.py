@@ -14,6 +14,12 @@ from __future__ import annotations
 from datetime import date
 
 from src.post_candidates import PostCandidate
+from src.x_client import MAX_TWEET_LENGTH
+
+# タイトルを詰めても最低限これだけは残す (これ未満になるなら空にする)。
+_MIN_TITLE_CHARS = 8
+# 省略記号。1 文字としてカウントする。
+_ELLIPSIS = "…"
 
 # 18 歳未満が見る前提のプラットフォーム向けに、固定の年齢注意書きを付ける。
 _AGE_NOTE = "※18歳未満閲覧禁止"
@@ -61,14 +67,42 @@ def render_post(candidate: PostCandidate, d: date, slot: int) -> str:
     """候補とローテーション情報から投稿本文を組み立てる。
 
     テンプレート選択も日付+スロットで決定的にずらし、同じ文面の連投を避ける。
+
+    タイトルが長いと完成本文が X の文字数上限 (MAX_TWEET_LENGTH) を超えて
+    投稿が丸ごと失敗する。テンプレート定型文 / URL / 年齢注意書きは必ず残し、
+    超過分はタイトル側を省略記号付きで詰めて上限に収める。
     """
     templates = _TEMPLATES.get(candidate.kind) or _TEMPLATES["movie"]
     idx = (d.toordinal() + slot) % len(templates)
+    template = templates[idx]
     # title に改行が混ざるとレイアウトが崩れるので 1 行に潰してから埋める。
     # @ 除去は完成本文の行単位 sanitize (_sanitize_keep_url) でまとめて行う。
     title = candidate.title.replace("\n", " ").strip()
-    body = templates[idx].format(title=title, url=candidate.url)
-    return _sanitize_keep_url(f"{body}\n{_AGE_NOTE}")
+
+    def _compose(t: str) -> str:
+        body = template.format(title=t, url=candidate.url)
+        return _sanitize_keep_url(f"{body}\n{_AGE_NOTE}")
+
+    text = _compose(title)
+    if len(text) <= MAX_TWEET_LENGTH:
+        return text
+
+    # 超過している。タイトル以外 (定型文 + URL + 注意書き) の長さを測り、
+    # タイトルに割ける残り文字数を求めて省略する。
+    overhead = len(_compose(""))
+    budget = MAX_TWEET_LENGTH - overhead
+    if budget <= 0:
+        # 定型文 + URL だけで上限を超える異常ケース。タイトルは空にする
+        # (これ以上は render 側で救えないので、そのまま返して呼び出し側の
+        #  長さチェックに委ねる)。
+        return _compose("")
+    # 省略記号 1 文字分を残してタイトルを詰める。
+    keep = max(0, min(len(title), budget - len(_ELLIPSIS)))
+    if keep < _MIN_TITLE_CHARS:
+        # 詰めすぎて意味をなさないならタイトルを落とす。
+        return _compose("")
+    truncated = title[:keep].rstrip() + _ELLIPSIS
+    return _compose(truncated)
 
 
 def _sanitize_keep_url(text: str) -> str:

@@ -76,6 +76,12 @@ DEFAULT_CONCURRENCY = 3
 # 直列化する (AsyncSession は同時操作不可)。全件を一度に gather すると
 # 数万件でメモリを食うため、チャンクに割って逐次処理する。
 _CHUNK_SIZE = 200
+# 一過性の上流エラー (HTTP/2 GOAWAY = ConnectionTerminated / HTTP 503 /
+# タイムアウト) は数万件を 1 本の keep-alive 接続で叩くと必ず一定数出る。
+# これらはリトライすれば自己回復するため、恒久エラー (404=ResolverNotFound) と
+# 区別して数回だけ再試行する。再試行しても駄目なら errors として計上する。
+_TRANSIENT_MAX_RETRIES = 2
+_TRANSIENT_RETRY_BACKOFF_S: tuple[float, ...] = (0.5, 1.5)
 
 
 def _get_async_url(url: str) -> str:
@@ -110,18 +116,44 @@ async def _resolve_one(
     呼び出し側で中断させるため送出する。
     """
     async with semaphore:
-        try:
-            return await resolver_client.resolve_mp4(content_id, bypass_cache=force)
-        except resolver_client.ResolverNotFound:
-            counters.not_found += 1
-            print(f"  [not_found] content_id={content_id}")
-            return None
-        except resolver_client.ResolverConfigError:
-            raise
-        except Exception as e:  # noqa: BLE001
-            counters.errors += 1
-            print(f"  [error] content_id={content_id}: {e}")
-            return None
+        attempt = 0
+        while True:
+            try:
+                return await resolver_client.resolve_mp4(
+                    content_id, bypass_cache=force
+                )
+            except resolver_client.ResolverNotFound:
+                counters.not_found += 1
+                print(f"  [not_found] content_id={content_id}")
+                return None
+            except resolver_client.ResolverConfigError:
+                raise
+            except (
+                resolver_client.ResolverUpstreamError,
+                resolver_client.ResolverTimeout,
+                resolver_client.ResolverUnavailable,
+            ) as e:
+                # 一過性エラー: 数回まで指数的に間を空けてリトライする。
+                # keep-alive 接続が GOAWAY で切れても、リトライ時に httpx が
+                # 新しい接続を張り直すため回復する。
+                if attempt < _TRANSIENT_MAX_RETRIES:
+                    backoff = _TRANSIENT_RETRY_BACKOFF_S[
+                        min(attempt, len(_TRANSIENT_RETRY_BACKOFF_S) - 1)
+                    ]
+                    print(
+                        f"  [retry] content_id={content_id} "
+                        f"attempt={attempt + 1}/{_TRANSIENT_MAX_RETRIES} err={e}"
+                    )
+                    attempt += 1
+                    await asyncio.sleep(backoff)
+                    continue
+                counters.errors += 1
+                print(f"  [error] content_id={content_id}: {e}")
+                return None
+            except Exception as e:  # noqa: BLE001
+                counters.errors += 1
+                print(f"  [error] content_id={content_id}: {e}")
+                return None
 
 
 def _chunked(seq: list, size: int):

@@ -1305,8 +1305,9 @@ export default function FeedItem({ item, isActive, isAdjacent = false, isFirst, 
     if (!isActiveRef.current) {
       return;
     }
+    noteQualitySwitch();
     handleError();
-  }, [handleError, clearHardTimeout, clearRebufferRecovery]);
+  }, [handleError, clearHardTimeout, clearRebufferRecovery, noteQualitySwitch]);
 
   useEffect(() => {
     if (!isActive || !videoSrc) {
@@ -1369,13 +1370,14 @@ export default function FeedItem({ item, isActive, isAdjacent = false, isFirst, 
           `vt ${item.slug}: active stuck recovery -> force-resolve`,
         );
       }
+      noteQualitySwitch();
       handleError();
     };
     window.addEventListener("video-active-stuck", onStuck);
     return () => {
       window.removeEventListener("video-active-stuck", onStuck);
     };
-  }, [isActive, videoSrc, item.slug, handleError]);
+  }, [isActive, videoSrc, item.slug, handleError, noteQualitySwitch]);
 
   useEffect(() => {
     // 画質切替 (低→高 upgrade / 高→低 downgrade) で videoSrc が差し替わったケース。
@@ -1584,10 +1586,13 @@ export default function FeedItem({ item, isActive, isAdjacent = false, isFirst, 
             );
           }
           const wasPlaying = !live.paused;
+          noteQualitySwitch();
           try { live.load(); } catch { /* ignore */ }
           if (wasPlaying) {
             try { void live.play(); } catch { /* ignore */ }
           }
+          queueMicrotask(() => applyQualitySwitchResume());
+          setTimeout(() => applyQualitySwitchResume(), 250);
         }
       }, REBUFFER_LOAD_KICK_MS);
 
@@ -1688,7 +1693,7 @@ export default function FeedItem({ item, isActive, isAdjacent = false, isFirst, 
       video.removeEventListener("timeupdate", onTimeUpdate);
       video.removeEventListener("progress", onProgress);
     };
-  }, [isActive, videoSrc, exhausted, videoRef, promotedElement, item.slug, handleVideoError, clearRebufferRecovery, noteQualitySwitch, downgradeToFastQuality]);
+  }, [isActive, videoSrc, exhausted, videoRef, promotedElement, item.slug, handleVideoError, clearRebufferRecovery, noteQualitySwitch, applyQualitySwitchResume, downgradeToFastQuality]);
 
   const showVideo =
     (isActive || isAdjacent) && videoSrc !== null && !exhausted;

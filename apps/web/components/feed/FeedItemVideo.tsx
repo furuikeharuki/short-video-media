@@ -298,12 +298,50 @@ export default function FeedItemVideo({
     if (promotedElement.src === src || promotedElement.currentSrc === src) {
       return;
     }
-    promotedElement.src = src;
+    const el = promotedElement;
+    const resumeAt = el.currentTime;
+    const shouldResume = Number.isFinite(resumeAt) && resumeAt > 0.5;
+    el.src = src;
     try {
-      promotedElement.load();
+      el.load();
     } catch {
       /* ignore */
     }
+    if (!shouldResume) return;
+    let settled = false;
+
+    function cleanup() {
+      el.removeEventListener("loadedmetadata", restore);
+      el.removeEventListener("loadeddata", restore);
+      el.removeEventListener("canplay", restore);
+      el.removeEventListener("timeupdate", restore);
+    }
+
+    function restore() {
+      if (settled) return;
+      const dur = el.duration;
+      if (!Number.isFinite(dur) || resumeAt >= dur - 0.5) {
+        settled = true;
+        cleanup();
+        return;
+      }
+      if (el.currentTime >= resumeAt - 0.5) {
+        settled = true;
+        cleanup();
+        return;
+      }
+      try {
+        el.currentTime = resumeAt;
+      } catch {
+        /* ignore */
+      }
+    }
+    el.addEventListener("loadedmetadata", restore);
+    el.addEventListener("loadeddata", restore);
+    el.addEventListener("canplay", restore);
+    el.addEventListener("timeupdate", restore);
+    if (el.readyState >= 1) restore();
+    return cleanup;
   }, [promotedElement, src]);
 
   return (

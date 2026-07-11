@@ -35,6 +35,7 @@
  */
 
 import { isVideoTimingEnabled } from "@/lib/videoTiming";
+import { tailStartForDuration } from "@/lib/proActress";
 
 export type HandoffReadiness = "metadata" | "canplay";
 
@@ -344,30 +345,34 @@ function trimPoolIfNeeded() {
  * registry へ登録する。同 slug の既存 entry がある場合は src が一致して連結中で
  * あれば再利用、それ以外は古い要素を destroy。
  *
- * `minStart` (秒) を渡すと、隠し <video> の loadedmetadata 後に currentTime を
- * その値にセットする。これによりブラウザは「先頭のバッファ」だけでなく
- * 「minStart 地点付近のバッファ」も Range request で取得しに行く。
+ * `tailKeepSec` (秒) を渡すと、隠し <video> の loadedmetadata 後に
+ * currentTime を `duration - tailKeepSec` (= 末尾 tailKeepSec だけ残す開始位置)
+ * にセットする。これによりブラウザは「先頭のバッファ」だけでなく
+ * 「開始位置付近のバッファ」も Range request で取得しに行く。
  *
- * 背景: pro-actress 作品は active 側で必ず currentTime=5 にシークするが、
+ * 背景: pro-actress 作品は active 側で必ず末尾 (duration-90) にシークするが、
  * 隠し <video> がデフォルトで先頭バイトだけしか preload しないと、active が
- * promote した直後の seek で 5s 地点のバイトが未取得 → loadedmetadata 後の
+ * promote した直後の seek で開始位置のバイトが未取得 → loadedmetadata 後の
  * rebuffer 待ちが発生し、playback start まで 1〜数秒遅延する
  * (`pro-actress seek deadline extend reason=loading-at-minStart` のループ)。
- * minStart を事前に currentTime に書き込むことで、ブラウザが裏で 5s 地点付近の
+ * 開始位置を事前に currentTime に書き込むことで、ブラウザが裏で開始位置付近の
  * Range も投げてくれるので、active 化時の seek が即 canplay まで進む。
+ *
+ * duration 依存のため、実際の seek 秒数は隠し要素の loadedmetadata 後に
+ * `tailStartForDuration(duration, tailKeepSec)` で算出する。
  */
 export function registerPrefetchElement(args: {
   slug: string;
   src: string;
   preload: "auto" | "metadata" | "none";
   /**
-   * 再生開始秒数 (= 先頭スキップ秒数)。0 / undefined はノーマルケース。
-   * loadedmetadata 後に currentTime にセットされる。
+   * 末尾に残す秒数 (= pro-actress は 90)。0 / undefined はノーマルケース。
+   * loadedmetadata 後に `duration - tailKeepSec` を currentTime にセットする。
    */
-  minStart?: number;
+  tailKeepSec?: number;
 }): HTMLVideoElement {
   ensureCleanupTimer();
-  const { slug, src, preload, minStart = 0 } = args;
+  const { slug, src, preload, tailKeepSec = 0 } = args;
   const existing = registry.get(slug);
   if (existing) {
     // 同 src ならば、検出された preload / 接続状態に関係なく要素を再利用して
@@ -402,12 +407,12 @@ export function registerPrefetchElement(args: {
       detachPoolReadinessListeners(existing);
       existing.detached = false;
       existing.pooledAt = Date.now();
-      // 再利用される要素にもまだ minStart 地点のバッファが入っていない可能性が
-      // あるので、currentTime が 0 のままなら遅延セットを再アーム。既に minStart
+      // 再利用される要素にもまだ開始位置のバッファが入っていない可能性が
+      // あるので、currentTime が 0 のままなら遅延セットを再アーム。既に開始位置
       // 以上に進んでいる (= 既に seek 済み or 再生中) なら何もしない。
-      ensureMinStartArmed(existing.el, slug, minStart);
+      ensureTailStartArmed(existing.el, slug, tailKeepSec);
       vtHandoffLog(
-        `reuse slug=${slug} preload=${preload} readiness=${existing.readiness} from=${fromPool ? "pool" : "active"}${minStart > 0 ? ` minStart=${minStart}` : ""}`,
+        `reuse slug=${slug} preload=${preload} readiness=${existing.readiness} from=${fromPool ? "pool" : "active"}${tailKeepSec > 0 ? ` tailKeep=${tailKeepSec}` : ""}`,
       );
       return existing.el;
     }
@@ -430,11 +435,11 @@ export function registerPrefetchElement(args: {
   el.style.opacity = "0";
   el.style.pointerEvents = "none";
   el.style.zIndex = "-1";
-  // minStart があれば loadedmetadata で currentTime をセットして 5s 地点付近の
-  // バイト取得を browser に依頼する。`<video>.load()` の前にハンドラを仕込む
-  // (preload="none" の場合は loadedmetadata が来ないので何も起きないが、
-  // 通常の preload="auto"/"metadata" では確実にハンドラが走る)。
-  ensureMinStartArmed(el, slug, minStart);
+  // tailKeepSec があれば loadedmetadata で currentTime を開始位置 (duration-tail)
+  // にセットして開始位置付近のバイト取得を browser に依頼する。`<video>.load()`
+  // の前にハンドラを仕込む (preload="none" の場合は loadedmetadata が来ないので
+  // 何も起きないが、通常の preload="auto"/"metadata" では確実にハンドラが走る)。
+  ensureTailStartArmed(el, slug, tailKeepSec);
   // iOS Safari は load() を呼ばないと preload が走らないことがある
   try {
     el.load();
@@ -453,19 +458,24 @@ export function registerPrefetchElement(args: {
     poolListeners: null,
   });
   vtHandoffLog(
-    `register slug=${slug} preload=${preload}${minStart > 0 ? ` minStart=${minStart}` : ""}`,
+    `register slug=${slug} preload=${preload}${tailKeepSec > 0 ? ` tailKeep=${tailKeepSec}` : ""}`,
   );
   notify();
   return el;
 }
 
 /**
- * 隠し <video> 要素に「loadedmetadata 後に currentTime=minStart をセットする」
- * one-shot ハンドラを仕込む。
+ * 隠し <video> 要素に「loadedmetadata 後に currentTime=開始位置 (duration-tail)
+ * をセットする」one-shot ハンドラを仕込む。
  *
- * - minStart<=0: 何もしない。
- * - 既に loadedmetadata 済み (readyState>=1) かつ currentTime<minStart: 即セット。
- * - readyState<1: 1 度だけ loadedmetadata を待ってセット。
+ * 旧 `ensureMinStartArmed` は固定値 (5) を渡していたが、pro-actress の仕様が
+ * 「末尾 90 秒だけ残す」= duration 依存になったため、開始位置は duration が
+ * 分かるまで計算できない。よって seek 秒数を loadedmetadata の中で
+ * `tailStartForDuration(el.duration, tailKeepSec)` により算出する。
+ *
+ * - tailKeepSec<=0: 何もしない。
+ * - 既に loadedmetadata 済み (readyState>=1): duration から開始位置を計算して即セット。
+ * - readyState<1: 1 度だけ loadedmetadata を待って計算 + セット。
  *
  * `currentTime` 設定後は seek が走るので、browser が Range request で seek
  * 先付近のバイトを取りに行く。これは隠し要素の readiness ステート遷移
@@ -475,44 +485,44 @@ export function registerPrefetchElement(args: {
  * 再アーム時 (=同 src 再利用): 既存ハンドラを撤去してから再登録。これにより
  * 同じ要素に重複ハンドラが残らない。
  */
-function ensureMinStartArmed(
+function ensureTailStartArmed(
   el: HTMLVideoElement,
   slug: string,
-  minStart: number,
+  tailKeepSec: number,
 ) {
-  if (!Number.isFinite(minStart) || minStart <= 0) return;
-  // 既に minStart 以上に進んでいるなら何もしない (= 既に seek 済み or 再生中)。
-  if (el.currentTime + 0.05 >= minStart) return;
+  if (!Number.isFinite(tailKeepSec) || tailKeepSec <= 0) return;
   const applySeek = () => {
-    // 直前で active 側に claim されて再生に乗っていれば触らない。currentTime が
-    // 既に minStart 以上なら何もしない (= 別経路で seek 済み)。
-    if (el.currentTime + 0.05 >= minStart) return;
+    const start = tailStartForDuration(el.duration, tailKeepSec);
+    // 開始位置が 0 (= duration 未確定 or 動画が tail より短い) なら seek 不要。
+    if (start <= 0) return;
+    // 既に開始位置以上に進んでいるなら何もしない (= 既に seek 済み or 再生中)。
+    if (el.currentTime + 0.05 >= start) return;
     try {
-      el.currentTime = minStart;
-      vtHandoffLog(`minStart-seek slug=${slug} t=${minStart}`);
+      el.currentTime = start;
+      vtHandoffLog(`tail-start-seek slug=${slug} t=${start.toFixed(2)} tailKeep=${tailKeepSec}`);
     } catch {
       /* ignore (まれに NotSupportedError) */
     }
   };
   if (el.readyState >= 1) {
-    // 既に metadata 取得済みなら即セット。
+    // 既に metadata 取得済みなら duration が読めるので即計算 + セット。
     applySeek();
     return;
   }
   // 旧ハンドラがあれば消して、再アーム。
-  const prev = (el as HTMLVideoElement & { __minStartHandler__?: () => void })
-    .__minStartHandler__;
+  const prev = (el as HTMLVideoElement & { __tailStartHandler__?: () => void })
+    .__tailStartHandler__;
   if (prev) {
     el.removeEventListener("loadedmetadata", prev);
   }
   const handler = () => {
     applySeek();
     el.removeEventListener("loadedmetadata", handler);
-    (el as HTMLVideoElement & { __minStartHandler__?: () => void })
-      .__minStartHandler__ = undefined;
+    (el as HTMLVideoElement & { __tailStartHandler__?: () => void })
+      .__tailStartHandler__ = undefined;
   };
-  (el as HTMLVideoElement & { __minStartHandler__?: () => void })
-    .__minStartHandler__ = handler;
+  (el as HTMLVideoElement & { __tailStartHandler__?: () => void })
+    .__tailStartHandler__ = handler;
   el.addEventListener("loadedmetadata", handler);
 }
 

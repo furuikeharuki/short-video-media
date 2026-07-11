@@ -31,7 +31,7 @@ export type MovieDetail = {
   actresses: string[];
   genres: string[];
   series_name: string | null;
-  // 50% 以上再生に到達したユニーク feed_session 数。
+  // 10 秒以上再生に到達したユニーク feed_session 数。
   // interaction_events から都度集計 (canonical な watch_count 定義)。
   // 未集計 / 集計失敗時は null、まだ 1 watch も無いときは 0。
   watch_count: number | null;

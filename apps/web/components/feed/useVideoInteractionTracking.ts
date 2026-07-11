@@ -9,7 +9,7 @@
  *
  * 送るイベント:
  *  - play           : 実際に再生が始まった (`playing` event)。1 動画 1 回。
- *  - play_progress  : 25 / 50 / 75 % マイルストーン (1 動画 1 回ずつ)。
+ *  - play_progress  : 10 秒到達 + 25 / 50 / 75 % マイルストーン (各 1 動画 1 回ずつ)。
  *  - video_complete : 100 % 到達もしくは `ended` 発火。1 動画 1 回。
  *  - pause / resume : ユーザー操作で paused になった / 再開した。
  *  - mute / unmute  : 音量トグル (volumechange)。
@@ -24,6 +24,7 @@ import {
   trackInteraction,
   trackInteractionDeduped,
 } from "@/lib/analytics/interactions";
+import { PRO_ACTRESS_TAIL_KEEP_SEC, tailStartForDuration } from "@/lib/proActress";
 
 interface Options {
   slug: string;
@@ -33,9 +34,19 @@ interface Options {
   feedPosition?: number | null;
   surface?: string | null;
   recSource?: string | null;
+  /**
+   * 「プロ女優」作品か。true のとき再生は末尾 90 秒だけ (開始位置 = duration-90)
+   * になるため、watch 判定 (10 秒到達) と 25/50/75% マイルストーンを「絶対
+   * currentTime / 絶対 ratio」で測ると、再生開始直後に currentTime も ratio も
+   * 既に大きい値になっており、視聴 0 秒でも watch_count が即カウントされてしまう。
+   * これを防ぐため、進捗は開始位置を 0% とした相対値で測る
+   * (useFeedPlayback の進捗バーと同じ扱い)。
+   */
+  isProActress?: boolean;
 }
 
 const MILESTONES = [25, 50, 75] as const;
+const WATCH_SECONDS_THRESHOLD = 10;
 
 export function useVideoInteractionTracking({
   slug,
@@ -44,6 +55,7 @@ export function useVideoInteractionTracking({
   feedPosition = null,
   surface = null,
   recSource = null,
+  isProActress = false,
 }: Options): void {
   // 「ある slug が再生開始した時刻」を覚えておき、各イベントの elapsed_ms を計算。
   const playStartAtRef = useRef<number | null>(null);
@@ -150,10 +162,23 @@ export function useVideoInteractionTracking({
       );
     };
 
+    let watchSecondsSent = false;
     const milestoneSent = new Set<number>();
+    // pro-actress の末尾スキップ (開始位置 = duration-90) を考慮した「実効開始位置」。
+    // 非 pro-actress は 0。duration 未確定のうちは tailStartForDuration が 0 を返す。
+    const effectiveStart = (): number =>
+      isProActress
+        ? tailStartForDuration(video.duration, PRO_ACTRESS_TAIL_KEEP_SEC)
+        : 0;
     const onTimeUpdate = () => {
       const dur = video.duration;
       const cur = video.currentTime;
+      // 開始位置を 0 とした「実際に視聴した秒数 / 進捗」。pro-actress は開始位置が
+      // duration-90 付近なので、絶対 currentTime ではなく開始位置からの相対値で
+      // watch(10 秒)/マイルストーンを判定する (視聴 0 秒での誤カウントを防ぐ)。
+      const start = effectiveStart();
+      const watchedSec = Math.max(0, cur - start);
+      const usableSpan = Number.isFinite(dur) && dur > start ? dur - start : null;
       // replay: ended 直後に currentTime が小さく戻ったら replay として送る。
       if (sawEndedRef.current && cur < 1.0) {
         sawEndedRef.current = false;
@@ -165,8 +190,32 @@ export function useVideoInteractionTracking({
           duration_sec: Number.isFinite(dur) ? dur : undefined,
         });
       }
-      if (!Number.isFinite(dur) || dur <= 0) return;
-      const ratio = cur / dur;
+      const elapsed = elapsedMs();
+      const finiteDuration = Number.isFinite(dur) && dur > 0;
+      // 進捗 ratio も開始位置基準にする (0% = 開始位置、100% = 終端)。
+      const ratio = usableSpan != null ? watchedSec / usableSpan : null;
+      if (!watchSecondsSent && watchedSec >= WATCH_SECONDS_THRESHOLD) {
+        watchSecondsSent = true;
+        trackInteractionDeduped(
+          `pp:${sessionId}:${slug}:${feedPosition ?? "-"}:watch10s`,
+          {
+            event_name: "play_progress",
+            ...baseProps,
+            session_seq: nextSessionSeq(),
+            progress_milestone: WATCH_SECONDS_THRESHOLD,
+            progress_ratio: ratio ?? undefined,
+            current_time_sec: cur,
+            duration_sec: finiteDuration ? dur : undefined,
+            elapsed_ms: elapsed,
+            metadata: {
+              threshold_sec: WATCH_SECONDS_THRESHOLD,
+              watched_sec: Number(watchedSec.toFixed(2)),
+              start_sec: Number(start.toFixed(2)),
+            },
+          },
+        );
+      }
+      if (!finiteDuration || ratio == null) return;
       for (const m of MILESTONES) {
         if (milestoneSent.has(m)) continue;
         if (ratio >= m / 100) {
@@ -181,7 +230,7 @@ export function useVideoInteractionTracking({
               progress_ratio: ratio,
               current_time_sec: cur,
               duration_sec: dur,
-              elapsed_ms: elapsedMs(),
+              elapsed_ms: elapsed,
             },
           );
         }
@@ -199,7 +248,7 @@ export function useVideoInteractionTracking({
             progress_ratio: 1.0,
             current_time_sec: cur,
             duration_sec: dur,
-            elapsed_ms: elapsedMs(),
+            elapsed_ms: elapsed,
           },
         );
       }

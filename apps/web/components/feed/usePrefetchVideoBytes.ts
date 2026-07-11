@@ -16,7 +16,7 @@ import {
   resolveMp4Url,
 } from "@/lib/api/resolve-mp4";
 import { ensurePreconnect, getPrefetchPolicy } from "@/lib/networkPrefs";
-import { getMinStartTime } from "@/lib/proActress";
+import { getTailKeepSec } from "@/lib/proActress";
 import { isVideoTimingEnabled } from "@/lib/videoTiming";
 import {
   consumeJustClaimed,
@@ -225,10 +225,10 @@ interface PrefetchSlot {
   /**
    * pro-actress 作品の先頭スキップ秒数 (= active 化時に currentTime をそこまで
    * 進める値)。隠し <video> はこの値を使って loadedmetadata 後に currentTime を
-   * 先り設定し、browser に minStart 地点付近の Range も裏で取りに行かせる。
-   * ノーマル作品は 0。
+   * loadedmetadata 後に開始位置 (duration-tailKeepSec) を先り設定し、browser に
+   * 開始位置付近の Range も裏で取りに行かせる。ノーマル作品は 0。
    */
-  minStart: number;
+  tailKeepSec: number;
 }
 
 interface Target {
@@ -243,9 +243,9 @@ interface Target {
    */
   preload: "auto" | "metadata" | "none";
   /**
-   * pro-actress 作品の先頭スキップ秒数。`getMinStartTime(card.genres)` で算出される。
+   * pro-actress 作品で末尾に残す秒数 (90)。`getTailKeepSec(card.genres)` で算出される。
    */
-  minStart: number;
+  tailKeepSec: number;
 }
 
 export type PrefetchReadiness = "metadata" | "canplay";
@@ -309,7 +309,7 @@ export function usePrefetchVideoBytes(
         offset,
         targetIndex: idx,
         preload: policy.preload,
-        minStart: getMinStartTime(it.genres),
+        tailKeepSec: getTailKeepSec(it.genres),
       });
     }
   }
@@ -328,7 +328,7 @@ export function usePrefetchVideoBytes(
           targetIndex: idx,
           // bytes を取らずに resolver 解決と <video> container 初期化だけ前倒し。
           preload: "metadata",
-          minStart: getMinStartTime(it.genres),
+          tailKeepSec: getTailKeepSec(it.genres),
         });
       }
     }
@@ -355,16 +355,16 @@ export function usePrefetchVideoBytes(
           offset,
           targetIndex: idx,
           preload: prevPreload,
-          minStart: getMinStartTime(it.genres),
+          tailKeepSec: getTailKeepSec(it.genres),
         });
       }
     }
   }
-  // deps 用に安定キーを生成 (id + preload + minStart の join)。
-  // preload や minStart が変わると slot を作り直す (genres が遅れて送られてから minStart
+  // deps 用に安定キーを生成 (id + preload + tailKeepSec の join)。
+  // preload や tailKeepSec が変わると slot を作り直す (genres が遅れて送られてから tailKeepSec
   // が 0 → 5 になったケースも拾う)。
   const targetsKey = targets
-    .map((t) => `${t.id}:${t.slug}:${t.offset}:${t.preload}:${t.minStart}`)
+    .map((t) => `${t.id}:${t.slug}:${t.offset}:${t.preload}:${t.tailKeepSec}`)
     .join("|");
 
   // active スライドが変わったタイミングで、そのスライドが裏 prefetch 済みだったかを
@@ -604,14 +604,14 @@ export function usePrefetchVideoBytes(
       //     その逆の格下げ。preload が変わると PrefetchVideoBuffer の effect が
       //     再 run され、registerPrefetchElement が `el.preload` を新しい値に
       //     更新する (同 src なので element/バッファは温存される)。
-      //   - minStart: 通常変わらないが、念のため反映する。
+      //   - tailKeepSec: 通常変わらないが、念のため反映する。
       const existingSlot = slotsRef.current.find((s) => s.id === target.id);
       if (existingSlot && existingSlot.slug === target.slug) {
         const offsetChanged =
           existingSlot.offset !== target.offset ||
           existingSlot.targetIndex !== target.targetIndex;
         const preloadChanged = existingSlot.preload !== target.preload;
-        const minStartChanged = existingSlot.minStart !== target.minStart;
+        const tailKeepSecChanged = existingSlot.tailKeepSec !== target.tailKeepSec;
         if (preloadChanged) {
           // 主要ケース: +3 metadata で立てた slot がそのまま +2/+1 にスライドして
           // きたとき、preload を auto に格上げする。これをしないと隠し <video>
@@ -627,13 +627,13 @@ export function usePrefetchVideoBytes(
           vtPrefetchLog(
             `slot promote-offset slug=${target.slug} from=${fmtOffset(existingSlot.offset)} to=${fmtOffset(target.offset)} index=${target.targetIndex}`,
           );
-        } else if (!minStartChanged) {
+        } else if (!tailKeepSecChanged) {
           vtPrefetchLog(
             `slot reuse index=${target.targetIndex} slug=${target.slug} offset=${fmtOffset(target.offset)}`,
           );
           return;
         }
-        if (offsetChanged || preloadChanged || minStartChanged) {
+        if (offsetChanged || preloadChanged || tailKeepSecChanged) {
           setSlots((prev) => {
             const idx = prev.findIndex((s) => s.id === target.id);
             if (idx === -1) return prev;
@@ -642,7 +642,7 @@ export function usePrefetchVideoBytes(
               cur.offset === target.offset &&
               cur.targetIndex === target.targetIndex &&
               cur.preload === target.preload &&
-              cur.minStart === target.minStart
+              cur.tailKeepSec === target.tailKeepSec
             ) {
               return prev;
             }
@@ -652,7 +652,7 @@ export function usePrefetchVideoBytes(
               offset: target.offset,
               targetIndex: target.targetIndex,
               preload: target.preload,
-              minStart: target.minStart,
+              tailKeepSec: target.tailKeepSec,
             };
             return copy;
           });
@@ -710,7 +710,7 @@ export function usePrefetchVideoBytes(
                 preload: target.preload,
                 offset: target.offset,
                 targetIndex: target.targetIndex,
-                minStart: target.minStart,
+                tailKeepSec: target.tailKeepSec,
               },
             ];
           });
@@ -806,7 +806,7 @@ export function usePrefetchVideoBytes(
             const existingOffset = existing?.offset ?? PREFETCH_START_OFFSET;
             const existingTargetIndex = existing?.targetIndex ?? -1;
             const existingPreload = existing?.preload ?? policy.preload;
-            const existingMinStart = existing?.minStart ?? 0;
+            const existingTailKeep = existing?.tailKeepSec ?? 0;
             const url = pickPrefetchSlotUrl(res, {
               offset: existingOffset,
               preload: existingPreload,
@@ -821,7 +821,7 @@ export function usePrefetchVideoBytes(
               preload: existingPreload,
               offset: existingOffset,
               targetIndex: existingTargetIndex,
-              minStart: existingMinStart,
+              tailKeepSec: existingTailKeep,
             };
             if (idx === -1) {
               return [...prev, next];

@@ -1,16 +1,15 @@
 """watch_count 集計 (interaction_event_repository) の単体テスト。
 
 watch_count の canonical 定義:
-  「ある作品について、1 つの feed_session が 50% 以上再生に到達した」ら 1 watch。
+  「ある作品について、1 つの feed_session が 10 秒以上再生に到達した」ら 1 watch。
   含むイベント:
-    - event_name='play_progress' AND (progress_milestone >= 50 OR progress_ratio >= 0.5)
-    - event_name='video_complete'
+    - event_name IN ('play_progress', 'video_complete') AND current_time_sec >= 10.0
   デデュープ:
     同一 feed_session_id + slug が複数 watch event を起こしても 1 watch。
 
 本テストは pytest が DB に実接続しない方針 (conftest.py 参照) に従い、
 SQLAlchemy の Core を使って in-memory SQLite を立ち上げ、リポジトリ関数を
-実 SQL 経由で動かすことで「50% 閾値 + COUNT(DISTINCT) デデュープ」の振る舞いを
+実 SQL 経由で動かすことで「10 秒閾値 + COUNT(DISTINCT) デデュープ」の振る舞いを
 担保する。
 """
 from __future__ import annotations
@@ -32,7 +31,7 @@ async def _make_engine_and_session():
     PostgreSQL 専用型 (JSONB 等) は SQLite で compile できないため、
     watch_count 集計に必要なカラムだけを raw DDL で作る。
     集計に使うのは event_name / slug / feed_session_id /
-    progress_milestone / progress_ratio + movies.is_visible だけなので
+    current_time_sec + movies.is_visible だけなので
     十分。
     """
     engine = create_async_engine("sqlite+aiosqlite:///:memory:")
@@ -47,6 +46,7 @@ async def _make_engine_and_session():
                     feed_session_id TEXT,
                     progress_milestone INTEGER,
                     progress_ratio REAL,
+                    current_time_sec REAL,
                     created_at TIMESTAMP
                 )
                 """
@@ -78,13 +78,14 @@ async def _insert_event(
     feed_session_id: str | None = None,
     progress_milestone: int | None = None,
     progress_ratio: float | None = None,
+    current_time_sec: float | None = None,
     created_at: datetime | None = None,
 ) -> None:
     await s.execute(
         text(
             "INSERT INTO interaction_events "
-            "(id, event_name, slug, feed_session_id, progress_milestone, progress_ratio, created_at) "
-            "VALUES (:id, :event_name, :slug, :fsid, :ms, :pr, :created_at)"
+            "(id, event_name, slug, feed_session_id, progress_milestone, progress_ratio, current_time_sec, created_at) "
+            "VALUES (:id, :event_name, :slug, :fsid, :ms, :pr, :cur, :created_at)"
         ),
         {
             "id": str(uuid.uuid4()),
@@ -93,6 +94,7 @@ async def _insert_event(
             "fsid": feed_session_id,
             "ms": progress_milestone,
             "pr": progress_ratio,
+            "cur": current_time_sec,
             "created_at": (
                 created_at
                 if created_at is not None
@@ -140,7 +142,7 @@ def test_get_watch_count_returns_zero_when_no_events() -> None:
 
 
 def test_get_watch_count_counts_video_complete() -> None:
-    """video_complete は無条件で watch にカウントされる。"""
+    """video_complete も current_time_sec >= 10.0 のときだけ watch にカウントされる。"""
 
     async def run() -> None:
         engine, Session = await _make_engine_and_session()
@@ -152,6 +154,7 @@ def test_get_watch_count_counts_video_complete() -> None:
                     slug="slug-a",
                     event_name="video_complete",
                     feed_session_id="sess-1",
+                    current_time_sec=10.0,
                 )
                 await s.commit()
                 assert await iev_repo.get_watch_count_for_slug(s, "slug-a") == 1
@@ -161,37 +164,41 @@ def test_get_watch_count_counts_video_complete() -> None:
     asyncio.run(run())
 
 
-def test_get_watch_count_50_threshold_via_milestone() -> None:
-    """progress_milestone >= 50 だけが watch にカウントされる。25% は除外。"""
+def test_get_watch_count_10_second_threshold_via_current_time() -> None:
+    """current_time_sec >= 10.0 だけが watch にカウントされる。9.99 秒は除外。"""
 
     async def run() -> None:
         engine, Session = await _make_engine_and_session()
         try:
             async with Session() as s:
                 await _insert_movie(s, "slug-a")
-                # 25% は watch ではない
+                # 10 秒未満は watch ではない
                 await _insert_event(
                     s,
                     slug="slug-a",
                     event_name="play_progress",
                     feed_session_id="sess-1",
-                    progress_milestone=25,
+                    progress_milestone=75,
+                    progress_ratio=0.75,
+                    current_time_sec=9.99,
                 )
-                # 50% は watch
+                # 10 秒ちょうどは watch
                 await _insert_event(
                     s,
                     slug="slug-a",
                     event_name="play_progress",
                     feed_session_id="sess-2",
-                    progress_milestone=50,
+                    progress_milestone=10,
+                    current_time_sec=10.0,
                 )
-                # 75% は当然 watch
+                # 10 秒超過も watch
                 await _insert_event(
                     s,
                     slug="slug-a",
                     event_name="play_progress",
                     feed_session_id="sess-3",
-                    progress_milestone=75,
+                    progress_milestone=25,
+                    current_time_sec=12.5,
                 )
                 await s.commit()
                 assert await iev_repo.get_watch_count_for_slug(s, "slug-a") == 2
@@ -201,29 +208,31 @@ def test_get_watch_count_50_threshold_via_milestone() -> None:
     asyncio.run(run())
 
 
-def test_get_watch_count_50_threshold_via_ratio() -> None:
-    """progress_milestone が無くても progress_ratio >= 0.5 なら watch。"""
+def test_get_watch_count_ignores_ratio_without_10_seconds() -> None:
+    """progress_ratio >= 0.5 でも current_time_sec が 10 秒未満なら watch ではない。"""
 
     async def run() -> None:
         engine, Session = await _make_engine_and_session()
         try:
             async with Session() as s:
                 await _insert_movie(s, "slug-a")
-                # 49% 相当は watch ではない
+                # 90% 到達でも 10 秒未満なら watch ではない
                 await _insert_event(
                     s,
                     slug="slug-a",
                     event_name="play_progress",
                     feed_session_id="sess-1",
-                    progress_ratio=0.49,
+                    progress_ratio=0.9,
+                    current_time_sec=9.99,
                 )
-                # 50% ちょうどは watch
+                # 10% でも 10 秒以上なら watch
                 await _insert_event(
                     s,
                     slug="slug-a",
                     event_name="play_progress",
                     feed_session_id="sess-2",
-                    progress_ratio=0.5,
+                    progress_ratio=0.1,
+                    current_time_sec=10.0,
                 )
                 await s.commit()
                 assert await iev_repo.get_watch_count_for_slug(s, "slug-a") == 1
@@ -241,20 +250,21 @@ def test_get_watch_count_dedupes_same_feed_session() -> None:
         try:
             async with Session() as s:
                 await _insert_movie(s, "slug-a")
-                # 同じ feed_session が 50/75/complete を順に発火するケース。
-                for ms in (50, 75):
+                # 同じ feed_session が 10 秒到達後に複数の watch event を発火するケース。
+                for cur in (10.0, 15.0):
                     await _insert_event(
                         s,
                         slug="slug-a",
                         event_name="play_progress",
                         feed_session_id="sess-1",
-                        progress_milestone=ms,
+                        current_time_sec=cur,
                     )
                 await _insert_event(
                     s,
                     slug="slug-a",
                     event_name="video_complete",
                     feed_session_id="sess-1",
+                    current_time_sec=20.0,
                 )
                 # 別のセッションは別 watch
                 await _insert_event(
@@ -262,7 +272,7 @@ def test_get_watch_count_dedupes_same_feed_session() -> None:
                     slug="slug-a",
                     event_name="play_progress",
                     feed_session_id="sess-2",
-                    progress_milestone=50,
+                    current_time_sec=10.0,
                 )
                 await s.commit()
                 assert await iev_repo.get_watch_count_for_slug(s, "slug-a") == 2
@@ -289,14 +299,14 @@ def test_get_watch_count_anonymous_null_session_counted_as_distinct_rows() -> No
                     slug="slug-a",
                     event_name="play_progress",
                     feed_session_id=None,
-                    progress_milestone=50,
+                    current_time_sec=10.0,
                 )
                 await _insert_event(
                     s,
                     slug="slug-a",
                     event_name="play_progress",
                     feed_session_id=None,
-                    progress_milestone=75,
+                    current_time_sec=15.0,
                 )
                 await s.commit()
                 # NULL feed_session_id は id でデデュープされるため 2 watch。
@@ -313,7 +323,7 @@ def test_get_watch_count_anonymous_null_session_counted_as_distinct_rows() -> No
 
 
 def test_watch_count_ranking_orders_by_dedup_count() -> None:
-    """popular ランキングは「50% 到達ユニーク feed_session 数」順に並ぶ。
+    """popular ランキングは「10秒到達ユニーク feed_session 数」順に並ぶ。
 
     raw event 数ではなくユニーク feed_session 数で比較されることを担保するため、
     slug-low に大量のイベントを同 feed_session で発火させても勝てないことを確認する。
@@ -325,21 +335,23 @@ def test_watch_count_ranking_orders_by_dedup_count() -> None:
             async with Session() as s:
                 await _insert_movie(s, "slug-high")
                 await _insert_movie(s, "slug-low")
-                # slug-high: 2 ユニーク feed_session が 50% 以上に到達。
+                # slug-high: 2 ユニーク feed_session が 10秒以上再生に到達。
                 await _insert_event(
                     s,
                     slug="slug-high",
                     event_name="play_progress",
                     feed_session_id="h1",
                     progress_milestone=50,
+                    current_time_sec=10.0,
                 )
                 await _insert_event(
                     s,
                     slug="slug-high",
                     event_name="video_complete",
                     feed_session_id="h2",
+                    current_time_sec=10.0,
                 )
-                # slug-low: 1 feed_session が 50/75/complete を連発しても 1 watch
+                # slug-low: 1 feed_session が10秒到達後に複数イベントを連発しても 1 watch
                 for ms in (50, 75):
                     await _insert_event(
                         s,
@@ -347,12 +359,14 @@ def test_watch_count_ranking_orders_by_dedup_count() -> None:
                         event_name="play_progress",
                         feed_session_id="l1",
                         progress_milestone=ms,
+                        current_time_sec=10.0 if ms == 50 else 15.0,
                     )
                 await _insert_event(
                     s,
                     slug="slug-low",
                     event_name="video_complete",
                     feed_session_id="l1",
+                    current_time_sec=20.0,
                 )
                 await s.commit()
 
@@ -382,18 +396,21 @@ def test_watch_count_ranking_excludes_invisible_movies() -> None:
                     slug="slug-visible",
                     event_name="video_complete",
                     feed_session_id="v1",
+                    current_time_sec=10.0,
                 )
                 await _insert_event(
                     s,
                     slug="slug-hidden",
                     event_name="video_complete",
                     feed_session_id="h1",
+                    current_time_sec=10.0,
                 )
                 await _insert_event(
                     s,
                     slug="slug-hidden",
                     event_name="video_complete",
                     feed_session_id="h2",
+                    current_time_sec=10.0,
                 )
                 await s.commit()
                 ranked = await iev_repo.aggregate_watch_count_ranking_all_time(
@@ -407,8 +424,8 @@ def test_watch_count_ranking_excludes_invisible_movies() -> None:
     asyncio.run(run())
 
 
-def test_watch_count_ranking_skips_below_50_threshold() -> None:
-    """25% 止まりのセッションは watch にカウントされない (= ランキングに出ない)。"""
+def test_watch_count_ranking_skips_below_10_second_threshold() -> None:
+    """10秒未満のセッションは watch にカウントされない (= ランキングに出ない)。"""
 
     async def run() -> None:
         engine, Session = await _make_engine_and_session()
@@ -422,6 +439,7 @@ def test_watch_count_ranking_skips_below_50_threshold() -> None:
                     event_name="play_progress",
                     feed_session_id="a1",
                     progress_milestone=25,
+                    current_time_sec=9.99,
                 )
                 await _insert_event(
                     s,
@@ -429,6 +447,7 @@ def test_watch_count_ranking_skips_below_50_threshold() -> None:
                     event_name="play_progress",
                     feed_session_id="b1",
                     progress_milestone=50,
+                    current_time_sec=10.0,
                 )
                 await s.commit()
                 ranked = await iev_repo.aggregate_watch_count_ranking_all_time(
@@ -467,6 +486,7 @@ def test_period_window_excludes_old_events_daily() -> None:
                     event_name="play_progress",
                     feed_session_id="f1",
                     progress_milestone=50,
+                    current_time_sec=10.0,
                     created_at=now - timedelta(hours=12),
                 )
                 # daily 外 (48h 前) → 除外される
@@ -476,6 +496,7 @@ def test_period_window_excludes_old_events_daily() -> None:
                     event_name="play_progress",
                     feed_session_id="o1",
                     progress_milestone=50,
+                    current_time_sec=10.0,
                     created_at=now - timedelta(hours=48),
                 )
                 await s.commit()
@@ -507,6 +528,7 @@ def test_period_window_includes_weekly_but_excludes_monthly_boundary() -> None:
                     event_name="play_progress",
                     feed_session_id="d1",
                     progress_milestone=50,
+                    current_time_sec=10.0,
                     created_at=now - timedelta(days=1),
                 )
                 # 10 日前 (weekly 圏外 / monthly 圏内)
@@ -516,6 +538,7 @@ def test_period_window_includes_weekly_but_excludes_monthly_boundary() -> None:
                     event_name="play_progress",
                     feed_session_id="d10",
                     progress_milestone=50,
+                    current_time_sec=10.0,
                     created_at=now - timedelta(days=10),
                 )
                 # 40 日前 (どちらも圏外)
@@ -525,6 +548,7 @@ def test_period_window_includes_weekly_but_excludes_monthly_boundary() -> None:
                     event_name="play_progress",
                     feed_session_id="d40",
                     progress_milestone=50,
+                    current_time_sec=10.0,
                     created_at=now - timedelta(days=40),
                 )
                 await s.commit()
@@ -563,6 +587,7 @@ def test_period_window_dedupes_within_period() -> None:
                         event_name="play_progress",
                         feed_session_id="dup",
                         progress_milestone=ms,
+                        current_time_sec=10.0 if ms == 50 else 15.0,
                         created_at=now - timedelta(hours=1),
                     )
                 await _insert_event(
@@ -570,6 +595,7 @@ def test_period_window_dedupes_within_period() -> None:
                     slug="slug-a",
                     event_name="video_complete",
                     feed_session_id="dup",
+                    current_time_sec=20.0,
                     created_at=now - timedelta(minutes=30),
                 )
                 # 同期間内の別セッション
@@ -579,6 +605,7 @@ def test_period_window_dedupes_within_period() -> None:
                     event_name="play_progress",
                     feed_session_id="other",
                     progress_milestone=50,
+                    current_time_sec=10.0,
                     created_at=now - timedelta(hours=2),
                 )
                 await s.commit()
@@ -592,37 +619,39 @@ def test_period_window_dedupes_within_period() -> None:
     asyncio.run(run())
 
 
-def test_period_window_skips_below_50_threshold() -> None:
-    """期間ランキングでも 25% 止まりは watch にカウントされない。"""
+def test_period_window_skips_below_10_second_threshold() -> None:
+    """期間ランキングでも10秒未満は watch にカウントされない。"""
 
     async def run() -> None:
         engine, Session = await _make_engine_and_session()
         try:
             now = _naive_utc_now()
             async with Session() as s:
-                await _insert_movie(s, "slug-25")
-                await _insert_movie(s, "slug-50")
+                await _insert_movie(s, "slug-under-10")
+                await _insert_movie(s, "slug-10")
                 await _insert_event(
                     s,
-                    slug="slug-25",
+                    slug="slug-under-10",
                     event_name="play_progress",
                     feed_session_id="a",
                     progress_milestone=25,
+                    current_time_sec=9.99,
                     created_at=now - timedelta(hours=1),
                 )
                 await _insert_event(
                     s,
-                    slug="slug-50",
+                    slug="slug-10",
                     event_name="play_progress",
                     feed_session_id="b",
                     progress_milestone=50,
+                    current_time_sec=10.0,
                     created_at=now - timedelta(hours=1),
                 )
                 await s.commit()
                 ranked = await iev_repo.aggregate_watch_count_ranking(
                     s, period="weekly", limit=10
                 )
-                assert ranked == [("slug-50", 1)]
+                assert ranked == [("slug-10", 1)]
         finally:
             await engine.dispose()
 
@@ -632,7 +661,7 @@ def test_period_window_skips_below_50_threshold() -> None:
 def test_watch_count_ranking_only_returns_positive_counts() -> None:
     """HAVING c > 0 を強制している契約のリグレッション。
 
-    25% 止まり (watch event ではない) しか持たない作品が、ランキング集計
+    10秒未満 (watch event ではない) しか持たない作品が、ランキング集計
     の結果として `(slug, 0)` のように返ってくると、上位ランクの service 側
     が「watch_count > 0 として扱う」誤動作を起こしうる。
     そもそも返さない (= ランキングに混ぜない) ことを保証する。
@@ -643,39 +672,41 @@ def test_watch_count_ranking_only_returns_positive_counts() -> None:
         try:
             now = _naive_utc_now()
             async with Session() as s:
-                await _insert_movie(s, "slug-25-only")
-                await _insert_movie(s, "slug-50")
-                # 25% 止まり (watch event ではない) → 集計対象に上がらない
+                await _insert_movie(s, "slug-under-10-only")
+                await _insert_movie(s, "slug-10")
+                # 10秒未満 (watch event ではない) → 集計対象に上がらない
                 await _insert_event(
                     s,
-                    slug="slug-25-only",
+                    slug="slug-under-10-only",
                     event_name="play_progress",
                     feed_session_id="a",
                     progress_milestone=25,
+                    current_time_sec=9.99,
                     created_at=now - timedelta(hours=1),
                 )
-                # 50% 到達 → watch event
+                # 10秒到達 → watch event
                 await _insert_event(
                     s,
-                    slug="slug-50",
+                    slug="slug-10",
                     event_name="play_progress",
                     feed_session_id="b",
                     progress_milestone=50,
+                    current_time_sec=10.0,
                     created_at=now - timedelta(hours=1),
                 )
                 await s.commit()
-                # 全期間 / 期間付きの双方で slug-25-only は返らない
+                # 全期間 / 期間付きの双方で slug-under-10-only は返らない
                 all_time = await iev_repo.aggregate_watch_count_ranking_all_time(
                     s, limit=10
                 )
-                assert [slug for slug, _ in all_time] == ["slug-50"]
+                assert [slug for slug, _ in all_time] == ["slug-10"]
                 for _, c in all_time:
                     assert c > 0
 
                 weekly = await iev_repo.aggregate_watch_count_ranking(
                     s, period="weekly", limit=10
                 )
-                assert [slug for slug, _ in weekly] == ["slug-50"]
+                assert [slug for slug, _ in weekly] == ["slug-10"]
                 for _, c in weekly:
                     assert c > 0
         finally:

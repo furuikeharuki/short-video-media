@@ -85,7 +85,7 @@ class MovieDetail(BaseModel):
     actresses: list[str] = []
     genres: list[str] = []
     series_name: str | None = None
-    # 50% 以上再生に到達したユニーク feed_session 数 (watch_count, canonical 定義)。
+    # 10 秒以上再生に到達したユニーク feed_session 数 (watch_count, canonical 定義)。
     # interaction_events から都度集計。値が無い (= 集計不能) ケースは None。
     # SEO 用 VideoObject.interactionStatistic はフロント側で None/0 のときは出さない。
     watch_count: int | None = None

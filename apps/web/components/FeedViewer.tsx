@@ -568,7 +568,7 @@ export default function FeedViewer({
             src={slot.src}
             preload={preload}
             offset={slot.offset}
-            minStart={slot.minStart}
+            tailKeepSec={slot.tailKeepSec}
             onError={handleSlotError}
             onMetadata={handleSlotMetadata}
             onCanPlay={handleSlotCanPlay}

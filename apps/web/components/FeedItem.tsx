@@ -830,6 +830,7 @@ export default function FeedItem({ item, isActive, isAdjacent = false, isFirst, 
     slug: item.slug,
     videoRef,
     isActive,
+    isProActress,
   });
 
   // 中央 (active) 動画がまだ安定再生していない (再生開始前 / waiting / stalled)

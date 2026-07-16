@@ -85,6 +85,39 @@ def test_excludes_stopwords_numbers_and_masked() -> None:
     assert not (set(keywords) & STOPWORDS)
 
 
+# プロフィール行を模したフィクスチャ。janome は '/' と ':' を 名詞,サ変接続 と
+# 誤タグ付けするため、旧ロジックでは「/IT系企業勤務/絶頂回数:」のように記号を
+# またいで複合語が連結されていた。記号は境界となり、出力語に混入しないことを確認する。
+PROFILE_DESCRIPTION = (
+    "街中で声をかけた素人。なみさん（28才）/IT系企業勤務/絶頂回数:32回。"
+    "るいさん（25才）/ブライダル系企業勤務/絶頂回数:18回。"
+    "リモバイを装着したまま黒パンストで歩く姿を盗撮。"
+)
+
+# 「というかくらしな」由来の壊れた連結を模したフィクスチャ。janome は
+# 「かく(名詞)＋ら(名詞接尾)＋しな(名詞接尾)」と切るため、旧ロジックでは
+# 「かくらしな」が生成された。1 文字ひらがな (ら) を連結に含めないことで防ぐ。
+HIRAGANA_JOIN_DESCRIPTION = "天然というかくらしなさんの魅力。出演はくらしな。"
+
+
+def test_symbols_are_hard_boundaries() -> None:
+    keywords = extract_keywords(PROFILE_DESCRIPTION)
+    # 記号 '/' ':' '（' '）' を含む語は 1 つも出力されない。
+    assert all("/" not in k for k in keywords)
+    assert all(":" not in k for k in keywords)
+    assert all("（" not in k and "）" not in k for k in keywords)
+    # 記号をまたいだ連結が分割され、内側の語が正しく取れる。
+    assert "IT系企業勤務" in keywords
+    assert "絶頂回数" in keywords
+
+
+def test_no_single_char_hiragana_join() -> None:
+    keywords = extract_keywords(HIRAGANA_JOIN_DESCRIPTION)
+    # 1 文字ひらがな (ら) を巻き込んだ壊れた連結は生成されない。
+    assert "かくらしな" not in keywords
+    assert all("かくらし" not in k for k in keywords)
+
+
 def test_max_keywords_cap() -> None:
     keywords = extract_keywords(SAMPLE_DESCRIPTION, max_keywords=3)
     assert len(keywords) <= 3

@@ -30,6 +30,12 @@ _HAS_JP = re.compile(r"[぀-ヿ㐀-鿿豈-﫿ー]")
 # 断片や人名 (くらしなひまり→「くら」等) の切れ端であることが多く、特徴語にならない。
 _HIRAGANA_ONLY = re.compile(r"^[぀-ゟー]+$")
 
+# 特徴語に許可する文字。ひらがな・カタカナ・長音・漢字 (々含む)・半角英数字のみ。
+# これ以外の文字 (記号 '/' ':'、括弧 '（' '）'、句読点、全角記号等) を 1 文字でも
+# 含むトークン/語は連結の境界とし、出力もしない。janome は '/' や ':' を
+# 名詞,サ変接続 と誤タグ付けするため、品詞ではなく実文字で境界を判定する。
+_ALLOWED_CHARS = re.compile(r"^[぀-ゟァ-ヶー一-鿿々0-9A-Za-z]+$")
+
 # 複合語連結に取り込む名詞の細分類。「名詞(一般・固有)」+ 動作性の
 # サ変接続 (潜入・騎乗・交渉 等) + 接尾 (位・店・嬢 等) を対象にする。
 # 接尾は複合語の途中/末尾でのみ有効で、単独では語を開始させない (下の連結処理参照)。
@@ -95,14 +101,20 @@ def _is_compound_part(surface: str, part_of_speech: str) -> tuple[bool, str]:
     これらは連結の境界となり、それ自体は語に取り込まれない。
     """
     parts = part_of_speech.split(",")
-    if not parts or parts[0] != "名詞":
+    if not parts or parts[0] != "名詞":  # 記号・助詞・動詞等は境界
         return False, ""
     subtype = parts[1] if len(parts) > 1 else ""
     if subtype not in _NOUN_SUBTYPES:
         return False, subtype
+    if "非自立" in parts:  # 名詞でも非自立 (助詞的) なものは語を作らない (境界)
+        return False, subtype
     surface = surface.strip()
     if not surface:
         return False, subtype
+    if not _ALLOWED_CHARS.match(surface):  # '/' ':' 括弧等を含むトークンは境界
+        return False, subtype
+    if len(surface) == 1 and _HIRAGANA_ONLY.match(surface):
+        return False, subtype  # 1 文字ひらがな (助詞的断片) は連結に含めない
     if surface in _HONORIFIC_SUFFIXES:  # 敬称・愛称は境界扱い (人名断片を作らない)
         return False, subtype
     if surface in STOPWORDS:  # 汎用語は複合語に取り込まない (境界)
@@ -119,6 +131,8 @@ def _accept_term(term: str) -> bool:
     if term.isdigit():  # 数字のみは除外
         return False
     if "*" in term or "＊" in term:  # 伏字 (**) は除外
+        return False
+    if not _ALLOWED_CHARS.match(term):  # 記号 '/' ':' 括弧等を含む語は除外
         return False
     if not _HAS_JP.search(term):  # 日本語を含まない語 (記号・ラテン等) は除外
         return False

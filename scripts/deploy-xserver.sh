@@ -78,12 +78,22 @@ log "docker compose build (services=${SERVICES:-all})..."
 docker compose -f "$COMPOSE_FILE" build $BUILD_OPTS $SERVICES
 
 # ---- migrate (api コンテナ内で alembic upgrade head) ----------------------
-# api コンテナの lifespan で自動マイグレーションされる実装になっているが、
-# データ破壊リスクを避けるため、ここでは「up する前に明示的に走らせる」運用は
-# しない (失敗時に api が起動しないだけで、ロールバックが面倒)。
-# 必要なら手動で:
-#   docker compose -f infra/xserver/docker-compose.yml run --rm api alembic upgrade head
-log "skipping explicit alembic upgrade (api lifespan が自動実行 / 手動運用したい場合は README 参照)"
+# api の lifespan は自動マイグレーションしない (main.py 参照)。過去に
+# 「lifespan が自動実行するから」とここを skip していたため、新しい migration が
+# 本番に適用されず /api/v1/movies や /feed が 500 を返す障害が発生した。
+# そのため build 済みの新イメージを使い、コンテナを置き換える *前* に
+# 明示的に alembic upgrade head を実行する。ここで失敗したら set -e により
+# 即座にデプロイを中断し、古い api コンテナは起動したまま残す (=無停止で安全)。
+#
+# api イメージの Dockerfile は ENTRYPOINT を持たず CMD (uvicorn) だけなので、
+# `run --rm api alembic upgrade head` は CMD を上書きして alembic を実行する。
+# alembic.ini は WORKDIR=/app 直下に COPY 済み。run はデフォルトで depends_on の
+# db を service_healthy になるまで起動してから実行する。
+log "running alembic upgrade head (migrate before replacing api container)..."
+# shellcheck disable=SC2086
+docker compose -f "$COMPOSE_FILE" run --rm api alembic upgrade head \
+  || fail "alembic upgrade head に失敗しました。デプロイを中断します (api コンテナは未置換のまま)。"
+log "alembic upgrade head done"
 
 # ---- up -------------------------------------------------------------------
 log "docker compose up -d..."

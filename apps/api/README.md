@@ -14,26 +14,17 @@ uvicorn app.main:app --reload
 
 ## DB マイグレーション運用
 
-**本番 DB へのマイグレーションは GitHub Actions で実行する。**
-API コンテナは起動時にマイグレーションを行わない (役割分離のため)。
+**本番 DB へのマイグレーションはデプロイスクリプトが実行する。**
+API コンテナは起動時 (lifespan) にマイグレーションを行わない (役割分離のため)。
 
 ### 仕組み
 
-- ワークフロー: `.github/workflows/migrate.yml`
-- トリガー: `main` ブランチへのマージで以下のパスに変更があったとき
-  - `apps/api/alembic/**`
-  - `apps/api/app/db/**`
-  - `apps/api/alembic.ini`
-  - `apps/api/pyproject.toml`
-- 手動実行も可 (Actions タブ → DB Migrate → Run workflow)
-
-### 必要な GitHub Secrets
-
-リポジトリ Settings → Secrets and variables → Actions に登録:
-
-| 名前 | 値 | 取得元 |
-|---|---|---|
-| `DATABASE_URL` | `postgresql://user:pass@host:port/db` | Railway の Variables からコピー |
+- `scripts/deploy-xserver.sh` が、新しい api イメージを build した後・api コンテナを
+  置き換える *前* に、`docker compose -f infra/xserver/docker-compose.yml run --rm api alembic upgrade head`
+  を実行する。
+- migration が失敗した場合は `set -euo pipefail` によりデプロイを即中断し、
+  旧 api コンテナはそのまま起動状態で残る (=無停止・安全なロールフォワード)。
+- 手動で本番に流したい場合も同じコマンドを VPS 上で実行すればよい。
 
 ### 新しいマイグレーションを追加する流れ
 
@@ -52,23 +43,22 @@ git add apps/api/alembic/versions/
 git commit -m "feat(db): add some table"
 git push
 
-# 5. main にマージされた瞬間に GitHub Actions が本番 DB に対して
-#    alembic upgrade head を実行する
+# 5. main にマージされ、デプロイが走ると deploy-xserver.sh が
+#    api コンテナ置換前に本番 DB へ alembic upgrade head を実行する
 ```
 
 ### 失敗したとき
 
-- GitHub Actions の Run ログを確認
-- 必要に応じてローカルから `alembic downgrade -1` 等を手動実行
-- API コンテナ側は migration の成否に関わらず起動するので、
-  古いスキーマで動き続けることに注意 (古いコードと新スキーマの組み合わせは概ね安全)
+- デプロイのログ (GitHub Actions → deploy-xserver) を確認
+- migration 失敗時はデプロイが中断し旧 api が残るため、原因を直して再デプロイする
+- 必要に応じて VPS 上から `docker compose ... run --rm api alembic downgrade -1` 等を手動実行
 
 ### AWS 移行時
 
-このワークフローはそのまま流用できる:
-- ECS/Fargate/EKS/App Runner いずれの場合も「CI/CD パイプラインでマイグレーション → アプリ起動」が標準
-- `DATABASE_URL` Secret を RDS エンドポイントに差し替えるだけ
-- デプロイ側のワークフロー (別途必要) で `migrate` ジョブの完了を待ってからアプリを更新するように依存関係を組む
+同じ考え方をそのまま流用できる:
+- ECS/Fargate/EKS/App Runner いずれの場合も「デプロイパイプラインでマイグレーション → アプリ起動」が標準
+- `DATABASE_URL` を RDS エンドポイントに差し替えるだけ
+- デプロイ側のパイプラインで migration ステップの完了を待ってからアプリを更新するよう依存関係を組む
 
 ## アーキテクチャ
 

@@ -42,5 +42,5 @@
 ## マイグレーション運用
 
 - 開発時: `alembic revision --autogenerate -m "..."` でドラフト生成 → 手動で整形
-- main への push 時に `.github/workflows/migrate.yml` が `alembic upgrade head` を実行
+- 本番反映時にデプロイスクリプト (`scripts/deploy-xserver.sh`) が api コンテナ置換前に `alembic upgrade head` を実行 (失敗時はデプロイ中断)
 - ローカル: `pnpm --filter @short-video-media/api run db:migrate`

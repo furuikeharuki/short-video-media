@@ -81,4 +81,6 @@ pnpm --filter @short-video-media/web dev    # http://localhost:3000
 | api | Railway | main への push (自動) |
 | jobs | GitHub Actions | cron / 手動 dispatch |
 
-`.github/workflows/migrate.yml` が main 反映時に `alembic upgrade head` を実行。
+api のデプロイ (`scripts/deploy-xserver.sh`) が、新イメージを build 後・api コンテナ置換前に
+`docker compose run --rm api alembic upgrade head` を実行する。migration が失敗した場合は
+デプロイを中断し、旧 api コンテナを残す (無停止・安全)。api の lifespan では自動マイグレーションしない。

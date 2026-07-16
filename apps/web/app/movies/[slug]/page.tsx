@@ -24,10 +24,27 @@ export async function generateMetadata({ params }: PageProps): Promise<Metadata>
   try {
     const { slug } = await params;
     const movie = await getMovieBySlug(slug);
-    const title = `${movie.title} | ${SITE_NAME}`;
-    const raw = movie.description
+    // 品番 (agmx00251 等) は GSC 上で完全一致検索の流入が多いので title / description に含める。
+    const hinban = movie.maker_product || movie.product_id || "";
+    const leadActress = movie.actresses[0] ?? "";
+    // 作品タイトル + 女優名 + 品番 を title に含める (既に含まれる語は重複させない)。
+    const titleParts = [
+      movie.title,
+      leadActress && !movie.title.includes(leadActress) ? leadActress : "",
+      hinban && !movie.title.includes(hinban) ? `[${hinban}]` : "",
+    ].filter(Boolean);
+    const title = `${titleParts.join(" ")} | ${SITE_NAME}`;
+    // description は 品番・女優名を先頭に置き、スニペットで完全一致クエリに当てる。
+    const lead = [
+      hinban ? `品番${hinban}` : "",
+      movie.actresses.length > 0 ? `${movie.actresses.join("・")}出演` : "",
+    ]
+      .filter(Boolean)
+      .join(" / ");
+    const body = movie.description
       ? movie.description
-      : `${movie.actresses.join("・")}出演。${movie.maker_name ?? ""}の作品をショート動画で試し見できます。`;
+      : `${movie.maker_name ?? ""}の作品をショート動画で試し見できます。`;
+    const raw = lead ? `${lead}。${body}` : body;
     const description = raw.length > 155 ? raw.slice(0, 152) + "…" : raw;
     const imageUrl = movie.image_url_large ?? movie.image_url_list ?? "";
     const canonical = `${SITE_URL}/movies/${slug}`;

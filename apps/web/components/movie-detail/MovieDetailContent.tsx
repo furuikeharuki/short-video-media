@@ -127,14 +127,17 @@ export default function MovieDetailContent({ movie }: Props) {
           )}
         </div>
 
-        <div className="mdc-meta-table">
-          {metaRows.map(({ label, value }) => (
-            <div key={label} className="mdc-meta-row">
-              <span className="mdc-meta-label">{label}</span>
-              <span className="mdc-meta-value">{value}</span>
-            </div>
-          ))}
-        </div>
+        <section className="mdc-meta-section">
+          <h3 className="mdc-section-heading">作品情報</h3>
+          <div className="mdc-meta-table">
+            {metaRows.map(({ label, value }) => (
+              <div key={label} className="mdc-meta-row">
+                <span className="mdc-meta-label">{label}</span>
+                <span className="mdc-meta-value">{value}</span>
+              </div>
+            ))}
+          </div>
+        </section>
 
         {movie.description && (
           <p className="mdc-description">{movie.description}</p>
@@ -189,10 +192,16 @@ export default function MovieDetailContent({ movie }: Props) {
         .mdc-stars { color: #f5c518; font-size: 14px; letter-spacing: 1px; }
         .mdc-review-num { font-size: 12px; color: rgba(255,255,255,0.45); }
         .mdc-price { font-size: 16px; font-weight: 700; color: #e91e63; }
+        .mdc-meta-section { margin-bottom: 24px; }
+        .mdc-section-heading {
+          font-size: 13px; font-weight: 700; color: rgba(255,255,255,0.85);
+          letter-spacing: 0.06em; margin-bottom: 10px;
+        }
         .mdc-meta-table {
           display: flex; flex-direction: column; gap: 0;
           margin-bottom: 24px; border-top: 1px solid rgba(255,255,255,0.08);
         }
+        .mdc-meta-section .mdc-meta-table { margin-bottom: 0; }
         .mdc-meta-row {
           display: flex; align-items: flex-start; gap: 12px;
           padding: 10px 0; border-bottom: 1px solid rgba(255,255,255,0.06);

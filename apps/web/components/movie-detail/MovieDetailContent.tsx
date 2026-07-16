@@ -153,10 +153,10 @@ export default function MovieDetailContent({ movie }: Props) {
           )}
         </div>
 
-        {introText && (
+        {(movie.dmm_description || introText) && (
           <section className="mdc-info-section">
             <h3 className="mdc-section-heading">作品紹介</h3>
-            <p className="mdc-intro-text">{introText}</p>
+            <p className="mdc-intro-text">{movie.dmm_description || introText}</p>
           </section>
         )}
 
@@ -244,6 +244,7 @@ export default function MovieDetailContent({ movie }: Props) {
         }
         .mdc-intro-text {
           font-size: 14px; line-height: 1.85; color: rgba(255,255,255,0.78);
+          white-space: pre-wrap;
         }
         .mdc-recommend-list {
           list-style: none; display: flex; flex-direction: column; gap: 8px;

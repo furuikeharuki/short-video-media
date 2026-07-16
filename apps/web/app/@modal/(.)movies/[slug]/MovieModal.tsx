@@ -158,6 +158,13 @@ export default function MovieModal({ movie }: { movie: MovieDetail }) {
               ))}
             </div>
 
+            {movie.dmm_description && (
+              <section style={descSectionStyle}>
+                <h2 style={descHeadingStyle}>作品説明</h2>
+                <p style={descStyle}>{movie.dmm_description}</p>
+              </section>
+            )}
+
             {movie.description && (
               <p style={descStyle}>{movie.description}</p>
             )}
@@ -371,11 +378,24 @@ const metaValueStyle: React.CSSProperties = {
   wordBreak: "break-all",
 };
 
+const descSectionStyle: React.CSSProperties = {
+  marginBottom: "28px",
+};
+
+const descHeadingStyle: React.CSSProperties = {
+  fontSize: "13px",
+  fontWeight: 700,
+  color: "rgba(255,255,255,0.85)",
+  letterSpacing: "0.06em",
+  marginBottom: "10px",
+};
+
 const descStyle: React.CSSProperties = {
   fontSize: "14px",
   lineHeight: 1.8,
   color: "rgba(255,255,255,0.6)",
   marginBottom: "28px",
+  whiteSpace: "pre-wrap",
 };
 
 const ctaStyle: React.CSSProperties = {

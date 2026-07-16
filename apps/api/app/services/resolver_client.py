@@ -48,6 +48,9 @@ class ResolvedMp4:
     mp4_url: str
     low_mp4_url: str | None = None
     high_mp4_url: str | None = None
+    # litevideo ページの __NEXT_DATA__ から抽出した DMM 作品説明文。
+    # MP4 URL とは独立の best-effort な付随データ。無ければ None。
+    description: str | None = None
 
 
 logger = logging.getLogger(__name__)
@@ -142,6 +145,7 @@ async def _get_cached_redis(content_id: str) -> ResolvedMp4 | None:
             mp4_url=data["mp4_url"],
             low_mp4_url=data.get("low_mp4_url"),
             high_mp4_url=data.get("high_mp4_url"),
+            description=data.get("description"),
         )
     except (KeyError, ValueError, TypeError):
         # 不正な値は無視して再抽出に倒す
@@ -157,6 +161,7 @@ async def _put_cached_redis(content_id: str, resolved: ResolvedMp4) -> None:
             "mp4_url": resolved.mp4_url,
             "low_mp4_url": resolved.low_mp4_url,
             "high_mp4_url": resolved.high_mp4_url,
+            "description": resolved.description,
         }
     )
     try:
@@ -447,6 +452,7 @@ async def _do_resolve(content_id: str) -> ResolvedMp4:
         mp4_url=result.mp4_url,
         low_mp4_url=result.low_mp4_url,
         high_mp4_url=result.high_mp4_url,
+        description=result.description,
     )
 
 

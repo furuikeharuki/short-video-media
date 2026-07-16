@@ -37,6 +37,10 @@ class Movie(Base):
     title: Mapped[str] = mapped_column(String, nullable=False)
     slug: Mapped[str] = mapped_column(String, unique=True, index=True, nullable=False)
     description: Mapped[str] = mapped_column(Text, default="")
+    # DMM litevideo ページの __NEXT_DATA__ (videoContent.text) から抽出した作品説明文。
+    # FANZA API 由来の `description` とは別ソースで、MP4 解決時に同じ litevideo
+    # レスポンスから取得して保存する。未取得の作品は NULL。
+    dmm_description: Mapped[str | None] = mapped_column(Text)
     volume: Mapped[int | None] = mapped_column(Integer)
 
     # 画像・動画URL

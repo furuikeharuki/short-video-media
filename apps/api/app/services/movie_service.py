@@ -52,6 +52,7 @@ async def get_movie_by_slug_service(db: AsyncSession, slug: str) -> MovieDetail 
         title=movie.title,
         slug=movie.slug,
         description=movie.description or "",
+        dmm_description=movie.dmm_description or None,
         volume=movie.volume,
         image_url_list=movie.image_url_list,
         image_url_large=movie.image_url_large,

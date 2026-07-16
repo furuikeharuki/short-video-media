@@ -8,6 +8,9 @@ export type MovieDetail = {
   title: string;
   slug: string;
   description: string;
+  // DMM litevideo (__NEXT_DATA__) 由来の作品説明文。FANZA API の description とは別ソース。
+  // 未取得の作品は null。詳細ページ / モーダルの「作品説明」セクションに表示する。
+  dmm_description: string | null;
   volume: number | null;
   image_url_list: string | null;
   image_url_large: string | null;

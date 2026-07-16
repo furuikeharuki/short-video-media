@@ -8,6 +8,7 @@ import DetailViewTracker from "@/components/analytics/detail-view-tracker";
 import BackButton from "@/components/BackButton";
 import ActressLink from "@/components/ActressLink";
 import AdSlot from "@/components/ads/AdSlot";
+import ExpandableText from "@/components/ExpandableText";
 import { getMovieBySlug } from "@/lib/api/movies";
 import { SITE_NAME, SITE_URL, SITE_LOCALE } from "@/lib/config/seo";
 import { generateIntro } from "@/lib/movieIntro";
@@ -332,7 +333,7 @@ export default async function MovieDetailPage({ params }: PageProps) {
             {(movie.dmm_description || introText) && (
               <section style={styles.introSection}>
                 <h2 style={styles.descHeading}>作品紹介</h2>
-                <p style={styles.introText}>{movie.dmm_description || introText}</p>
+                <ExpandableText text={movie.dmm_description || introText} />
               </section>
             )}
 
@@ -466,10 +467,6 @@ const styles: Record<string, React.CSSProperties> = {
   },
   descSection: { marginBottom: '28px' },
   introSection: { marginBottom: '28px' },
-  introText: {
-    fontSize: '14px', lineHeight: 1.85, color: 'rgba(255,255,255,0.78)',
-    whiteSpace: 'pre-wrap' as const,
-  },
   descHeading: {
     fontSize: '13px', fontWeight: 700, color: 'rgba(255,255,255,0.85)',
     letterSpacing: '0.06em', marginBottom: '10px',

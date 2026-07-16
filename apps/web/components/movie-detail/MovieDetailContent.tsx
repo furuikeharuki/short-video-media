@@ -4,6 +4,7 @@ import { useRouter } from "next/navigation";
 import AffiliateLink from "@/components/analytics/affiliate-link";
 import ActressLink from "@/components/ActressLink";
 import AdSlot from "@/components/ads/AdSlot";
+import ExpandableText from "@/components/ExpandableText";
 import { navigateRespectingModal } from "@/lib/modalNav";
 import { generateIntro } from "@/lib/movieIntro";
 import { buildRecommendations } from "@/lib/movieRecommend";
@@ -156,7 +157,7 @@ export default function MovieDetailContent({ movie }: Props) {
         {(movie.dmm_description || introText) && (
           <section className="mdc-info-section">
             <h3 className="mdc-section-heading">作品紹介</h3>
-            <p className="mdc-intro-text">{movie.dmm_description || introText}</p>
+            <ExpandableText text={movie.dmm_description || introText} />
           </section>
         )}
 
@@ -241,10 +242,6 @@ export default function MovieDetailContent({ movie }: Props) {
         .mdc-section-heading {
           font-size: 13px; font-weight: 700; color: rgba(255,255,255,0.85);
           letter-spacing: 0.06em; margin-bottom: 10px;
-        }
-        .mdc-intro-text {
-          font-size: 14px; line-height: 1.85; color: rgba(255,255,255,0.78);
-          white-space: pre-wrap;
         }
         .mdc-recommend-list {
           list-style: none; display: flex; flex-direction: column; gap: 8px;

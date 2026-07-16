@@ -30,6 +30,12 @@ _HAS_JP = re.compile(r"[぀-ヿ㐀-鿿豈-﫿ー]")
 # 断片や人名 (くらしなひまり→「くら」等) の切れ端であることが多く、特徴語にならない。
 _HIRAGANA_ONLY = re.compile(r"^[぀-ゟー]+$")
 
+# 1 文字のラテン英字・数字 (半角/全角)。ネットスラングの 'w'(笑) 等は janome が
+# 名詞に誤タグ付けし、直後の人名等に連結される (「wくらしな」)。1 文字の英数字は
+# 単独では意味を持たないため、連結の境界とし、それ自体も出力しない。2 文字以上の
+# ラテン語 (「IT」等) は正当な語なので対象外。
+_SINGLE_ALNUM = re.compile(r"^[0-9A-Za-z０-９Ａ-Ｚａ-ｚ]$")
+
 # 特徴語に許可する文字。ひらがな・カタカナ・長音・漢字 (々含む)・半角英数字のみ。
 # これ以外の文字 (記号 '/' ':'、括弧 '（' '）'、句読点、全角記号等) を 1 文字でも
 # 含むトークン/語は連結の境界とし、出力もしない。janome は '/' や ':' を
@@ -115,6 +121,8 @@ def _is_compound_part(surface: str, part_of_speech: str) -> tuple[bool, str]:
         return False, subtype
     if len(surface) == 1 and _HIRAGANA_ONLY.match(surface):
         return False, subtype  # 1 文字ひらがな (助詞的断片) は連結に含めない
+    if _SINGLE_ALNUM.match(surface):
+        return False, subtype  # 1 文字英数字 ('w' 等のネットスラング) は境界
     if surface in _HONORIFIC_SUFFIXES:  # 敬称・愛称は境界扱い (人名断片を作らない)
         return False, subtype
     if surface in STOPWORDS:  # 汎用語は複合語に取り込まない (境界)

@@ -99,6 +99,13 @@ PROFILE_DESCRIPTION = (
 # 「かくらしな」が生成された。1 文字ひらがな (ら) を連結に含めないことで防ぐ。
 HIRAGANA_JOIN_DESCRIPTION = "天然というかくらしなさんの魅力。出演はくらしな。"
 
+# ネットスラングの 'w'(笑) 由来の壊れた連結を模したフィクスチャ。'w' は半角英字で
+# _ALLOWED_CHARS を通るため、旧ロジックでは直後の人名に連結され「wくらしな」が
+# 生成された (本番 movie h-1832msoc00065 で観測)。1 文字英数字を境界にして防ぐ。
+SINGLE_ALNUM_JOIN_DESCRIPTION = (
+    "一週間してすぐまた予約をしてしまいましたwくらしなさんにも覚えてもらえた"
+)
+
 
 def test_symbols_are_hard_boundaries() -> None:
     keywords = extract_keywords(PROFILE_DESCRIPTION)
@@ -116,6 +123,22 @@ def test_no_single_char_hiragana_join() -> None:
     # 1 文字ひらがな (ら) を巻き込んだ壊れた連結は生成されない。
     assert "かくらしな" not in keywords
     assert all("かくらし" not in k for k in keywords)
+
+
+def test_no_single_alnum_join() -> None:
+    keywords = extract_keywords(SINGLE_ALNUM_JOIN_DESCRIPTION)
+    # 'w' を巻き込んだ壊れた連結は生成されず、人名は 'w' 抜きで取れる。
+    assert "くらしな" in keywords
+    assert "wくらしな" not in keywords
+    # 出力語のどれにも単独の 'w' が前後に付いていない。
+    assert all(not k.startswith("w") and not k.endswith("w") for k in keywords)
+    assert "w" not in keywords
+
+
+def test_multi_char_latin_still_joins() -> None:
+    # 2 文字以上のラテン語は正当な語として連結され続ける (回帰防止)。
+    keywords = extract_keywords("街中で声をかけた素人。IT系企業勤務の女性。")
+    assert "IT系企業勤務" in keywords
 
 
 def test_max_keywords_cap() -> None:

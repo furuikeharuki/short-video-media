@@ -11,12 +11,16 @@ import { isAdZoneEnabled } from "@/lib/ads/config";
 
 export const revalidate = 30;
 
+// ブランド語「av shorts」の検索流入を維持しつつ、キーワード (FANZA / ショート動画) を
+// title に含めて掲載順位改善を狙う。
+const HOME_TITLE = "AV Shorts｜FANZAのAVをショート動画で試し見できるメディア";
+
 export const metadata: Metadata = {
-  title: "AV Shorts",
+  title: HOME_TITLE,
   description: HOME_DESCRIPTION,
   alternates: { canonical: "/" },
   openGraph: {
-    title: "AV Shorts",
+    title: HOME_TITLE,
     description:
       "新作・ランキング・人気ジャンルのAVショート動画。気に入った作品はFANZAでそのまま購入できます。",
     url: "/",
@@ -115,7 +119,9 @@ export default async function Page() {
                   movie={m}
                   aspect="portrait"
                   rank={isRanking && i < 100 ? i + 1 : undefined}
-                  priority={sectionIndex === 0 && i < 3}
+                  // LCP は先頭カード 1 枚。fetchPriority=high を複数枚に付けると
+                  // 帯域を奪い合って逆に LCP が遅くなるため、最初の 1 枚だけ優先する。
+                  priority={sectionIndex === 0 && i === 0}
                   playlist={{
                     key: playlistKey,
                     title: section.title,

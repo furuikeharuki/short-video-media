@@ -130,6 +130,23 @@ export default async function ActressDetailPage({ params }: PageProps) {
       { "@type": "ListItem", position: 2, name: profile.name, item: canonical },
     ],
   };
+  // 出演作品を ItemList として構造化。作品詳細ページへのリンク集約を明示し、
+  // 女優ページからのクロール導線を検索エンジンに伝える。
+  const itemListJsonLd =
+    movies.length > 0
+      ? {
+          "@context": "https://schema.org",
+          "@type": "ItemList",
+          name: `${profile.name} の出演作品`,
+          numberOfItems: movies.length,
+          itemListElement: movies.map((m, i) => ({
+            "@type": "ListItem",
+            position: i + 1,
+            url: `${SITE_URL}/movies/${encodeURIComponent(m.slug)}`,
+            name: m.title,
+          })),
+        }
+      : null;
 
   return (
     <main style={styles.main}>
@@ -141,6 +158,12 @@ export default async function ActressDetailPage({ params }: PageProps) {
         type="application/ld+json"
         dangerouslySetInnerHTML={{ __html: JSON.stringify(breadcrumbJsonLd) }}
       />
+      {itemListJsonLd && (
+        <script
+          type="application/ld+json"
+          dangerouslySetInnerHTML={{ __html: JSON.stringify(itemListJsonLd) }}
+        />
+      )}
       <div style={styles.topBar}>
         <ActressBackButton />
       </div>

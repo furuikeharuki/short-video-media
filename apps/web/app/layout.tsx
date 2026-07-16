@@ -1,4 +1,5 @@
 import type { Metadata, Viewport } from "next";
+import Script from "next/script";
 import Header from "@/components/Header";
 import BottomNav from "@/components/BottomNav";
 import BottomNavFreezeBootstrap from "@/components/BottomNavFreezeBootstrap";
@@ -137,23 +138,26 @@ export default function RootLayout({
           type="application/ld+json"
           dangerouslySetInnerHTML={{ __html: JSON.stringify(orgJsonLd) }}
         />
-        {GA_ID && (
-          <>
-            <script async src={`https://www.googletagmanager.com/gtag/js?id=${GA_ID}`} />
-            <script
-              dangerouslySetInnerHTML={{
-                __html: `
-                  window.dataLayer = window.dataLayer || [];
-                  function gtag(){dataLayer.push(arguments);}
-                  gtag('js', new Date());
-                  gtag('config', '${GA_ID}');
-                `,
-              }}
-            />
-          </>
-        )}
       </head>
       <body>
+        {/* GA (gtag) は afterInteractive で読み込み、初期描画 (LCP/TBT) を阻害しない。
+            同期/head 直挿しだと計測タグが初期ロードの帯域・メインスレッドを奪うため。 */}
+        {GA_ID && (
+          <>
+            <Script
+              src={`https://www.googletagmanager.com/gtag/js?id=${GA_ID}`}
+              strategy="afterInteractive"
+            />
+            <Script id="ga-init" strategy="afterInteractive">
+              {`
+                window.dataLayer = window.dataLayer || [];
+                function gtag(){dataLayer.push(arguments);}
+                gtag('js', new Date());
+                gtag('config', '${GA_ID}');
+              `}
+            </Script>
+          </>
+        )}
         <SessionProvider>
           {/* /feed と /search 表示時に保存済みフィルターを URL に自動注入し、
               children に対して enforce ステータス (pending/ready) を Context で共有する。

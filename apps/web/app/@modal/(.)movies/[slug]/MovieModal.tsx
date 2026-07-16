@@ -8,6 +8,7 @@ import DetailViewTracker from "@/components/analytics/detail-view-tracker";
 import ActressLink from "@/components/ActressLink";
 import AdSlot from "@/components/ads/AdSlot";
 import type { MovieDetail } from "@/lib/api/movies";
+import { generateIntro } from "@/lib/movieIntro";
 
 const NA = "----";
 
@@ -52,6 +53,30 @@ export default function MovieModal({ movie }: { movie: MovieDetail }) {
   const imgSrc = movie.image_url_large ?? movie.image_url_list ?? "";
   const price = movie.price_list?.sale_price ?? movie.price_list?.list_price ?? movie.price_min;
   const hasReview = movie.review_count > 0 && movie.review_average != null;
+
+  // モーダルは簡易版 (作品紹介 + キーワード + 折りたたみ公式説明)。
+  const introText = generateIntro({
+    title: movie.title,
+    slug: movie.slug,
+    actresses: movie.actresses,
+    genres: movie.genres,
+    product_id: movie.product_id,
+    maker_product: movie.maker_product,
+    label_name: movie.label_name,
+    maker_name: movie.maker_name,
+    volume: movie.volume,
+    price_min: movie.price_min,
+    price_list: movie.price_list
+      ? {
+          list_price: movie.price_list.list_price,
+          sale_price: movie.price_list.sale_price,
+        }
+      : null,
+    delivery_date: movie.delivery_date,
+    release_date: movie.release_date,
+    primary_date: movie.primary_date,
+  });
+  const keywords = movie.dmm_keywords ?? [];
 
   const fieldLink = (
     field: "director" | "maker" | "label" | "series",
@@ -158,10 +183,39 @@ export default function MovieModal({ movie }: { movie: MovieDetail }) {
               ))}
             </div>
 
+            {introText && (
+              <section style={descSectionStyle}>
+                <h2 style={descHeadingStyle}>作品紹介</h2>
+                <p style={introTextStyle}>{introText}</p>
+              </section>
+            )}
+
+            {keywords.length > 0 && (
+              <section style={descSectionStyle}>
+                <h2 style={descHeadingStyle}>この作品のキーワード</h2>
+                <div style={keywordListStyle}>
+                  {keywords.map((kw) => (
+                    <span key={kw} style={keywordChipStyle}>
+                      {kw}
+                    </span>
+                  ))}
+                </div>
+              </section>
+            )}
+
             {movie.dmm_description && (
               <section style={descSectionStyle}>
-                <h2 style={descHeadingStyle}>作品説明</h2>
-                <p style={descStyle}>{movie.dmm_description}</p>
+                <h2 style={descHeadingStyle}>FANZA公式の作品説明</h2>
+                {movie.dmm_description.length > 140 ? (
+                  <details style={officialDetailsStyle}>
+                    <summary style={officialSummaryStyle}>
+                      作品説明を全文表示
+                    </summary>
+                    <p style={descStyle}>{movie.dmm_description}</p>
+                  </details>
+                ) : (
+                  <p style={descStyle}>{movie.dmm_description}</p>
+                )}
               </section>
             )}
 
@@ -396,6 +450,43 @@ const descStyle: React.CSSProperties = {
   color: "rgba(255,255,255,0.6)",
   marginBottom: "28px",
   whiteSpace: "pre-wrap",
+};
+
+const introTextStyle: React.CSSProperties = {
+  fontSize: "14px",
+  lineHeight: 1.85,
+  color: "rgba(255,255,255,0.78)",
+};
+
+const keywordListStyle: React.CSSProperties = {
+  display: "flex",
+  flexWrap: "wrap",
+  gap: "8px",
+};
+
+const keywordChipStyle: React.CSSProperties = {
+  display: "inline-block",
+  background: "rgba(124,183,255,0.12)",
+  border: "1px solid rgba(124,183,255,0.3)",
+  color: "#9cc7ff",
+  fontSize: "12px",
+  fontWeight: 600,
+  padding: "4px 12px",
+  borderRadius: "999px",
+};
+
+const officialDetailsStyle: React.CSSProperties = {
+  background: "rgba(255,255,255,0.03)",
+  border: "1px solid rgba(255,255,255,0.08)",
+  borderRadius: "8px",
+  padding: "12px 14px",
+};
+
+const officialSummaryStyle: React.CSSProperties = {
+  cursor: "pointer",
+  fontSize: "13px",
+  fontWeight: 600,
+  color: "rgba(255,255,255,0.7)",
 };
 
 const ctaStyle: React.CSSProperties = {

@@ -11,6 +11,8 @@ export type MovieDetail = {
   // DMM litevideo (__NEXT_DATA__) 由来の作品説明文。FANZA API の description とは別ソース。
   // 未取得の作品は null。詳細ページ / モーダルの「作品説明」セクションに表示する。
   dmm_description: string | null;
+  // dmm_description から抽出した特徴語 (「この作品のキーワード」チップ用)。未抽出は空配列。
+  dmm_keywords: string[];
   volume: number | null;
   image_url_list: string | null;
   image_url_large: string | null;
@@ -26,6 +28,7 @@ export type MovieDetail = {
   release_date: string | null;
   delivery_date: string | null;
   rental_start_date: string | null;
+  primary_date: string | null;
   review_count: number;
   review_average: number | null;
   director_name: string | null;

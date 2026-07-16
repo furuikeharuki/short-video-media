@@ -37,6 +37,9 @@ def _mp4_values(normalized: resolver_client.ResolvedMp4, now: datetime) -> dict:
       - 抽出できなかった (None/空) 回に既存の説明文を空で上書きしない
       - 説明文が取れた回にだけ最新値へ更新する
     という要件を満たす (要件: 非空のときのみ更新)。
+
+    dmm_keywords は dmm_description が取れたときに同じタイミングで janome 抽出して
+    保存する。抽出が空/失敗のときは列を更新しない (既存値を残す)。
     """
     values: dict = {
         "sample_mp4_url": normalized.mp4_url,
@@ -47,6 +50,15 @@ def _mp4_values(normalized: resolver_client.ResolvedMp4, now: datetime) -> dict:
     description = (normalized.description or "").strip()
     if description:
         values["dmm_description"] = description
+        # 説明文が更新されるので特徴語も同時に付け直す。抽出失敗時は列を触らない。
+        try:
+            from app.services.keyword_extraction import extract_keywords
+
+            keywords = extract_keywords(description)
+            if keywords:
+                values["dmm_keywords"] = keywords
+        except Exception:  # noqa: BLE001
+            logger.warning("dmm_keywords の抽出に失敗しました。", exc_info=True)
     return values
 
 

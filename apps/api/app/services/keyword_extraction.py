@@ -158,6 +158,34 @@ def _compound_terms(tokenizer, text: str) -> list[str]:
     return terms
 
 
+def _dedupe_substrings(counts: dict[str, int]) -> list[tuple[str, int]]:
+    """他の語の部分文字列になっている語を落とし、長い語に統合する。
+
+    「くらし」が「くらしな」の部分文字列のように、同じ語幹の断片が重複するのを防ぐ。
+    短い語は、それを含む最長の語 (同長なら高頻度→初出順) にスコアを加算してから
+    除外する。残った語を統合後スコアの降順・初出順で並べて返す。
+    """
+    terms = list(counts.keys())  # 初出順 (dict は挿入順を保持)
+    order = {t: i for i, t in enumerate(terms)}
+    merged = dict(counts)
+    absorbed: set[str] = set()
+
+    for t in terms:
+        absorbers = [
+            u for u in terms if u != t and len(u) > len(t) and t in u
+        ]
+        if not absorbers:
+            continue
+        # 最長 → 高頻度 → 初出 (最小 order) を吸収先に選ぶ (決定的)。
+        best = max(absorbers, key=lambda u: (len(u), counts[u], -order[u]))
+        merged[best] += counts[t]
+        absorbed.add(t)
+
+    remaining = [(t, merged[t]) for t in terms if t not in absorbed]
+    remaining.sort(key=lambda kv: (-kv[1], order[kv[0]]))
+    return remaining
+
+
 def extract_keywords(text: str | None, *, max_keywords: int = 8) -> list[str]:
     """作品説明文から特徴語を最大 ``max_keywords`` 個抽出する。
 
@@ -167,6 +195,8 @@ def extract_keywords(text: str | None, *, max_keywords: int = 8) -> list[str]:
       複合語の内部にしか現れない断片は個別に出力されない。
     - 連結後に、2 文字未満・数字のみ・記号のみ・伏字 (``*`` を含む語)・
       2 文字以下のひらがな断片・ストップワードを除外する。
+    - 別の語の部分文字列になっている語 (「くらし」⊂「くらしな」等) は、長い語に
+      スコアを統合したうえで除外する (top-N 切り出しの前に行い、リストを埋める)。
     - 文書内頻度の降順で並べ、同数は初出順 (決定的) で採用する。
     - 空文字 / None / janome 利用不可のときは空リストを返す。
     """
@@ -184,6 +214,6 @@ def extract_keywords(text: str | None, *, max_keywords: int = 8) -> list[str]:
         logger.warning("キーワード抽出中にエラーが発生しました。", exc_info=True)
         return []
 
-    # 頻度降順 → 初出順 (dict は挿入順を保持するため、安定ソートで初出順が保たれる)。
-    ordered = sorted(counts.items(), key=lambda kv: -kv[1])
+    # 部分文字列の重複を統合・除外してから上位 N 件を切り出す。
+    ordered = _dedupe_substrings(counts)
     return [word for word, _ in ordered[:max_keywords]]

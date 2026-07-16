@@ -87,7 +87,8 @@ def test_backfills_keywords_on_read(monkeypatch: pytest.MonkeyPatch) -> None:
     out = asyncio.run(movie_service.get_movie_by_slug_service(db, "slug-a"))
     assert out is not None
     assert out.dmm_keywords, "キーワードが補完されていない"
-    assert "エステ" in out.dmm_keywords
+    # 「エステ」は「メンズエステ店」に統合されるため、複合語側で補完を確認する。
+    assert "メンズエステ店" in out.dmm_keywords
     assert db.executed and db.committed, "DB への write-on-read が実行されていない"
 
 

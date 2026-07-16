@@ -11,7 +11,6 @@ import AdSlot from "@/components/ads/AdSlot";
 import { getMovieBySlug } from "@/lib/api/movies";
 import { SITE_NAME, SITE_URL, SITE_LOCALE } from "@/lib/config/seo";
 import { generateIntro } from "@/lib/movieIntro";
-import { visibleSpecRows } from "@/lib/movieSpec";
 import { buildRecommendations } from "@/lib/movieRecommend";
 
 type PageProps = {
@@ -156,24 +155,6 @@ export default async function MovieDetailPage({ params }: PageProps) {
       delivery_date: movie.delivery_date,
       release_date: movie.release_date,
       primary_date: movie.primary_date,
-    });
-    const specRows = visibleSpecRows({
-      product_id: movie.product_id,
-      maker_product: movie.maker_product,
-      volume: movie.volume,
-      delivery_date: movie.delivery_date,
-      release_date: movie.release_date,
-      primary_date: movie.primary_date,
-      maker_name: movie.maker_name,
-      label_name: movie.label_name,
-      genres: movie.genres,
-      price_min: movie.price_min,
-      price_list: movie.price_list
-        ? {
-            list_price: movie.price_list.list_price,
-            sale_price: movie.price_list.sale_price,
-          }
-        : null,
     });
     const recommendations = buildRecommendations(movie.genres);
     const keywords = movie.dmm_keywords ?? [];
@@ -348,15 +329,6 @@ export default async function MovieDetailPage({ params }: PageProps) {
               )}
             </div>
 
-            <div style={styles.metaTable}>
-              {metaRows.map(({ label, value }) => (
-                <div key={label} style={styles.metaRow}>
-                  <span style={styles.metaLabel}>{label}</span>
-                  <span style={styles.metaValue}>{value}</span>
-                </div>
-              ))}
-            </div>
-
             {introText && (
               <section style={styles.introSection}>
                 <h2 style={styles.descHeading}>作品紹介</h2>
@@ -390,19 +362,17 @@ export default async function MovieDetailPage({ params }: PageProps) {
               </section>
             )}
 
-            {specRows.length > 0 && (
-              <section style={styles.descSection}>
-                <h2 style={styles.descHeading}>作品情報</h2>
-                <div style={styles.metaTable}>
-                  {specRows.map(({ label, value }) => (
-                    <div key={label} style={styles.metaRow}>
-                      <span style={styles.metaLabel}>{label}</span>
-                      <span style={styles.metaValue}>{value}</span>
-                    </div>
-                  ))}
-                </div>
-              </section>
-            )}
+            <section style={styles.descSection}>
+              <h2 style={styles.descHeading}>作品情報</h2>
+              <div style={styles.metaTable}>
+                {metaRows.map(({ label, value }) => (
+                  <div key={label} style={styles.metaRow}>
+                    <span style={styles.metaLabel}>{label}</span>
+                    <span style={styles.metaValue}>{value}</span>
+                  </div>
+                ))}
+              </div>
+            </section>
 
             {/* FANZA 公式の作品説明。長文は details で折りたたむが、
                 本文は常に SSR HTML に含める (JS による遅延挿入はしない)。 */}

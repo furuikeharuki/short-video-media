@@ -24,7 +24,7 @@ import {
   trackInteraction,
   trackInteractionDeduped,
 } from "@/lib/analytics/interactions";
-import { PRO_ACTRESS_TAIL_KEEP_SEC, tailStartForDuration } from "@/lib/proActress";
+import { TAIL_KEEP_SEC, tailStartForDuration } from "@/lib/proActress";
 
 interface Options {
   slug: string;
@@ -168,7 +168,7 @@ export function useVideoInteractionTracking({
     // 非 pro-actress は 0。duration 未確定のうちは tailStartForDuration が 0 を返す。
     const effectiveStart = (): number =>
       isProActress
-        ? tailStartForDuration(video.duration, PRO_ACTRESS_TAIL_KEEP_SEC)
+        ? tailStartForDuration(video.duration, TAIL_KEEP_SEC)
         : 0;
     const onTimeUpdate = () => {
       const dur = video.duration;

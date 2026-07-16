@@ -223,10 +223,10 @@ interface PrefetchSlot {
    */
   targetIndex: number;
   /**
-   * pro-actress 作品の先頭スキップ秒数 (= active 化時に currentTime をそこまで
-   * 進める値)。隠し <video> はこの値を使って loadedmetadata 後に currentTime を
-   * loadedmetadata 後に開始位置 (duration-tailKeepSec) を先り設定し、browser に
-   * 開始位置付近の Range も裏で取りに行かせる。ノーマル作品は 0。
+   * 末尾スキップで末尾に残す秒数 (= active 化時に currentTime をそこまで
+   * 進める値)。隠し <video> はこの値を使って loadedmetadata 後に開始位置
+   * (duration-tailKeepSec) を先り設定し、browser に開始位置付近の Range も裏で
+   * 取りに行かせる。全動画に適用されるので通常 60。
    */
   tailKeepSec: number;
 }
@@ -243,7 +243,7 @@ interface Target {
    */
   preload: "auto" | "metadata" | "none";
   /**
-   * pro-actress 作品で末尾に残す秒数 (60)。`getTailKeepSec(card.genres)` で算出される。
+   * 末尾に残す秒数 (60)。`getTailKeepSec()` で算出される (全動画に適用)。
    */
   tailKeepSec: number;
 }

@@ -329,10 +329,10 @@ export default async function MovieDetailPage({ params }: PageProps) {
               )}
             </div>
 
-            {introText && (
+            {(movie.dmm_description || introText) && (
               <section style={styles.introSection}>
                 <h2 style={styles.descHeading}>作品紹介</h2>
-                <p style={styles.introText}>{introText}</p>
+                <p style={styles.introText}>{movie.dmm_description || introText}</p>
               </section>
             )}
 
@@ -373,24 +373,6 @@ export default async function MovieDetailPage({ params }: PageProps) {
                 ))}
               </div>
             </section>
-
-            {/* FANZA 公式の作品説明。長文は details で折りたたむが、
-                本文は常に SSR HTML に含める (JS による遅延挿入はしない)。 */}
-            {movie.dmm_description && (
-              <section style={styles.descSection}>
-                <h2 style={styles.descHeading}>FANZA公式の作品説明</h2>
-                {movie.dmm_description.length > 140 ? (
-                  <details style={styles.officialDetails}>
-                    <summary style={styles.officialSummary}>
-                      作品説明を全文表示
-                    </summary>
-                    <p style={styles.description}>{movie.dmm_description}</p>
-                  </details>
-                ) : (
-                  <p style={styles.description}>{movie.dmm_description}</p>
-                )}
-              </section>
-            )}
 
             {movie.description && (
               <p style={styles.description}>{movie.description}</p>
@@ -486,6 +468,7 @@ const styles: Record<string, React.CSSProperties> = {
   introSection: { marginBottom: '28px' },
   introText: {
     fontSize: '14px', lineHeight: 1.85, color: 'rgba(255,255,255,0.78)',
+    whiteSpace: 'pre-wrap' as const,
   },
   descHeading: {
     fontSize: '13px', fontWeight: 700, color: 'rgba(255,255,255,0.85)',
@@ -505,15 +488,6 @@ const styles: Record<string, React.CSSProperties> = {
   recommendItem: {
     fontSize: '13px', lineHeight: 1.6, color: 'rgba(255,255,255,0.72)',
     paddingLeft: '18px', position: 'relative' as const,
-  },
-  officialDetails: {
-    background: 'rgba(255,255,255,0.03)',
-    border: '1px solid rgba(255,255,255,0.08)',
-    borderRadius: '8px', padding: '12px 14px',
-  },
-  officialSummary: {
-    cursor: 'pointer', fontSize: '13px', fontWeight: 600,
-    color: 'rgba(255,255,255,0.7)', listStyle: 'revert' as const,
   },
   description: {
     fontSize: '14px', lineHeight: 1.8, color: 'rgba(255,255,255,0.6)',

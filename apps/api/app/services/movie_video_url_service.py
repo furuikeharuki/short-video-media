@@ -30,6 +30,26 @@ def _utcnow_naive() -> datetime:
     return datetime.now(timezone.utc).replace(tzinfo=None)
 
 
+def _mp4_values(normalized: resolver_client.ResolvedMp4, now: datetime) -> dict:
+    """movies 行へ UPDATE する値の辞書を組み立てる。
+
+    dmm_description は「非空のときだけ」含める。こうすることで、
+      - 抽出できなかった (None/空) 回に既存の説明文を空で上書きしない
+      - 説明文が取れた回にだけ最新値へ更新する
+    という要件を満たす (要件: 非空のときのみ更新)。
+    """
+    values: dict = {
+        "sample_mp4_url": normalized.mp4_url,
+        "sample_low_mp4_url": normalized.low_mp4_url,
+        "sample_high_mp4_url": normalized.high_mp4_url,
+        "sample_mp4_resolved_at": now,
+    }
+    description = (normalized.description or "").strip()
+    if description:
+        values["dmm_description"] = description
+    return values
+
+
 def normalize_resolved(
     resolved: resolver_client.ResolvedMp4,
 ) -> resolver_client.ResolvedMp4:
@@ -41,7 +61,9 @@ def normalize_resolved(
     mp4 = resolved.mp4_url
     low = resolved.low_mp4_url or mp4
     high = resolved.high_mp4_url or mp4
-    return resolver_client.ResolvedMp4(mp4_url=mp4, low_mp4_url=low, high_mp4_url=high)
+    return resolver_client.ResolvedMp4(
+        mp4_url=mp4, low_mp4_url=low, high_mp4_url=high, description=resolved.description
+    )
 
 
 def stored_resolved(movie: object) -> resolver_client.ResolvedMp4 | None:
@@ -84,12 +106,7 @@ async def persist_resolved(
         await db.execute(
             update(Movie)
             .where(Movie.id == movie_id)
-            .values(
-                sample_mp4_url=normalized.mp4_url,
-                sample_low_mp4_url=normalized.low_mp4_url,
-                sample_high_mp4_url=normalized.high_mp4_url,
-                sample_mp4_resolved_at=_utcnow_naive(),
-            )
+            .values(**_mp4_values(normalized, _utcnow_naive()))
         )
         if commit:
             await db.commit()
@@ -124,12 +141,7 @@ async def persist_resolved_many(
             await db.execute(
                 update(Movie)
                 .where(Movie.id == movie_id)
-                .values(
-                    sample_mp4_url=normalized.mp4_url,
-                    sample_low_mp4_url=normalized.low_mp4_url,
-                    sample_high_mp4_url=normalized.high_mp4_url,
-                    sample_mp4_resolved_at=now,
-                )
+                .values(**_mp4_values(normalized, now))
             )
         await db.commit()
     except Exception:  # noqa: BLE001

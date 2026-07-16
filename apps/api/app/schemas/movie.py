@@ -66,6 +66,9 @@ class MovieDetail(BaseModel):
     title: str
     slug: str
     description: str = ""
+    # DMM litevideo の __NEXT_DATA__ 由来の作品説明文 (FANZA API の description とは別)。
+    # 未取得の作品は None。フロントは description より優先して表示する。
+    dmm_description: str | None = None
     volume: int | None = None
     image_url_list: str | None = None
     image_url_large: str | None = None

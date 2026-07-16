@@ -12,10 +12,13 @@ from __future__ import annotations
 import httpx
 import pytest
 
+import json
+
 from app.resolver.extractor import (
     ResolveNotFound,
     ResolveTimeout,
     ResolveUpstream,
+    extract_dmm_description,
     extract_mp4_url,
 )
 
@@ -26,10 +29,51 @@ _IFRAME_URL = (
 )
 
 
-def _litevideo_html(iframe_url: str = _IFRAME_URL) -> str:
+def _next_data_script(text: str, *, content_id: str = "1sun00052a") -> str:
+    """litevideo ページに埋まる __NEXT_DATA__ スクリプトタグを組み立てる。
+
+    実 DMM の構造 (props.pageProps.dehydratedState.queries[].state.data.videoContent)
+    を模したサンプル。videoContent.text に作品説明文を入れる。
+    """
+    payload = {
+        "props": {
+            "pageProps": {
+                "dehydratedState": {
+                    "queries": [
+                        # videoContent を持たないクエリも混ぜて、正しく飛ばせるか検証。
+                        {"queryKey": ["reviews", content_id], "state": {"data": {}}},
+                        {
+                            "queryKey": ["contents", content_id],
+                            "state": {
+                                "data": {
+                                    "videoContent": {
+                                        "id": content_id,
+                                        "title": "サンプル作品",
+                                        "text": text,
+                                    }
+                                }
+                            },
+                        },
+                    ]
+                }
+            }
+        }
+    }
+    return (
+        '<script id="__NEXT_DATA__" type="application/json">'
+        + json.dumps(payload, ensure_ascii=False)
+        + "</script>"
+    )
+
+
+def _litevideo_html(
+    iframe_url: str = _IFRAME_URL, *, next_data: str | None = None
+) -> str:
+    extra = next_data or ""
     return (
         '<!DOCTYPE html><html><body>'
         f'<iframe src="{iframe_url}" width="720" height="480"></iframe>'
+        f'{extra}'
         '</body></html>'
     )
 
@@ -969,3 +1013,91 @@ async def test_extract_compact_suffix_cid_ends_with_letter_input_order_sm_last(
     assert result.low_mp4_url == (
         "https://cc3001.dmm.co.jp/pv/yr/yrnkmtndvaj00703bsm.mp4"
     )
+
+
+# ────────────────────────────────────────────────────────────────────
+# __NEXT_DATA__ からの作品説明文 (videoContent.text) 抽出
+# ────────────────────────────────────────────────────────────────────
+
+
+_LONG_DESCRIPTION = (
+    "これはサンプル作品の説明文です。" * 20  # 数百字を模した長文
+)
+
+
+def test_extract_dmm_description_from_next_data() -> None:
+    """__NEXT_DATA__ の queries から videoContent.text を取り出す (単体)。"""
+    html = _litevideo_html(next_data=_next_data_script(_LONG_DESCRIPTION))
+    assert extract_dmm_description(html) == _LONG_DESCRIPTION
+
+
+def test_extract_dmm_description_strips_whitespace() -> None:
+    """前後の空白はトリムされる。"""
+    html = _litevideo_html(next_data=_next_data_script("  説明文  "))
+    assert extract_dmm_description(html) == "説明文"
+
+
+def test_extract_dmm_description_missing_script_returns_none() -> None:
+    """__NEXT_DATA__ スクリプトが無ければ None。"""
+    assert extract_dmm_description(_litevideo_html()) is None
+
+
+def test_extract_dmm_description_empty_text_returns_none() -> None:
+    """text が空文字なら None (空で上書きしないため)。"""
+    html = _litevideo_html(next_data=_next_data_script("   "))
+    assert extract_dmm_description(html) is None
+
+
+def test_extract_dmm_description_broken_json_returns_none() -> None:
+    """JSON が壊れていても例外を投げず None を返す。"""
+    html = (
+        '<script id="__NEXT_DATA__" type="application/json">'
+        "{not valid json"
+        "</script>"
+    )
+    assert extract_dmm_description(html) is None
+
+
+def test_extract_dmm_description_fallback_scan() -> None:
+    """正規パスから外れた位置に videoContent があっても再帰走査で拾える。"""
+    payload = {"weird": {"nested": {"videoContent": {"text": "深い場所の説明"}}}}
+    html = (
+        '<script id="__NEXT_DATA__" type="application/json">'
+        + json.dumps(payload, ensure_ascii=False)
+        + "</script>"
+    )
+    assert extract_dmm_description(html) == "深い場所の説明"
+
+
+@pytest.mark.asyncio
+async def test_extract_mp4_url_populates_description(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """extract_mp4_url が litevideo (r1) の __NEXT_DATA__ から description を埋める。"""
+    mp4 = "https://cc3001.dmm.co.jp/pv/abc/1sun00052amhb_w.mp4"
+    handler = _two_stage_handler(
+        litevideo_body=_litevideo_html(next_data=_next_data_script(_LONG_DESCRIPTION)),
+        player_body=_player_html(mp4),
+    )
+    _install_transport(monkeypatch, handler)
+
+    result = await extract_mp4_url("1sun00052a", "affi-001")
+    assert result.mp4_url == mp4
+    assert result.description == _LONG_DESCRIPTION
+
+
+@pytest.mark.asyncio
+async def test_extract_mp4_url_description_none_when_absent(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """__NEXT_DATA__ が無い litevideo でも MP4 解決は成功し description は None。"""
+    mp4 = "https://cc3001.dmm.co.jp/pv/abc/1sun00052amhb_w.mp4"
+    handler = _two_stage_handler(
+        litevideo_body=_litevideo_html(),
+        player_body=_player_html(mp4),
+    )
+    _install_transport(monkeypatch, handler)
+
+    result = await extract_mp4_url("1sun00052a", "affi-001")
+    assert result.mp4_url == mp4
+    assert result.description is None

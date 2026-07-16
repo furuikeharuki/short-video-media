@@ -311,6 +311,13 @@ export default async function MovieDetailPage({ params }: PageProps) {
               ))}
             </div>
 
+            {movie.dmm_description && (
+              <section style={styles.descSection}>
+                <h2 style={styles.descHeading}>作品説明</h2>
+                <p style={styles.description}>{movie.dmm_description}</p>
+              </section>
+            )}
+
             {movie.description && (
               <p style={styles.description}>{movie.description}</p>
             )}
@@ -401,9 +408,14 @@ const styles: Record<string, React.CSSProperties> = {
   metaLink: {
     color: '#7cb7ff', textDecoration: 'none', borderBottom: '1px solid rgba(124,183,255,0.3)',
   },
+  descSection: { marginBottom: '28px' },
+  descHeading: {
+    fontSize: '13px', fontWeight: 700, color: 'rgba(255,255,255,0.85)',
+    letterSpacing: '0.06em', marginBottom: '10px',
+  },
   description: {
     fontSize: '14px', lineHeight: 1.8, color: 'rgba(255,255,255,0.6)',
-    marginBottom: '28px',
+    marginBottom: '28px', whiteSpace: 'pre-wrap' as const,
   },
   ctaArea: { display: 'flex', flexDirection: 'column' as const, gap: '12px' },
   feedCtaArea: { marginBottom: '20px' },

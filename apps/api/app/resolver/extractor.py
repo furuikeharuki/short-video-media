@@ -80,6 +80,10 @@ class ResolveResult:
     # (single-bitrate / 直リンクフォールバックなど)。
     low_mp4_url: str | None = None
     high_mp4_url: str | None = None
+    # litevideo ページの ``__NEXT_DATA__`` JSON から抽出した DMM 作品説明文。
+    # MP4 URL とは独立に、同じ litevideo レスポンス (r1) から取得する。
+    # 取得できない / 空のときは None (MP4 解決自体は失敗させない)。
+    description: str | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -129,6 +133,76 @@ _DIRECT_MP4_RE = re.compile(
 # ---------------------------------------------------------------------------
 # 抽出ロジック
 # ---------------------------------------------------------------------------
+
+
+# litevideo ページに埋まっている Next.js のハイドレーションデータ。
+# ``<script id="__NEXT_DATA__" type="application/json">{...}</script>`` の
+# JSON 本体を非貪欲で取り出す (属性の順序ゆらぎに耐えるよう id/type の両順を許容)。
+_NEXT_DATA_RE = re.compile(
+    r"""<script\b[^>]*\bid=["']__NEXT_DATA__["'][^>]*>(.*?)</script>""",
+    re.IGNORECASE | re.DOTALL,
+)
+
+
+def _iter_video_contents(data: object):
+    """__NEXT_DATA__ JSON から videoContent オブジェクトを列挙する。
+
+    正規パスは
+      props.pageProps.dehydratedState.queries[].state.data.videoContent
+    だが、DMM 側の構造ゆらぎに強くするため、まず正規パスを辿り、
+    見つからなければ JSON 全体を再帰的に走査して ``videoContent`` (dict) を拾う。
+    """
+    seen_regular = False
+    if isinstance(data, dict):
+        queries = (
+            data.get("props", {})
+            .get("pageProps", {})
+            .get("dehydratedState", {})
+            .get("queries")
+        )
+        if isinstance(queries, list):
+            for q in queries:
+                if not isinstance(q, dict):
+                    continue
+                vc = q.get("state", {}).get("data", {}).get("videoContent")
+                if isinstance(vc, dict):
+                    seen_regular = True
+                    yield vc
+    if seen_regular:
+        return
+    # フォールバック: 構造が変わっていても videoContent を探し出す。
+    stack: list[object] = [data]
+    while stack:
+        cur = stack.pop()
+        if isinstance(cur, dict):
+            vc = cur.get("videoContent")
+            if isinstance(vc, dict):
+                yield vc
+            stack.extend(cur.values())
+        elif isinstance(cur, list):
+            stack.extend(cur)
+
+
+def extract_dmm_description(html: str) -> str | None:
+    """litevideo HTML の ``__NEXT_DATA__`` から作品説明文 (text) を取り出す。
+
+    - ``videoContent.text`` を持つ最初のエントリの text を返す。
+    - スクリプトが無い / JSON が壊れている / text が空 のときは None。
+    - どんな例外でも None を返し、呼び出し側 (MP4 解決) を絶対に失敗させない。
+    """
+    try:
+        m = _NEXT_DATA_RE.search(html)
+        if m is None:
+            return None
+        data = json.loads(m.group(1))
+        for vc in _iter_video_contents(data):
+            text = vc.get("text")
+            if isinstance(text, str) and text.strip():
+                return text.strip()
+        return None
+    except Exception:  # noqa: BLE001
+        logger.debug("failed to parse __NEXT_DATA__ description", exc_info=True)
+        return None
 
 
 def _parse_iframe_url(html: str) -> str:
@@ -510,6 +584,11 @@ async def extract_mp4_url(
                 f"litevideo returned HTTP {r1.status_code} for cid={content_id}"
             )
 
+        # litevideo レスポンス (r1) の __NEXT_DATA__ から作品説明文を取り出す。
+        # MP4 解決とは独立の best-effort 処理なので、iframe 抽出より前に取得しても
+        # 失敗しても後続に影響しない (extract_dmm_description は例外を飲む)。
+        description = extract_dmm_description(r1.text)
+
         iframe_url = _parse_iframe_url(r1.text)
 
         try:
@@ -533,6 +612,7 @@ async def extract_mp4_url(
             mp4_url=candidates.primary,
             low_mp4_url=candidates.low,
             high_mp4_url=candidates.high,
+            description=description,
         )
     finally:
         if owns_client:

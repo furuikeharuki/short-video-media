@@ -20,6 +20,7 @@ def _movie(slug: str):
         title=f"title {slug}",
         slug=slug,
         description="desc",
+        dmm_description=None,
         volume=None,
         image_url_list=None,
         image_url_large=None,

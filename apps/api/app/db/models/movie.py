@@ -41,6 +41,10 @@ class Movie(Base):
     # FANZA API 由来の `description` とは別ソースで、MP4 解決時に同じ litevideo
     # レスポンスから取得して保存する。未取得の作品は NULL。
     dmm_description: Mapped[str | None] = mapped_column(Text)
+    # dmm_description から janome で抽出した特徴語 (「この作品のキーワード」チップ用)。
+    # dmm_description 保存と同タイミングで抽出・保存し、未抽出のレコードは
+    # 詳細取得時に write-on-read で自己補完する。未抽出は NULL。
+    dmm_keywords: Mapped[list[str] | None] = mapped_column(JSONB)
     volume: Mapped[int | None] = mapped_column(Integer)
 
     # 画像・動画URL

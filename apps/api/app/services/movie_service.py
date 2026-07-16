@@ -1,12 +1,15 @@
 import json
 import logging
 
+from sqlalchemy import update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.cache import get_redis
+from app.db.models.movie import Movie
 from app.repositories.interaction_event_repository import get_watch_count_for_slug
 from app.repositories.movie_repository import get_movie_by_slug
 from app.schemas.movie import MovieDetail, PriceList
+from app.services.keyword_extraction import extract_keywords
 
 MOVIE_DETAIL_TTL = 1800  # 30分
 MOVIE_DETAIL_KEY_PREFIX = "movie:detail:"
@@ -28,6 +31,31 @@ async def get_movie_by_slug_service(db: AsyncSession, slug: str) -> MovieDetail 
     movie = await get_movie_by_slug(db, slug)
     if movie is None:
         return None
+
+    # write-on-read 補完: dmm_description があるのに dmm_keywords が未設定の
+    # 既存レコードは、この場で janome 抽出して DB に保存し自己修復する。
+    # 抽出/保存が失敗してもレスポンスは返す (best-effort)。
+    dmm_keywords = list(getattr(movie, "dmm_keywords", None) or [])
+    dmm_description = getattr(movie, "dmm_description", None)
+    if dmm_description and not dmm_keywords:
+        try:
+            extracted = extract_keywords(dmm_description)
+            if extracted:
+                await db.execute(
+                    update(Movie)
+                    .where(Movie.id == movie.id)
+                    .values(dmm_keywords=extracted)
+                )
+                await db.commit()
+                dmm_keywords = extracted
+        except Exception:  # noqa: BLE001
+            logger.warning(
+                "failed to backfill dmm_keywords for slug=%s", slug, exc_info=True
+            )
+            try:
+                await db.rollback()
+            except Exception:  # noqa: BLE001
+                pass
 
     price_list = None
     if movie.price_list:
@@ -53,6 +81,7 @@ async def get_movie_by_slug_service(db: AsyncSession, slug: str) -> MovieDetail 
         slug=movie.slug,
         description=movie.description or "",
         dmm_description=movie.dmm_description or None,
+        dmm_keywords=dmm_keywords,
         volume=movie.volume,
         image_url_list=movie.image_url_list,
         image_url_large=movie.image_url_large,

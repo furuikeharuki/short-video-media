@@ -10,6 +10,9 @@ import ActressLink from "@/components/ActressLink";
 import AdSlot from "@/components/ads/AdSlot";
 import { getMovieBySlug } from "@/lib/api/movies";
 import { SITE_NAME, SITE_URL, SITE_LOCALE } from "@/lib/config/seo";
+import { generateIntro } from "@/lib/movieIntro";
+import { visibleSpecRows } from "@/lib/movieSpec";
+import { buildRecommendations } from "@/lib/movieRecommend";
 
 type PageProps = {
   params: Promise<{ slug: string }>;
@@ -131,6 +134,49 @@ export default async function MovieDetailPage({ params }: PageProps) {
       { label: "商品発売日",   value: formatDate(movie.release_date) },
       { label: "配信品番", value: movie.maker_product || movie.product_id || NA },
     ];
+
+    // ルールベースのユニークコンテンツ (LLM 不使用 / レンダリング時生成 / DB 保存なし)。
+    const introText = generateIntro({
+      title: movie.title,
+      slug: movie.slug,
+      actresses: movie.actresses,
+      genres: movie.genres,
+      product_id: movie.product_id,
+      maker_product: movie.maker_product,
+      label_name: movie.label_name,
+      maker_name: movie.maker_name,
+      volume: movie.volume,
+      price_min: movie.price_min,
+      price_list: movie.price_list
+        ? {
+            list_price: movie.price_list.list_price,
+            sale_price: movie.price_list.sale_price,
+          }
+        : null,
+      delivery_date: movie.delivery_date,
+      release_date: movie.release_date,
+      primary_date: movie.primary_date,
+    });
+    const specRows = visibleSpecRows({
+      product_id: movie.product_id,
+      maker_product: movie.maker_product,
+      volume: movie.volume,
+      delivery_date: movie.delivery_date,
+      release_date: movie.release_date,
+      primary_date: movie.primary_date,
+      maker_name: movie.maker_name,
+      label_name: movie.label_name,
+      genres: movie.genres,
+      price_min: movie.price_min,
+      price_list: movie.price_list
+        ? {
+            list_price: movie.price_list.list_price,
+            sale_price: movie.price_list.sale_price,
+          }
+        : null,
+    });
+    const recommendations = buildRecommendations(movie.genres);
+    const keywords = movie.dmm_keywords ?? [];
 
     const uploadDate = movie.delivery_date ?? movie.release_date ?? undefined;
     const videoJsonLd = {
@@ -311,10 +357,68 @@ export default async function MovieDetailPage({ params }: PageProps) {
               ))}
             </div>
 
+            {introText && (
+              <section style={styles.introSection}>
+                <h2 style={styles.descHeading}>作品紹介</h2>
+                <p style={styles.introText}>{introText}</p>
+              </section>
+            )}
+
+            {keywords.length > 0 && (
+              <section style={styles.descSection}>
+                <h2 style={styles.descHeading}>この作品のキーワード</h2>
+                <div style={styles.keywordList}>
+                  {keywords.map((kw) => (
+                    <span key={kw} style={styles.keywordChip}>
+                      {kw}
+                    </span>
+                  ))}
+                </div>
+              </section>
+            )}
+
+            {recommendations.length > 0 && (
+              <section style={styles.descSection}>
+                <h2 style={styles.descHeading}>こんな人におすすめ</h2>
+                <ul style={styles.recommendList}>
+                  {recommendations.map((line) => (
+                    <li key={line} style={styles.recommendItem} className="rec-item">
+                      {line}
+                    </li>
+                  ))}
+                </ul>
+              </section>
+            )}
+
+            {specRows.length > 0 && (
+              <section style={styles.descSection}>
+                <h2 style={styles.descHeading}>作品情報</h2>
+                <div style={styles.metaTable}>
+                  {specRows.map(({ label, value }) => (
+                    <div key={label} style={styles.metaRow}>
+                      <span style={styles.metaLabel}>{label}</span>
+                      <span style={styles.metaValue}>{value}</span>
+                    </div>
+                  ))}
+                </div>
+              </section>
+            )}
+
+            {/* FANZA 公式の作品説明。長文は details で折りたたむが、
+                本文は常に SSR HTML に含める (JS による遅延挿入はしない)。 */}
             {movie.dmm_description && (
               <section style={styles.descSection}>
-                <h2 style={styles.descHeading}>作品説明</h2>
-                <p style={styles.description}>{movie.dmm_description}</p>
+                <h2 style={styles.descHeading}>FANZA公式の作品説明</h2>
+                {movie.dmm_description.length > 140 ? (
+                  <details style={styles.officialDetails}>
+                    <summary style={styles.officialSummary}>
+                      作品説明を全文表示
+                    </summary>
+                    <p style={styles.description}>{movie.dmm_description}</p>
+                  </details>
+                ) : (
+                  <p style={styles.description}>{movie.dmm_description}</p>
+                )}
               </section>
             )}
 
@@ -409,9 +513,37 @@ const styles: Record<string, React.CSSProperties> = {
     color: '#7cb7ff', textDecoration: 'none', borderBottom: '1px solid rgba(124,183,255,0.3)',
   },
   descSection: { marginBottom: '28px' },
+  introSection: { marginBottom: '28px' },
+  introText: {
+    fontSize: '14px', lineHeight: 1.85, color: 'rgba(255,255,255,0.78)',
+  },
   descHeading: {
     fontSize: '13px', fontWeight: 700, color: 'rgba(255,255,255,0.85)',
     letterSpacing: '0.06em', marginBottom: '10px',
+  },
+  keywordList: { display: 'flex', flexWrap: 'wrap', gap: '8px' },
+  keywordChip: {
+    display: 'inline-block', background: 'rgba(124,183,255,0.12)',
+    border: '1px solid rgba(124,183,255,0.3)', color: '#9cc7ff',
+    fontSize: '12px', fontWeight: 600,
+    padding: '4px 12px', borderRadius: '999px',
+  },
+  recommendList: {
+    listStyle: 'none' as const, display: 'flex',
+    flexDirection: 'column' as const, gap: '8px',
+  },
+  recommendItem: {
+    fontSize: '13px', lineHeight: 1.6, color: 'rgba(255,255,255,0.72)',
+    paddingLeft: '18px', position: 'relative' as const,
+  },
+  officialDetails: {
+    background: 'rgba(255,255,255,0.03)',
+    border: '1px solid rgba(255,255,255,0.08)',
+    borderRadius: '8px', padding: '12px 14px',
+  },
+  officialSummary: {
+    cursor: 'pointer', fontSize: '13px', fontWeight: 600,
+    color: 'rgba(255,255,255,0.7)', listStyle: 'revert' as const,
   },
   description: {
     fontSize: '14px', lineHeight: 1.8, color: 'rgba(255,255,255,0.6)',
@@ -462,4 +594,12 @@ const pageCSS = `
   .movie-feed-cta__label { display: inline-block; }
   .movie-feed-cta:active { opacity: 0.85; transform: scale(0.985); }
   @media (hover: hover) { .movie-feed-cta:hover { opacity: 0.92; } }
+
+  .rec-item::before {
+    content: "✓";
+    position: absolute;
+    left: 0;
+    color: #7cb7ff;
+    font-weight: 700;
+  }
 `;

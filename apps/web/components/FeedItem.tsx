@@ -8,10 +8,7 @@ import { useFeedPlayback } from "./feed/useFeedPlayback";
 import { useResolvedVideoSrc } from "./feed/useResolvedVideoSrc";
 import { useVideoInteractionTracking } from "./feed/useVideoInteractionTracking";
 import { createVideoTimer, isVideoTimingEnabled } from "@/lib/videoTiming";
-import {
-  isProActressMovie,
-  logProActressDecision,
-} from "@/lib/proActress";
+import { logProActressDecision } from "@/lib/proActress";
 import FeedItemVideo from "./feed/FeedItemVideo";
 import FeedItemMeta from "./feed/FeedItemMeta";
 import FeedItemSideActions from "./feed/FeedItemSideActions";
@@ -731,7 +728,9 @@ export default function FeedItem({ item, isActive, isAdjacent = false, isFirst, 
     };
   }, []);
 
-  const isProActress = isProActressMovie(item.genres);
+  // 末尾スキップ (末尾 60 秒だけ残して手前をスキップ) は全動画に適用する。
+  // 旧仕様ではプロ女優タグ (videoa フロア) の作品だけが対象だった。
+  const tailSkipEnabled = true;
 
   useEffect(() => {
     if (!isActive) return;
@@ -820,7 +819,7 @@ export default function FeedItem({ item, isActive, isAdjacent = false, isFirst, 
     videoSrc,
     boundElement: promotedElement,
     onOpenModal: handleOpenModal,
-    isProActress,
+    isProActress: tailSkipEnabled,
     fallbackEpoch,
   });
 
@@ -830,7 +829,7 @@ export default function FeedItem({ item, isActive, isAdjacent = false, isFirst, 
     slug: item.slug,
     videoRef,
     isActive,
-    isProActress,
+    isProActress: tailSkipEnabled,
   });
 
   // 中央 (active) 動画がまだ安定再生していない (再生開始前 / waiting / stalled)

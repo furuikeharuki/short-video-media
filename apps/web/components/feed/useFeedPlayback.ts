@@ -4,7 +4,7 @@ import { useEffect, useLayoutEffect, useRef, useCallback, useState } from "react
 
 import { createVideoTimer, isVideoTimingEnabled } from "@/lib/videoTiming";
 import {
-  PRO_ACTRESS_TAIL_KEEP_SEC,
+  TAIL_KEEP_SEC,
   tailStartForDuration,
 } from "@/lib/proActress";
 
@@ -15,16 +15,16 @@ const TAP_MOVE_THRESHOLD = 10;
 const PLAY_THRESHOLD = 0.85;
 
 /**
- * pro-actress 作品の再生開始秒数 (= スキップ下限) を live <video> から計算する。
+ * 末尾スキップの再生開始秒数 (= スキップ下限) を live <video> から計算する。
  *
  * 旧仕様 (先頭 5 秒スキップ) は固定値だったが、新仕様は「末尾 60 秒だけ残す」=
  * `duration - 60` の duration 依存になったため、duration が読める
  * (readyState>=1) 状態でしか正しい値を出せない。duration 未確定や、動画が
  * 60 秒以下 (= 丸ごと再生) のときは 0 (スキップ無効) を返す。
  */
-function proActressLowerBoundFor(video: HTMLVideoElement, isProActress: boolean): number {
-  if (!isProActress) return 0;
-  return tailStartForDuration(video.duration, PRO_ACTRESS_TAIL_KEEP_SEC);
+function tailSkipLowerBoundFor(video: HTMLVideoElement, tailSkip: boolean): number {
+  if (!tailSkip) return 0;
+  return tailStartForDuration(video.duration, TAIL_KEEP_SEC);
 }
 
 let globalUserGestured = false;
@@ -77,9 +77,9 @@ interface UseFeedPlaybackOptions {
   boundElement?: HTMLVideoElement | null;
   onOpenModal: (slug: string) => void;
   /**
-   * 「プロ女優」(= videoa フロア) ジャンルが付いた作品かどうか。
+   * 末尾スキップを適用するかどうか。現在は全動画で true。
    * true のとき「末尾 60 秒 (= 1 分) だけ残して手前を全部スキップ」する。
-   * 開始位置 (= 下限 lower) = duration - PRO_ACTRESS_TAIL_KEEP_SEC。
+   * 開始位置 (= 下限 lower) = duration - TAIL_KEEP_SEC。
    *   - 初回再生時に currentTime を lower にセットして開始
    *   - -5s スキップで currentTime < lower にならないようクランプ
    *   - video-seek (シークバー) も下限 lower でクランプ
@@ -649,7 +649,7 @@ export function useFeedPlayback({ slug, title, isActive, videoSrc, boundElement 
     const lower = isProActressRef.current
       ? (skipLowerBoundRef.current > 0
           ? skipLowerBoundRef.current
-          : proActressLowerBoundFor(video, true))
+          : tailSkipLowerBoundFor(video, true))
       : skipLowerBoundRef.current;
     if (lower > 0) {
       if (Number.isFinite(video.duration) && video.duration > lower) {
@@ -856,7 +856,7 @@ export function useFeedPlayback({ slug, title, isActive, videoSrc, boundElement 
       // ときだけ seek する。rs=0 (duration 不明) は defer。
       const proLowerForAutoplay =
         isProActressRef.current && video.readyState >= 1
-          ? proActressLowerBoundFor(video, true)
+          ? tailSkipLowerBoundFor(video, true)
           : 0;
       if (
         isProActressRef.current &&
@@ -1183,7 +1183,7 @@ export function useFeedPlayback({ slug, title, isActive, videoSrc, boundElement 
         //       metadata 到達後の handleLoadedMeta -> enforceLowerBound に委ねる。
         //       開始位置は duration 依存なので rs>=1 で live duration から計算する。
         if (isProActressRef.current && target.readyState >= 1) {
-          const proLower = proActressLowerBoundFor(target, true);
+          const proLower = tailSkipLowerBoundFor(target, true);
           if (proLower > 0 && target.currentTime + 0.05 < proLower) {
             markProActressSeekInFlight();
             try { target.currentTime = proLower; } catch { /* ignore */ }
@@ -2130,7 +2130,7 @@ export function useFeedPlayback({ slug, title, isActive, videoSrc, boundElement 
         skipLowerBoundRef.current = 0;
         return;
       }
-      const lower = tailStartForDuration(dur, PRO_ACTRESS_TAIL_KEEP_SEC);
+      const lower = tailStartForDuration(dur, TAIL_KEEP_SEC);
       if (lower <= 0) {
         // duration <= 60 秒: 残す尺の方が長い = 丸ごと再生 (スキップ無効)。
         skipEffectiveRef.current = false;

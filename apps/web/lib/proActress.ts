@@ -1,15 +1,14 @@
 /**
- * 「プロ女優」(= sync_catalog で videoa フロアの作品全部に付与される擬似ジャンル)
- * の判定と「末尾スキップ」秒数の単一ソース。
+ * 「末尾スキップ」秒数の単一ソースと、ジャンル分類ヘルパ。
  *
  * 仕様:
- *   - DMM の videoa (素人ではない、プロ作品) フロアからの作品には
- *     apps/jobs/src/sync_catalog._floor_genre_label() が "プロ女優" を付与する。
- *   - フロント側はこのジャンル名を見て、「後ろ (末尾) から 1 分だけ残して
- *     手前を全部スキップする」仕様を適用する。
- *     つまり再生開始位置 = duration - PRO_ACTRESS_TAIL_KEEP_SEC。
+ *   - 全ての動画に対して「後ろ (末尾) から 1 分だけ残して手前を全部スキップする」
+ *     仕様を適用する。つまり再生開始位置 = duration - TAIL_KEEP_SEC。
  *   - 検索 / 女優ページ / ブックマーク等どこから来ても、最終的には FeedItem 経由で
- *     <video> が描画されるため、ここでの判定が全アクセス経路に効く。
+ *     <video> が描画されるため、ここでの値が全アクセス経路に効く。
+ *   - かつては videoa フロア (= "プロ女優" 擬似ジャンル) の作品だけを対象にして
+ *     いたが、末尾スキップは全動画へ拡大した。`isProActressMovie` /
+ *     `PRO_ACTRESS_GENRE` はジャンル表示・ログ用途としては残す。
  *
  * 旧実装 (先頭 5 秒スキップ) との違い:
  *   - 旧: 開始位置は固定値 5 秒。duration を知らなくても先読み seek できた。
@@ -18,7 +17,6 @@
  *     このためスキップ下限は metadata 到達後に確定させる。
  *
  * ここに集約することで:
- *   - 文字列リテラルの typo / 全角半角差異が原因の取りこぼしを防ぐ
  *   - 「末尾に残す秒数」を 1 箇所変えれば全経路に反映される
  *   - dev (?vt=1) 計測でスキップ判定の結果を 1 行ログに残せる
  * という効果がある。
@@ -30,10 +28,10 @@ import { isVideoTimingEnabled } from "@/lib/videoTiming";
 export const PRO_ACTRESS_GENRE = "プロ女優";
 
 /**
- * プロ女優作品で「末尾に残す」秒数 (= 1 分 = 60 秒)。
+ * 全動画で「末尾に残す」秒数 (= 1 分 = 60 秒)。
  * この長さだけ残して手前を全部スキップする (再生開始位置 = duration - この値)。
  */
-export const PRO_ACTRESS_TAIL_KEEP_SEC = 60;
+export const TAIL_KEEP_SEC = 60;
 
 /**
  * カードに付与されたジャンル配列を見て「プロ女優」作品かどうかを判定する。
@@ -51,14 +49,15 @@ export function isProActressMovie(genres: readonly string[] | null | undefined):
 
 /**
  * 作品の「末尾に残す秒数」を返す (= duration に依存しない静的な intent)。
- * - プロ女優: PRO_ACTRESS_TAIL_KEEP_SEC (60)
- * - 非プロ女優: 0 (末尾スキップ無し)
+ * 末尾スキップは全動画に適用するため、ジャンルに関わらず常に TAIL_KEEP_SEC (60)。
  *
  * この値は duration が未確定でも決まるため、先読み <video> の登録などに使える。
  * 実際の再生開始秒数は `tailStartForDuration(duration, tailKeepSec)` で計算する。
+ *
+ * `_genres` 引数はかつてのプロ女優判定の名残で残しているだけで、参照しない。
  */
-export function getTailKeepSec(genres: readonly string[] | null | undefined): number {
-  return isProActressMovie(genres) ? PRO_ACTRESS_TAIL_KEEP_SEC : 0;
+export function getTailKeepSec(_genres?: readonly string[] | null): number {
+  return TAIL_KEEP_SEC;
 }
 
 /**

@@ -78,12 +78,16 @@ log "docker compose build (services=${SERVICES:-all})..."
 docker compose -f "$COMPOSE_FILE" build $BUILD_OPTS $SERVICES
 
 # ---- migrate (api コンテナ内で alembic upgrade head) ----------------------
-# api コンテナの lifespan で自動マイグレーションされる実装になっているが、
-# データ破壊リスクを避けるため、ここでは「up する前に明示的に走らせる」運用は
-# しない (失敗時に api が起動しないだけで、ロールバックが面倒)。
-# 必要なら手動で:
-#   docker compose -f infra/xserver/docker-compose.yml run --rm api alembic upgrade head
-log "skipping explicit alembic upgrade (api lifespan が自動実行 / 手動運用したい場合は README 参照)"
+# api の lifespan はマイグレーションを実行しない (アプリ起動と DB スキーマ更新を
+# 分離する方針)。よってデプロイ時にここで明示的に alembic upgrade head を走らせる。
+# 新しいコードを未マイグレーションの DB で起動しないよう、必ず「build 済みイメージで
+# migrate → 成功したら up」の順にする。migrate が失敗したら set -e で即停止し、
+# 古い api コンテナは動いたままなので実質ロールバック済みの状態を保てる。
+# api サービスは ENTRYPOINT を持たず CMD が uvicorn なので、run の末尾に
+# `alembic upgrade head` を渡すだけで CMD を上書きして migrate だけ実行できる。
+log "running alembic upgrade head (api コンテナ内)..."
+docker compose -f "$COMPOSE_FILE" run --rm api alembic upgrade head \
+  || fail "alembic upgrade head に失敗しました。未マイグレーションの DB で新コードを起動しないため中止します。"
 
 # ---- up -------------------------------------------------------------------
 log "docker compose up -d..."

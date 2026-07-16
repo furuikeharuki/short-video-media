@@ -27,9 +27,9 @@ init_sentry()
 async def lifespan(app: FastAPI):
     """アプリのライフサイクル管理。
 
-    マイグレーションは GitHub Actions (.github/workflows/migrate.yml) で
-    main にマージされたタイミングで実行する方針。
-    アプリ起動時にはマイグレーションを行わない。
+    マイグレーションはデプロイ時に scripts/deploy-xserver.sh が
+    (docker compose up の前に) `docker compose run --rm api alembic upgrade head`
+    で実行する方針。アプリ起動時にはマイグレーションを行わない。
 
     DMM への httpx.AsyncClient はプロセスで 1 本だけ持って keep-alive する。
     """

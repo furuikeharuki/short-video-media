@@ -81,4 +81,4 @@ pnpm --filter @short-video-media/web dev    # http://localhost:3000
 | api | Railway | main への push (自動) |
 | jobs | GitHub Actions | cron / 手動 dispatch |
 
-`.github/workflows/migrate.yml` が main 反映時に `alembic upgrade head` を実行。
+DB マイグレーションはデプロイ時に `scripts/deploy-xserver.sh` が (docker compose up の前に) `docker compose run --rm api alembic upgrade head` で実行する。専用の `migrate.yml` ワークフローは存在しない。

@@ -42,5 +42,5 @@
 ## マイグレーション運用
 
 - 開発時: `alembic revision --autogenerate -m "..."` でドラフト生成 → 手動で整形
-- main への push 時に `.github/workflows/migrate.yml` が `alembic upgrade head` を実行
+- 本番: デプロイ時に `scripts/deploy-xserver.sh` が (docker compose up の前に) `docker compose run --rm api alembic upgrade head` を実行する (専用の `migrate.yml` ワークフローは存在しない)
 - ローカル: `pnpm --filter @short-video-media/api run db:migrate`

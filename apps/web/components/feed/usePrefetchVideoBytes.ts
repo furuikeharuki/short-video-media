@@ -243,7 +243,7 @@ interface Target {
    */
   preload: "auto" | "metadata" | "none";
   /**
-   * pro-actress 作品で末尾に残す秒数 (90)。`getTailKeepSec(card.genres)` で算出される。
+   * pro-actress 作品で末尾に残す秒数 (60)。`getTailKeepSec(card.genres)` で算出される。
    */
   tailKeepSec: number;
 }

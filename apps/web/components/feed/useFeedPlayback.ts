@@ -17,10 +17,10 @@ const PLAY_THRESHOLD = 0.85;
 /**
  * pro-actress 作品の再生開始秒数 (= スキップ下限) を live <video> から計算する。
  *
- * 旧仕様 (先頭 5 秒スキップ) は固定値だったが、新仕様は「末尾 90 秒だけ残す」=
- * `duration - 90` の duration 依存になったため、duration が読める
+ * 旧仕様 (先頭 5 秒スキップ) は固定値だったが、新仕様は「末尾 60 秒だけ残す」=
+ * `duration - 60` の duration 依存になったため、duration が読める
  * (readyState>=1) 状態でしか正しい値を出せない。duration 未確定や、動画が
- * 90 秒以下 (= 丸ごと再生) のときは 0 (スキップ無効) を返す。
+ * 60 秒以下 (= 丸ごと再生) のときは 0 (スキップ無効) を返す。
  */
 function proActressLowerBoundFor(video: HTMLVideoElement, isProActress: boolean): number {
   if (!isProActress) return 0;
@@ -78,7 +78,7 @@ interface UseFeedPlaybackOptions {
   onOpenModal: (slug: string) => void;
   /**
    * 「プロ女優」(= videoa フロア) ジャンルが付いた作品かどうか。
-   * true のとき「末尾 90 秒 (= 1 分半) だけ残して手前を全部スキップ」する。
+   * true のとき「末尾 60 秒 (= 1 分) だけ残して手前を全部スキップ」する。
    * 開始位置 (= 下限 lower) = duration - PRO_ACTRESS_TAIL_KEEP_SEC。
    *   - 初回再生時に currentTime を lower にセットして開始
    *   - -5s スキップで currentTime < lower にならないようクランプ
@@ -86,7 +86,7 @@ interface UseFeedPlaybackOptions {
    *   - timeupdate / seeking で currentTime < lower を検知したら強制的に lower に戻す
    *   - 再生終了 (ended) でループするときも lower から再開
    * ただし開始位置は duration 依存のため loadedmetadata 確定後にしか計算できない。
-   * duration <= 90 秒の場合は丸ごと再生 (スキップ無効)。
+   * duration <= 60 秒の場合は丸ごと再生 (スキップ無効)。
    */
   isProActress?: boolean;
   /**
@@ -260,7 +260,7 @@ export function useFeedPlayback({ slug, title, isActive, videoSrc, boundElement 
   // 値は arm 時の slug をキャプチャするので閉路で OK。
   const PRO_ACTRESS_SEEK_DEADLINE_MS = 2500;
 
-  // pro-actress 開始位置 (duration-90) への seek が「飛行中」かどうか。
+  // pro-actress 開始位置 (duration-60) への seek が「飛行中」かどうか。
   //
   // 背景: handoff promote で claim した <video> 要素は registry 上 readiness=canplay
   // (rs>=3) で渡ってくることが多いが、active 化時点で currentTime=0 のため
@@ -558,7 +558,7 @@ export function useFeedPlayback({ slug, title, isActive, videoSrc, boundElement 
         rafRef.current = null;
         return;
       }
-      // プロ女優スキップ有効時はシークバーの 0% を「下限 (開始位置=duration-90) 目」に対応させる。
+      // プロ女優スキップ有効時はシークバーの 0% を「下限 (開始位置=duration-60) 目」に対応させる。
       // 進捗 = (currentTime - lower) / (duration - lower)。
       // 通常動画 (lower = 0) はこれまでと同じ currentTime / duration。
       const dur = video.duration;
@@ -638,8 +638,8 @@ export function useFeedPlayback({ slug, title, isActive, videoSrc, boundElement 
     video.muted = globalIsMuted;
     isMutedRef.current = globalIsMuted;
 
-    // プロ女優スキップ (末尾 90 秒だけ残す) が有効、かつまだ開始位置より前にいるなら、
-    // play() 直前に開始位置 (duration-90) へ飛ばす。
+    // プロ女優スキップ (末尾 60 秒だけ残す) が有効、かつまだ開始位置より前にいるなら、
+    // play() 直前に開始位置 (duration-60) へ飛ばす。
     // - 開始位置は duration 依存なので、duration が読めている (rs>=HAVE_METADATA)
     //   ときのみ確定値を出せる。skipLowerBoundRef.current (loadedmetadata 後に
     //   evaluate() で確定) を第一ソースにし、無ければ live duration から都度計算する。
@@ -828,7 +828,7 @@ export function useFeedPlayback({ slug, title, isActive, videoSrc, boundElement 
       isMutedRef.current = globalIsMuted;
       setIsMuted(globalIsMuted);
       video.muted = globalIsMuted;
-      // pro-actress 末尾スキップ (開始位置=duration-90) は「どの autoplay 経路でも play() より前に
+      // pro-actress 末尾スキップ (開始位置=duration-60) は「どの autoplay 経路でも play() より前に
       // currentTime を下限 (=5) に飛ばしておく」が単一の不変条件。
       // attemptActiveAutoplay は active-change / promote / canplay / metadata /
       // observer / element-bound のすべての autoplay 起動口になっているため、
@@ -851,7 +851,7 @@ export function useFeedPlayback({ slug, title, isActive, videoSrc, boundElement 
       //     proActressPlayRetryPendingRef で巻き取られるので、ここで seek しなくても
       //     開始位置未満から再生開始することは無い (canplay/playing は metadata 後にしか
       //     来ない)。
-      // 末尾スキップ仕様: 開始位置 = duration-90。duration が読める (rs>=1) ときのみ
+      // 末尾スキップ仕様: 開始位置 = duration-60。duration が読める (rs>=1) ときのみ
       // 確定値を計算できるので、rs>=1 で開始位置>0 かつ currentTime が開始位置未満の
       // ときだけ seek する。rs=0 (duration 不明) は defer。
       const proLowerForAutoplay =
@@ -885,7 +885,7 @@ export function useFeedPlayback({ slug, title, isActive, videoSrc, boundElement 
         // rs=0 ケース: duration 不明で開始位置を計算できないので、自前で seek は
         // 撃たず loadedmetadata 後の enforceLowerBound に委ねる。enforce が走った
         // 時点で play retry も pending 化されるので、metadata 到達後に自動的に
-        // 開始位置 (duration-90) + play() が回る。
+        // 開始位置 (duration-60) + play() が回る。
         proActressPlayRetryPendingRef.current = true;
         if (isVideoTimingEnabled()) {
           // eslint-disable-next-line no-console
@@ -1177,7 +1177,7 @@ export function useFeedPlayback({ slug, title, isActive, videoSrc, boundElement 
           try { target.load(); } catch { /* ignore */ }
         }
         // load() 後は currentTime が 0 にリセットされうるので、pro-actress
-        // 末尾スキップ (開始位置 = duration-90) enforce を再適用してから play() を呼ぶ。
+        // 末尾スキップ (開始位置 = duration-60) enforce を再適用してから play() を呼ぶ。
         // 注意: rs=0 で seek すると「pending seek」だけが立って load() abort race を
         //       誘発するため、rs>=HAVE_METADATA(1) のときだけ seek する。rs=0 のときは
         //       metadata 到達後の handleLoadedMeta -> enforceLowerBound に委ねる。
@@ -2099,7 +2099,7 @@ export function useFeedPlayback({ slug, title, isActive, videoSrc, boundElement 
   //
   // この effect は isActive に関わらず常に走る。隣接スライド (isAdjacent=true) で <video>
   // がマウントされているときにも loadedmetadata で currentTime=5 にシークしておいて、
-  // スワイプで中央に来た瞬間即 開始位置 (duration-90) のフレームが見えてから再生開始させるため。
+  // スワイプで中央に来た瞬間即 開始位置 (duration-60) のフレームが見えてから再生開始させるため。
   // (isActive=false で使うのは handleLoadedMeta / handleSeeking まで、ended/timeUpdate は isActive のみ無意味。
   //  ただしイベントリスナを貼るコストは軽いので、全て常にバインドして OK)
   // duration < MIN なら無効化 (短すぎる動画でホボ即終了するのを避ける)。
@@ -2108,11 +2108,11 @@ export function useFeedPlayback({ slug, title, isActive, videoSrc, boundElement 
     if (!video) return;
 
     // この <video> 用の初期値リセット。
-    // 末尾スキップ (開始位置 = duration-90) は duration 依存なので、loadedmetadata
+    // 末尾スキップ (開始位置 = duration-60) は duration 依存なので、loadedmetadata
     // 確定前は下限を計算できない。よって pending 状態として skipEffectiveRef だけ
     // isProActress を反映し、下限 (skipLowerBoundRef) は 0 のままにしておく
     // (下限 0 の間は enforce / progress-bar は通常動画と同じ挙動)。
-    // duration 確定後に evaluate() が duration-90 を計算して下限を確定させる。
+    // duration 確定後に evaluate() が duration-60 を計算して下限を確定させる。
     skipEffectiveRef.current = isProActress;
     skipLowerBoundRef.current = 0;
 
@@ -2132,7 +2132,7 @@ export function useFeedPlayback({ slug, title, isActive, videoSrc, boundElement 
       }
       const lower = tailStartForDuration(dur, PRO_ACTRESS_TAIL_KEEP_SEC);
       if (lower <= 0) {
-        // duration <= 90 秒: 残す尺の方が長い = 丸ごと再生 (スキップ無効)。
+        // duration <= 60 秒: 残す尺の方が長い = 丸ごと再生 (スキップ無効)。
         skipEffectiveRef.current = false;
         skipLowerBoundRef.current = 0;
         return;
@@ -2211,7 +2211,7 @@ export function useFeedPlayback({ slug, title, isActive, videoSrc, boundElement 
         lastPlaybackRef.current = { slug, time: lastPlaybackRef.current.time };
       }
       // メタデータ確定直後、初回再生はまだ 0 から始まっている可能性が高いので飛ばす。
-      // これにより、isActive=false の隣接スライドでもプロ女優作品は 開始位置 (duration-90) に
+      // これにより、isActive=false の隣接スライドでもプロ女優作品は 開始位置 (duration-60) に
       // シークされ、そのフレームがプレビューとして表示される。
       //
       // 加えて、attemptActiveAutoplay が rs=0 で `pro-actress enforce deferred` した
@@ -2434,9 +2434,22 @@ export function useFeedPlayback({ slug, title, isActive, videoSrc, boundElement 
       enforceLowerBound();
       tryConsumePlayRetry("seeked");
     };
+    // duration が loadedmetadata 時点では Infinity / NaN で来て、その後
+    // durationchange で確定値が届くブラウザ (iOS/Safari や一部の MP4) 向けの再評価。
+    // durationchange を listen していないと、pending (下限 0) のまま確定値を取りこぼし、
+    // 末尾スキップが一切効かず最初から再生されてしまう (= 断続的にスキップが効かない主因)。
+    const handleDurationChange = () => {
+      evaluate();
+      enforceLowerBound();
+    };
     const handleCanPlay = () => {
       // 画質切替の位置復元 (sticky)。canplay 時点で rs>=3 なので確実に seek できる。
       applyQualitySwitchResume();
+      // canplay 時点では duration は確定 (rs>=3) しているので、loadedmetadata で
+      // 下限を確定できなかった (Infinity 等) ケースをここで確実に巻き取る。初回 seek が
+      // まだ効いていなければ再適用する (二重 seek は enforceLowerBound の下限判定で防止)。
+      evaluate();
+      enforceLowerBound();
       tryConsumePlayRetry("canplay");
     };
     const handleLoadedDataResume = () => {
@@ -2474,7 +2487,7 @@ export function useFeedPlayback({ slug, title, isActive, videoSrc, boundElement 
     };
     const handleEnded = () => {
       // 既存ループ仕様 (HTMLVideoElement の loop 属性は未使用、再生終端で何が起きるかは
-      // ブラウザ依存) に合わせ、明示的に開始位置 (duration-90) に戻して再生再開する。
+      // ブラウザ依存) に合わせ、明示的に開始位置 (duration-60) に戻して再生再開する。
       // isActive=false (隣接スライド) ではそもそも paused なので ended は退火しないが、念のためガード。
       if (!isActiveRef.current) return;
       if (!skipEffectiveRef.current) return;
@@ -2491,6 +2504,7 @@ export function useFeedPlayback({ slug, title, isActive, videoSrc, boundElement 
     }
 
     video.addEventListener("loadedmetadata", handleLoadedMeta);
+    video.addEventListener("durationchange", handleDurationChange);
     video.addEventListener("loadeddata", handleLoadedDataResume);
     video.addEventListener("timeupdate", handleTimeUpdate);
     video.addEventListener("seeking", handleSeeking);
@@ -2505,6 +2519,7 @@ export function useFeedPlayback({ slug, title, isActive, videoSrc, boundElement 
     }
     return () => {
       video.removeEventListener("loadedmetadata", handleLoadedMeta);
+      video.removeEventListener("durationchange", handleDurationChange);
       video.removeEventListener("loadeddata", handleLoadedDataResume);
       video.removeEventListener("timeupdate", handleTimeUpdate);
       video.removeEventListener("seeking", handleSeeking);
@@ -2768,7 +2783,7 @@ export function useFeedPlayback({ slug, title, isActive, videoSrc, boundElement 
     const isLeft = clientX - rect.left < rect.width / 2;
     // ユーザーが明示的にスキップしたので、画質切替の sticky resume は破棄する。
     qualitySwitchResumeRef.current = null;
-    // プロ女優スキップが有効なら開始位置 (duration-90) 未満には絶対に戻らない (下限クランプ)
+    // プロ女優スキップが有効なら開始位置 (duration-60) 未満には絶対に戻らない (下限クランプ)
     const lower = skipLowerBoundRef.current;
     if (isLeft) video.currentTime = Math.max(lower, video.currentTime - SKIP_SEC);
     else        video.currentTime = Math.min(video.duration || Infinity, video.currentTime + SKIP_SEC);

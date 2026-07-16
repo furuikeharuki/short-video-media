@@ -350,7 +350,7 @@ function trimPoolIfNeeded() {
  * にセットする。これによりブラウザは「先頭のバッファ」だけでなく
  * 「開始位置付近のバッファ」も Range request で取得しに行く。
  *
- * 背景: pro-actress 作品は active 側で必ず末尾 (duration-90) にシークするが、
+ * 背景: pro-actress 作品は active 側で必ず末尾 (duration-60) にシークするが、
  * 隠し <video> がデフォルトで先頭バイトだけしか preload しないと、active が
  * promote した直後の seek で開始位置のバイトが未取得 → loadedmetadata 後の
  * rebuffer 待ちが発生し、playback start まで 1〜数秒遅延する
@@ -366,7 +366,7 @@ export function registerPrefetchElement(args: {
   src: string;
   preload: "auto" | "metadata" | "none";
   /**
-   * 末尾に残す秒数 (= pro-actress は 90)。0 / undefined はノーマルケース。
+   * 末尾に残す秒数 (= pro-actress は 60)。0 / undefined はノーマルケース。
    * loadedmetadata 後に `duration - tailKeepSec` を currentTime にセットする。
    */
   tailKeepSec?: number;
@@ -469,7 +469,7 @@ export function registerPrefetchElement(args: {
  * をセットする」one-shot ハンドラを仕込む。
  *
  * 旧 `ensureMinStartArmed` は固定値 (5) を渡していたが、pro-actress の仕様が
- * 「末尾 90 秒だけ残す」= duration 依存になったため、開始位置は duration が
+ * 「末尾 60 秒だけ残す」= duration 依存になったため、開始位置は duration が
  * 分かるまで計算できない。よって seek 秒数を loadedmetadata の中で
  * `tailStartForDuration(el.duration, tailKeepSec)` により算出する。
  *
@@ -491,39 +491,44 @@ function ensureTailStartArmed(
   tailKeepSec: number,
 ) {
   if (!Number.isFinite(tailKeepSec) || tailKeepSec <= 0) return;
-  const applySeek = () => {
+  type TailArmedEl = HTMLVideoElement & { __tailStartHandler__?: () => void };
+  const armedEl = el as TailArmedEl;
+  const teardown = () => {
+    el.removeEventListener("loadedmetadata", handler);
+    el.removeEventListener("durationchange", handler);
+    armedEl.__tailStartHandler__ = undefined;
+  };
+  const applySeek = (): boolean => {
     const start = tailStartForDuration(el.duration, tailKeepSec);
     // 開始位置が 0 (= duration 未確定 or 動画が tail より短い) なら seek 不要。
-    if (start <= 0) return;
+    // duration が Infinity/NaN の間はまだ確定しないので false を返してリスナを残す。
+    if (start <= 0) return false;
     // 既に開始位置以上に進んでいるなら何もしない (= 既に seek 済み or 再生中)。
-    if (el.currentTime + 0.05 >= start) return;
+    if (el.currentTime + 0.05 >= start) return true;
     try {
       el.currentTime = start;
       vtHandoffLog(`tail-start-seek slug=${slug} t=${start.toFixed(2)} tailKeep=${tailKeepSec}`);
     } catch {
       /* ignore (まれに NotSupportedError) */
     }
+    return true;
   };
-  if (el.readyState >= 1) {
-    // 既に metadata 取得済みなら duration が読めるので即計算 + セット。
-    applySeek();
-    return;
+  // 確定した (= 有効な seek を撃てた) 時点でだけリスナを外す one-shot。
+  function handler() {
+    if (applySeek()) teardown();
   }
-  // 旧ハンドラがあれば消して、再アーム。
-  const prev = (el as HTMLVideoElement & { __tailStartHandler__?: () => void })
-    .__tailStartHandler__;
+  // 旧ハンドラがあれば消して、再アーム (同 src 再利用時の重複防止)。
+  const prev = armedEl.__tailStartHandler__;
   if (prev) {
     el.removeEventListener("loadedmetadata", prev);
+    el.removeEventListener("durationchange", prev);
   }
-  const handler = () => {
-    applySeek();
-    el.removeEventListener("loadedmetadata", handler);
-    (el as HTMLVideoElement & { __tailStartHandler__?: () => void })
-      .__tailStartHandler__ = undefined;
-  };
-  (el as HTMLVideoElement & { __tailStartHandler__?: () => void })
-    .__tailStartHandler__ = handler;
+  // readyState>=1 でも duration が Infinity のことがある (iOS/Safari 等)。その場合は
+  // 即 seek できないので、durationchange で確定値が届くまでリスナを残す。
+  if (el.readyState >= 1 && applySeek()) return;
+  armedEl.__tailStartHandler__ = handler;
   el.addEventListener("loadedmetadata", handler);
+  el.addEventListener("durationchange", handler);
 }
 
 export function updateReadiness(slug: string, readiness: HandoffReadiness) {

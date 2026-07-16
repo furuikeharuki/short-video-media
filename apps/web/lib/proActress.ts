@@ -5,7 +5,7 @@
  * 仕様:
  *   - DMM の videoa (素人ではない、プロ作品) フロアからの作品には
  *     apps/jobs/src/sync_catalog._floor_genre_label() が "プロ女優" を付与する。
- *   - フロント側はこのジャンル名を見て、「後ろ (末尾) から 1 分半だけ残して
+ *   - フロント側はこのジャンル名を見て、「後ろ (末尾) から 1 分だけ残して
  *     手前を全部スキップする」仕様を適用する。
  *     つまり再生開始位置 = duration - PRO_ACTRESS_TAIL_KEEP_SEC。
  *   - 検索 / 女優ページ / ブックマーク等どこから来ても、最終的には FeedItem 経由で
@@ -13,7 +13,7 @@
  *
  * 旧実装 (先頭 5 秒スキップ) との違い:
  *   - 旧: 開始位置は固定値 5 秒。duration を知らなくても先読み seek できた。
- *   - 新: 開始位置は duration に依存する (= duration - 90)。duration が確定
+ *   - 新: 開始位置は duration に依存する (= duration - 60)。duration が確定
  *     (loadedmetadata / readyState>=1) するまで実際の開始秒数は計算できない。
  *     このためスキップ下限は metadata 到達後に確定させる。
  *
@@ -30,10 +30,10 @@ import { isVideoTimingEnabled } from "@/lib/videoTiming";
 export const PRO_ACTRESS_GENRE = "プロ女優";
 
 /**
- * プロ女優作品で「末尾に残す」秒数 (= 1 分半 = 90 秒)。
+ * プロ女優作品で「末尾に残す」秒数 (= 1 分 = 60 秒)。
  * この長さだけ残して手前を全部スキップする (再生開始位置 = duration - この値)。
  */
-export const PRO_ACTRESS_TAIL_KEEP_SEC = 90;
+export const PRO_ACTRESS_TAIL_KEEP_SEC = 60;
 
 /**
  * カードに付与されたジャンル配列を見て「プロ女優」作品かどうかを判定する。
@@ -51,7 +51,7 @@ export function isProActressMovie(genres: readonly string[] | null | undefined):
 
 /**
  * 作品の「末尾に残す秒数」を返す (= duration に依存しない静的な intent)。
- * - プロ女優: PRO_ACTRESS_TAIL_KEEP_SEC (90)
+ * - プロ女優: PRO_ACTRESS_TAIL_KEEP_SEC (60)
  * - 非プロ女優: 0 (末尾スキップ無し)
  *
  * この値は duration が未確定でも決まるため、先読み <video> の登録などに使える。
@@ -82,8 +82,8 @@ export function tailStartForDuration(durationSec: number, tailKeepSec: number): 
  *
  * フロントで「末尾スキップが効いていない」とユーザー報告が来たとき、
  * ?vt=1 を付けてフィードを開くと該当作品でこのログが出るので、
- * `isProActress=true / tailKeep=90` になっているかをコンソールで一目で確認できる。
- * (実際の開始秒数 = duration-90 は duration 確定後にしか決まらないため、
+ * `isProActress=true / tailKeep=60` になっているかをコンソールで一目で確認できる。
+ * (実際の開始秒数 = duration-60 は duration 確定後にしか決まらないため、
  *  ここでは intent である tailKeep を出す。)
  */
 export function logProActressDecision(slug: string, genres: readonly string[] | null | undefined): void {

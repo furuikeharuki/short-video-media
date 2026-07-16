@@ -35,7 +35,7 @@ interface Options {
   surface?: string | null;
   recSource?: string | null;
   /**
-   * 「プロ女優」作品か。true のとき再生は末尾 90 秒だけ (開始位置 = duration-90)
+   * 「プロ女優」作品か。true のとき再生は末尾 60 秒だけ (開始位置 = duration-60)
    * になるため、watch 判定 (10 秒到達) と 25/50/75% マイルストーンを「絶対
    * currentTime / 絶対 ratio」で測ると、再生開始直後に currentTime も ratio も
    * 既に大きい値になっており、視聴 0 秒でも watch_count が即カウントされてしまう。
@@ -164,7 +164,7 @@ export function useVideoInteractionTracking({
 
     let watchSecondsSent = false;
     const milestoneSent = new Set<number>();
-    // pro-actress の末尾スキップ (開始位置 = duration-90) を考慮した「実効開始位置」。
+    // pro-actress の末尾スキップ (開始位置 = duration-60) を考慮した「実効開始位置」。
     // 非 pro-actress は 0。duration 未確定のうちは tailStartForDuration が 0 を返す。
     const effectiveStart = (): number =>
       isProActress
@@ -174,7 +174,7 @@ export function useVideoInteractionTracking({
       const dur = video.duration;
       const cur = video.currentTime;
       // 開始位置を 0 とした「実際に視聴した秒数 / 進捗」。pro-actress は開始位置が
-      // duration-90 付近なので、絶対 currentTime ではなく開始位置からの相対値で
+      // duration-60 付近なので、絶対 currentTime ではなく開始位置からの相対値で
       // watch(10 秒)/マイルストーンを判定する (視聴 0 秒での誤カウントを防ぐ)。
       const start = effectiveStart();
       const watchedSec = Math.max(0, cur - start);

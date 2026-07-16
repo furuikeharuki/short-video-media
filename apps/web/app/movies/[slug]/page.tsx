@@ -9,6 +9,13 @@ import BackButton from "@/components/BackButton";
 import ActressLink from "@/components/ActressLink";
 import AdSlot from "@/components/ads/AdSlot";
 import { getMovieBySlug } from "@/lib/api/movies";
+import {
+  getMoviesByActress,
+  getMoviesBySeries,
+  getMoviesByGenre,
+} from "@/lib/api/related";
+import type { MovieCard } from "@/lib/api/feed";
+import { composeMovieIntro } from "@/lib/movieIntro";
 import { SITE_NAME, SITE_URL, SITE_LOCALE } from "@/lib/config/seo";
 
 type PageProps = {
@@ -41,9 +48,14 @@ export async function generateMetadata({ params }: PageProps): Promise<Metadata>
     ]
       .filter(Boolean)
       .join(" / ");
-    const body = movie.description
-      ? movie.description
-      : `${movie.maker_name ?? ""}の作品をショート動画で試し見できます。`;
+    // description は FANZA の重複本文ではなく、ページ固有に合成した紹介文を優先する
+    // (2026-06-03 のアルゴリズム降格対策)。合成できない場合のみ従来ロジックへフォールバック。
+    const composedIntro = composeMovieIntro(movie);
+    const body =
+      composedIntro ??
+      (movie.description
+        ? movie.description
+        : `${movie.maker_name ?? ""}の作品をショート動画で試し見できます。`);
     const raw = lead ? `${lead}。${body}` : body;
     const description = raw.length > 155 ? raw.slice(0, 152) + "…" : raw;
     const imageUrl = movie.image_url_large ?? movie.image_url_list ?? "";
@@ -94,6 +106,18 @@ export default async function MovieDetailPage({ params }: PageProps) {
     const canonical = `${SITE_URL}/movies/${slug}`;
     const sampleVideoPath = `/videos/${encodeURIComponent(movie.slug)}/sample.mp4`;
     const sampleVideoUrl = `${SITE_URL}${sampleVideoPath}`;
+
+    // ページ固有の作品紹介文 (SSR, クローラー可視)。FANZA description の重複を避ける。
+    const introText = composeMovieIntro(movie);
+
+    // 関連作品 (クロール可能な内部リンク) を並列取得。存在するメタデータのみ問い合わせる。
+    const leadActress = movie.actresses[0] ?? null;
+    const topGenre = movie.genres[0] ?? null;
+    const [actressWorks, seriesWorks, genreWorks] = await Promise.all([
+      leadActress ? getMoviesByActress(leadActress, movie.slug) : Promise.resolve([]),
+      movie.series_name ? getMoviesBySeries(movie.series_name, movie.slug) : Promise.resolve([]),
+      topGenre ? getMoviesByGenre(topGenre, movie.slug) : Promise.resolve([]),
+    ]);
 
     const fieldLink = (
       field: "director" | "maker" | "label" | "series",
@@ -311,8 +335,18 @@ export default async function MovieDetailPage({ params }: PageProps) {
               ))}
             </div>
 
+            {introText && (
+              <section style={styles.introSection}>
+                <h2 style={styles.sectionHeading}>作品紹介</h2>
+                <p style={styles.introText}>{introText}</p>
+              </section>
+            )}
+
             {movie.description && (
-              <p style={styles.description}>{movie.description}</p>
+              <section style={styles.introSection}>
+                <h2 style={styles.sectionHeading}>あらすじ</h2>
+                <p style={styles.description}>{movie.description}</p>
+              </section>
             )}
             <div style={styles.adBottom}>
               <AdSlot zone="mobileBanner300x250" />
@@ -321,6 +355,29 @@ export default async function MovieDetailPage({ params }: PageProps) {
             <div style={styles.ctaArea}>
               <AffiliateLink href={movie.affiliate_url} slug={movie.slug} title={movie.title} />
             </div>
+
+            <RelatedSection
+              title={leadActress ? `${leadActress}の他の作品` : ""}
+              moreHref={leadActress ? `/actresses/${encodeURIComponent(leadActress)}` : null}
+              moreLabel="女優ページを見る"
+              items={actressWorks}
+            />
+            <RelatedSection
+              title={movie.series_name ? `「${movie.series_name}」シリーズの作品` : ""}
+              moreHref={
+                movie.series_name
+                  ? `/search?series=${encodeURIComponent(movie.series_name)}`
+                  : null
+              }
+              moreLabel="シリーズをもっと見る"
+              items={seriesWorks}
+            />
+            <RelatedSection
+              title={topGenre ? `「${topGenre}」の人気作品` : ""}
+              moreHref={topGenre ? `/genres/${encodeURIComponent(topGenre)}` : null}
+              moreLabel="ジャンルをもっと見る"
+              items={genreWorks}
+            />
           </div>
         </main>
         <style>{pageCSS}</style>
@@ -330,6 +387,59 @@ export default async function MovieDetailPage({ params }: PageProps) {
     if (error instanceof Error && error.message === "NOT_FOUND") notFound();
     throw error;
   }
+}
+
+// 関連作品のクロール可能な内部リンクセクション (SSR)。
+// クライアント JS に依存せず、素の <a> + サムネイルで出力することで
+// 作品詳細 → 関連作品 への PageRank フローを形成する。
+function RelatedSection({
+  title,
+  moreHref,
+  moreLabel,
+  items,
+}: {
+  title: string;
+  moreHref: string | null;
+  moreLabel: string;
+  items: MovieCard[];
+}) {
+  if (!title || items.length === 0) return null;
+  return (
+    <section style={styles.relatedSection}>
+      <h2 style={styles.sectionHeading}>{title}</h2>
+      <div className="related-grid">
+        {items.map((m) => {
+          const thumb = m.image_url_large ?? m.image_url_list ?? "";
+          return (
+            <a
+              key={m.id}
+              href={`/movies/${encodeURIComponent(m.slug)}`}
+              style={styles.relatedCard}
+            >
+              {thumb && (
+                <img
+                  src={thumb}
+                  alt={m.title}
+                  loading="lazy"
+                  style={styles.relatedThumb}
+                  width={180}
+                  height={240}
+                />
+              )}
+              <span style={styles.relatedTitle}>{m.title}</span>
+            </a>
+          );
+        })}
+      </div>
+      {moreHref && (
+        <div style={styles.relatedMoreWrap}>
+          <Link href={moreHref} style={styles.relatedMoreLink}>
+            {moreLabel}
+          </Link>
+        </div>
+      )}
+    </section>
+  );
 }
 
 const styles: Record<string, React.CSSProperties> = {
@@ -403,7 +513,38 @@ const styles: Record<string, React.CSSProperties> = {
   },
   description: {
     fontSize: '14px', lineHeight: 1.8, color: 'rgba(255,255,255,0.6)',
-    marginBottom: '28px',
+    margin: 0,
+  },
+  introSection: { marginBottom: '28px' },
+  sectionHeading: {
+    fontSize: '15px', fontWeight: 700, color: 'rgba(255,255,255,0.9)',
+    marginBottom: '10px', paddingLeft: '10px',
+    borderLeft: '3px solid #e91e63', lineHeight: 1.3,
+  },
+  introText: {
+    fontSize: '14px', lineHeight: 1.9, color: 'rgba(255,255,255,0.78)',
+    margin: 0,
+  },
+  relatedSection: { marginTop: '32px' },
+  relatedCard: {
+    display: 'flex', flexDirection: 'column' as const, gap: '6px',
+    textDecoration: 'none', color: 'inherit', minWidth: 0,
+  },
+  relatedThumb: {
+    width: '100%', aspectRatio: '3 / 4', objectFit: 'cover' as const,
+    borderRadius: '8px', background: '#111', display: 'block',
+  },
+  relatedTitle: {
+    fontSize: '11px', lineHeight: 1.4, color: 'rgba(255,255,255,0.7)',
+    display: '-webkit-box', WebkitLineClamp: 2 as unknown as number,
+    WebkitBoxOrient: 'vertical' as const, overflow: 'hidden',
+  },
+  relatedMoreWrap: { marginTop: '14px', display: 'flex', justifyContent: 'center' as const },
+  relatedMoreLink: {
+    display: 'inline-block', padding: '8px 18px',
+    background: 'rgba(255,255,255,0.08)', border: '1px solid rgba(255,255,255,0.2)',
+    color: 'rgba(255,255,255,0.85)', fontSize: '12px', fontWeight: 600,
+    borderRadius: '999px', textDecoration: 'none',
   },
   ctaArea: { display: 'flex', flexDirection: 'column' as const, gap: '12px' },
   feedCtaArea: { marginBottom: '20px' },
@@ -450,4 +591,16 @@ const pageCSS = `
   .movie-feed-cta__label { display: inline-block; }
   .movie-feed-cta:active { opacity: 0.85; transform: scale(0.985); }
   @media (hover: hover) { .movie-feed-cta:hover { opacity: 0.92; } }
+
+  .related-grid {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 10px;
+  }
+  @media (min-width: 640px) {
+    .related-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+  }
+  @media (min-width: 1024px) {
+    .related-grid { grid-template-columns: repeat(6, minmax(0, 1fr)); }
+  }
 `;

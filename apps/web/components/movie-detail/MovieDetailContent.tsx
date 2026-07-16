@@ -5,6 +5,8 @@ import AffiliateLink from "@/components/analytics/affiliate-link";
 import ActressLink from "@/components/ActressLink";
 import AdSlot from "@/components/ads/AdSlot";
 import { navigateRespectingModal } from "@/lib/modalNav";
+import { generateIntro } from "@/lib/movieIntro";
+import { buildRecommendations } from "@/lib/movieRecommend";
 import type { MovieDetail } from "@/lib/api/movies";
 import type { MouseEvent } from "react";
 
@@ -26,6 +28,30 @@ export default function MovieDetailContent({ movie }: Props) {
   const imgSrc = movie.image_url_large ?? movie.image_url_list ?? "";
   const price = movie.price_list?.sale_price ?? movie.price_list?.list_price ?? movie.price_min;
   const hasReview = movie.review_count > 0 && movie.review_average != null;
+
+  // 作品詳細ページと同じルールベース生成 (LLM 不使用 / レンダリング時生成 / DB 保存なし)。
+  const introText = generateIntro({
+    title: movie.title,
+    slug: movie.slug,
+    actresses: movie.actresses,
+    genres: movie.genres,
+    product_id: movie.product_id,
+    maker_product: movie.maker_product,
+    label_name: movie.label_name,
+    maker_name: movie.maker_name,
+    volume: movie.volume,
+    price_min: movie.price_min,
+    price_list: movie.price_list
+      ? {
+          list_price: movie.price_list.list_price,
+          sale_price: movie.price_list.sale_price,
+        }
+      : null,
+    delivery_date: movie.delivery_date,
+    release_date: movie.release_date,
+    primary_date: movie.primary_date,
+  });
+  const recommendations = buildRecommendations(movie.genres);
 
   // モーダル中 (URL バーが /movies/ から始まる) では Next の <Link> や router.push を使うと
   // MovieDetailModal の unmount 時に replaceState で URL が巻き戻されて遷移が打ち消される。
@@ -127,6 +153,24 @@ export default function MovieDetailContent({ movie }: Props) {
           )}
         </div>
 
+        {introText && (
+          <section className="mdc-info-section">
+            <h3 className="mdc-section-heading">作品紹介</h3>
+            <p className="mdc-intro-text">{introText}</p>
+          </section>
+        )}
+
+        {recommendations.length > 0 && (
+          <section className="mdc-info-section">
+            <h3 className="mdc-section-heading">こんな人におすすめ</h3>
+            <ul className="mdc-recommend-list">
+              {recommendations.map((line) => (
+                <li key={line} className="mdc-recommend-item">{line}</li>
+              ))}
+            </ul>
+          </section>
+        )}
+
         <section className="mdc-meta-section">
           <h3 className="mdc-section-heading">作品情報</h3>
           <div className="mdc-meta-table">
@@ -193,9 +237,24 @@ export default function MovieDetailContent({ movie }: Props) {
         .mdc-review-num { font-size: 12px; color: rgba(255,255,255,0.45); }
         .mdc-price { font-size: 16px; font-weight: 700; color: #e91e63; }
         .mdc-meta-section { margin-bottom: 24px; }
+        .mdc-info-section { margin-bottom: 28px; }
         .mdc-section-heading {
           font-size: 13px; font-weight: 700; color: rgba(255,255,255,0.85);
           letter-spacing: 0.06em; margin-bottom: 10px;
+        }
+        .mdc-intro-text {
+          font-size: 14px; line-height: 1.85; color: rgba(255,255,255,0.78);
+        }
+        .mdc-recommend-list {
+          list-style: none; display: flex; flex-direction: column; gap: 8px;
+        }
+        .mdc-recommend-item {
+          font-size: 13px; line-height: 1.6; color: rgba(255,255,255,0.72);
+          padding-left: 18px; position: relative;
+        }
+        .mdc-recommend-item::before {
+          content: "✓"; position: absolute; left: 0;
+          color: #7cb7ff; font-weight: 700;
         }
         .mdc-meta-table {
           display: flex; flex-direction: column; gap: 0;

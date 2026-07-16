@@ -491,39 +491,56 @@ function ensureTailStartArmed(
   tailKeepSec: number,
 ) {
   if (!Number.isFinite(tailKeepSec) || tailKeepSec <= 0) return;
-  const applySeek = () => {
+  // seek が実際に効いたら true。duration が未確定 (Infinity / NaN) のうちは
+  // false のままで、durationchange 到達時に再試行する。
+  const applySeek = (): boolean => {
     const start = tailStartForDuration(el.duration, tailKeepSec);
     // 開始位置が 0 (= duration 未確定 or 動画が tail より短い) なら seek 不要。
-    if (start <= 0) return;
+    if (start <= 0) return false;
     // 既に開始位置以上に進んでいるなら何もしない (= 既に seek 済み or 再生中)。
-    if (el.currentTime + 0.05 >= start) return;
+    if (el.currentTime + 0.05 >= start) return true;
     try {
       el.currentTime = start;
       vtHandoffLog(`tail-start-seek slug=${slug} t=${start.toFixed(2)} tailKeep=${tailKeepSec}`);
     } catch {
       /* ignore (まれに NotSupportedError) */
     }
+    return true;
   };
-  if (el.readyState >= 1) {
-    // 既に metadata 取得済みなら duration が読めるので即計算 + セット。
-    applySeek();
+  // 旧ハンドラがあれば消して、再アーム。
+  type TailArmed = HTMLVideoElement & {
+    __tailStartHandler__?: () => void;
+    __tailStartEvents__?: readonly string[];
+  };
+  const armed = el as TailArmed;
+  const prev = armed.__tailStartHandler__;
+  if (prev) {
+    for (const ev of armed.__tailStartEvents__ ?? ["loadedmetadata"]) {
+      el.removeEventListener(ev, prev);
+    }
+    armed.__tailStartHandler__ = undefined;
+    armed.__tailStartEvents__ = undefined;
+  }
+  // duration が loadedmetadata 時点で確定しない (Infinity / NaN → あとから
+  // durationchange で確定する) ブラウザ・MP4 があるため、両方を購読し、seek が
+  // 効くまでハンドラを残す。これを聞かないと prefetch 要素が末尾へ seek されず、
+  // handoff で active 化したときも先頭から再生されてしまう。
+  const events = ["loadedmetadata", "durationchange"] as const;
+  const detach = () => {
+    for (const ev of events) el.removeEventListener(ev, handler);
+    armed.__tailStartHandler__ = undefined;
+    armed.__tailStartEvents__ = undefined;
+  };
+  const handler = () => {
+    if (applySeek()) detach();
+  };
+  if (el.readyState >= 1 && applySeek()) {
+    // 既に metadata 取得済み & duration が確定していれば即セットして終わり。
     return;
   }
-  // 旧ハンドラがあれば消して、再アーム。
-  const prev = (el as HTMLVideoElement & { __tailStartHandler__?: () => void })
-    .__tailStartHandler__;
-  if (prev) {
-    el.removeEventListener("loadedmetadata", prev);
-  }
-  const handler = () => {
-    applySeek();
-    el.removeEventListener("loadedmetadata", handler);
-    (el as HTMLVideoElement & { __tailStartHandler__?: () => void })
-      .__tailStartHandler__ = undefined;
-  };
-  (el as HTMLVideoElement & { __tailStartHandler__?: () => void })
-    .__tailStartHandler__ = handler;
-  el.addEventListener("loadedmetadata", handler);
+  armed.__tailStartHandler__ = handler;
+  armed.__tailStartEvents__ = events;
+  for (const ev of events) el.addEventListener(ev, handler);
 }
 
 export function updateReadiness(slug: string, readiness: HandoffReadiness) {

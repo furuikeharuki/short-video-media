@@ -2491,6 +2491,12 @@ export function useFeedPlayback({ slug, title, isActive, videoSrc, boundElement 
     }
 
     video.addEventListener("loadedmetadata", handleLoadedMeta);
+    // duration が loadedmetadata 時点では Infinity / NaN で、あとから durationchange
+    // で確定するブラウザ (iOS Safari / progressive mux の MP4 等) を救う。
+    // durationchange を聞いていないと tailStartForDuration が 0 を返したまま
+    // skipLowerBoundRef が 0 に張り付き、「ラスト 90 秒から再生」が効かずに
+    // 先頭から再生されてしまう (intermittent)。確定後に evaluate + enforce し直す。
+    video.addEventListener("durationchange", handleLoadedMeta);
     video.addEventListener("loadeddata", handleLoadedDataResume);
     video.addEventListener("timeupdate", handleTimeUpdate);
     video.addEventListener("seeking", handleSeeking);
@@ -2505,6 +2511,7 @@ export function useFeedPlayback({ slug, title, isActive, videoSrc, boundElement 
     }
     return () => {
       video.removeEventListener("loadedmetadata", handleLoadedMeta);
+      video.removeEventListener("durationchange", handleLoadedMeta);
       video.removeEventListener("loadeddata", handleLoadedDataResume);
       video.removeEventListener("timeupdate", handleTimeUpdate);
       video.removeEventListener("seeking", handleSeeking);

@@ -34,7 +34,7 @@ interface Props {
    */
   offset?: number;
   /**
-   * 末尾に残す秒数 (= pro-actress 作品は 90)。0 / undefined はノーマルケース。
+   * 末尾に残す秒数 (= pro-actress 作品は 60)。0 / undefined はノーマルケース。
    * registry に渡され、loadedmetadata 後に `duration - tailKeepSec` を
    * `<video>.currentTime` にセットして、browser が開始位置付近の Range も
    * 裏で取得するように誘導する。これにより active 化時の seek が即 canplay まで

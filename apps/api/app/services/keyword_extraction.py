@@ -53,6 +53,12 @@ _HONORIFIC_SUFFIXES = frozenset(
     {"ちゃん", "さん", "くん", "君", "様", "さま", "たん", "ちゃま", "氏"}
 )
 
+# 文末に付くネットスラングの感情マーカー (笑=笑い, 涙=泣, 汗=焦り)。janome は
+# これらを 1 文字の名詞として切り出すため、直後の人名等に連結され「笑くらしな」の
+# ような壊れた語を生む。1 文字トークンとして単独で現れたときのみ境界とし出力もしない。
+# 「爆笑」「微笑み」等は 1 トークンとして切られ surface が一致しないため影響しない。
+_EMOTIVE_MARKERS = frozenset({"笑", "涙", "汗"})
+
 # ドメイン汎用語のストップワード。どの作品説明にも現れて特徴にならない語や、
 # サイト・販売文脈の定型語を除外する。実データを見ながら随時充実させる。
 STOPWORDS: frozenset[str] = frozenset(
@@ -123,6 +129,8 @@ def _is_compound_part(surface: str, part_of_speech: str) -> tuple[bool, str]:
         return False, subtype  # 1 文字ひらがな (助詞的断片) は連結に含めない
     if _SINGLE_ALNUM.match(surface):
         return False, subtype  # 1 文字英数字 ('w' 等のネットスラング) は境界
+    if surface in _EMOTIVE_MARKERS:  # 1 文字の感情マーカー (笑/涙/汗) は境界
+        return False, subtype
     if surface in _HONORIFIC_SUFFIXES:  # 敬称・愛称は境界扱い (人名断片を作らない)
         return False, subtype
     if surface in STOPWORDS:  # 汎用語は複合語に取り込まない (境界)

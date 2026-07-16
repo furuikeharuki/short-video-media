@@ -106,6 +106,14 @@ SINGLE_ALNUM_JOIN_DESCRIPTION = (
     "一週間してすぐまた予約をしてしまいましたwくらしなさんにも覚えてもらえた"
 )
 
+# 文末ネットスラングの感情マーカー '笑' 由来の壊れた連結を模したフィクスチャ。
+# janome は '笑' を 1 文字の名詞として切るため、旧ロジックでは直後の人名に連結され
+# 「笑くらしな」が生成された (本番 movie h-1832msoc00065 で観測)。1 文字の 笑/涙/汗 を
+# 境界にして防ぐ。「爆笑」等は 1 トークンなので影響しない。
+LAUGH_MARKER_JOIN_DESCRIPTION = (
+    "攻められるのは恥ずかしくて苦手なんだとか。笑くらしなさんの新しい一面を見ることができて"
+)
+
 
 def test_symbols_are_hard_boundaries() -> None:
     keywords = extract_keywords(PROFILE_DESCRIPTION)
@@ -139,6 +147,24 @@ def test_multi_char_latin_still_joins() -> None:
     # 2 文字以上のラテン語は正当な語として連結され続ける (回帰防止)。
     keywords = extract_keywords("街中で声をかけた素人。IT系企業勤務の女性。")
     assert "IT系企業勤務" in keywords
+
+
+def test_no_laugh_marker_join() -> None:
+    keywords = extract_keywords(LAUGH_MARKER_JOIN_DESCRIPTION)
+    # '笑' を巻き込んだ壊れた連結は生成されず、人名は '笑' 抜きで取れる。
+    assert "くらしな" in keywords
+    assert "笑くらしな" not in keywords
+    assert all(not k.startswith("笑") for k in keywords)
+    # 1 文字の感情マーカーは単独では出力されない。
+    assert "笑" not in keywords
+    assert "涙" not in keywords
+    assert "汗" not in keywords
+
+
+def test_emotive_markers_inside_word_unaffected() -> None:
+    # 「爆笑」「微笑み」は 1 トークンとして切られるため、境界処理の影響を受けない。
+    keywords = extract_keywords("会場は爆笑の連続で微笑ましい雰囲気だった。")
+    assert "爆笑" in keywords
 
 
 def test_max_keywords_cap() -> None:
